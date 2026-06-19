@@ -245,6 +245,41 @@ export const processPayout = createServerFn({ method: "POST" })
     }
   });
 
+// ─── Get paginated + filtered trade history ────────────────────────────────────
+export const getTradeHistory = createServerFn({ method: "GET" })
+  .validator((d: {
+    userId: string;
+    page?: number;
+    pageSize?: number;
+    status?: string;
+    type?: string;
+  }) => d)
+  .handler(async ({ data }) => {
+    try {
+      const db = getServerSupabase();
+      const page = data.page ?? 0;
+      const size = data.pageSize ?? 20;
+      const from = page * size;
+      const to = from + size - 1;
+
+      let query = db
+        .from("trades")
+        .select("id,type,brand,region,amount_usd,amount_ngn,exchange_rate,status,failure_reason,xp_earned,settled_at,created_at", { count: "exact" })
+        .eq("user_id", data.userId)
+        .order("created_at", { ascending: false })
+        .range(from, to);
+
+      if (data.status && data.status !== "all") query = query.eq("status", data.status);
+      if (data.type && data.type !== "all") query = query.eq("type", data.type);
+
+      const { data: trades, error, count } = await query;
+      if (error) throw error;
+      return { trades: trades ?? [], total: count ?? 0, page, pageSize: size };
+    } catch {
+      return { trades: [], total: 0, page: 0, pageSize: 20 };
+    }
+  });
+
 // ─── Get single trade status ───────────────────────────────────────────────────
 export const getTradeStatus = createServerFn({ method: "GET" })
   .validator((d: { tradeId: string }) => d)

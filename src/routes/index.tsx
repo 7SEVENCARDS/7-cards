@@ -40,6 +40,7 @@ import { PayoutAccountsScreen } from "../components/PayoutAccountsScreen";
 import { NotificationsScreen } from "../components/NotificationsScreen";
 import { ReferralScreen } from "../components/ReferralScreen";
 import { PremiumScreen } from "../components/PremiumScreen";
+import { TradeHistoryScreen } from "../components/TradeHistoryScreen";
 import { useSession } from "../hooks/useSession";
 import {
   useExchangeRates,
@@ -59,7 +60,7 @@ export const Route = createFileRoute("/")({
   component: App,
 });
 
-type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications" | "referral" | "premium";
+type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications" | "referral" | "premium" | "history";
 
 type ActiveSell = {
   brand: string;
@@ -252,6 +253,7 @@ function App() {
             wallets={wallets as WalletData[]}
             portfolio={portfolio as PortfolioData | undefined}
             recentTrades={recentTrades as TradeRow[]}
+            onViewHistory={() => setTab("history")}
           />
         )}
         {tab === "profile" && (
@@ -302,8 +304,14 @@ function App() {
             onBack={() => setTab("profile")}
           />
         )}
+        {tab === "history" && user && (
+          <TradeHistoryScreen
+            userId={user.id}
+            onBack={() => setTab("wallet")}
+          />
+        )}
 
-        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && tab !== "premium" && (
+        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && tab !== "premium" && tab !== "history" && (
           <BottomNav tab={tab} setTab={(t) => setTab(t as Tab)} />
         )}
       </div>
@@ -850,9 +858,9 @@ const CURRENCY_META: Record<string, { name: string; icon: string; color: string 
 };
 
 function WalletScreen({
-  wallets, portfolio, recentTrades,
+  wallets, portfolio, recentTrades, onViewHistory,
 }: {
-  wallets: WalletData[]; portfolio?: PortfolioData; recentTrades: TradeRow[];
+  wallets: WalletData[]; portfolio?: PortfolioData; recentTrades: TradeRow[]; onViewHistory: () => void;
 }) {
   const [activeTab, setActiveTab] = useState(0);
 
@@ -921,6 +929,15 @@ function WalletScreen({
 
       {activeTab === 1 && (
         <div className="px-5 mt-4 space-y-2">
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-xs font-semibold text-muted-foreground">Recent Activity</p>
+            <button
+              onClick={onViewHistory}
+              className="text-xs font-semibold text-gold"
+            >
+              See All →
+            </button>
+          </div>
           {recentTrades.length > 0 ? (
             recentTrades.map((t) => (
               <TxRow
