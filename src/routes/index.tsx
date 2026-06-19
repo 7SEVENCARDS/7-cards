@@ -38,6 +38,7 @@ import { CodeEntryScreen } from "../components/CodeEntryScreen";
 import { KYCScreen } from "../components/KYCScreen";
 import { PayoutAccountsScreen } from "../components/PayoutAccountsScreen";
 import { NotificationsScreen } from "../components/NotificationsScreen";
+import { ReferralScreen } from "../components/ReferralScreen";
 import { useSession } from "../hooks/useSession";
 import {
   useExchangeRates,
@@ -57,7 +58,7 @@ export const Route = createFileRoute("/")({
   component: App,
 });
 
-type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications";
+type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications" | "referral";
 
 type ActiveSell = {
   brand: string;
@@ -259,6 +260,7 @@ function App() {
             onSignOut={handleSignOut}
             onNavigateKYC={() => setTab("kyc")}
             onNavigatePayout={() => setTab("payout")}
+            onNavigateReferral={() => setTab("referral")}
           />
         )}
         {tab === "kyc" && user && (
@@ -284,8 +286,14 @@ function App() {
             onBack={() => setTab("home")}
           />
         )}
+        {tab === "referral" && user && (
+          <ReferralScreen
+            userId={user.id}
+            onBack={() => setTab("profile")}
+          />
+        )}
 
-        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && (
+        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && (
           <BottomNav tab={tab} setTab={(t) => setTab(t as Tab)} />
         )}
       </div>
@@ -944,9 +952,9 @@ function CircleBtn({ icon: Icon, label }: { icon: React.ComponentType<{ classNam
 /* ─────────────────────────────────── PROFILE ─────────────────────────────────── */
 
 function ProfileScreen({
-  profile, xp, onSignOut, onNavigateKYC, onNavigatePayout,
+  profile, xp, onSignOut, onNavigateKYC, onNavigatePayout, onNavigateReferral,
 }: {
-  profile?: ProfileData | null; xp?: XPData; onSignOut: () => void; onNavigateKYC: () => void; onNavigatePayout: () => void;
+  profile?: ProfileData | null; xp?: XPData; onSignOut: () => void; onNavigateKYC: () => void; onNavigatePayout: () => void; onNavigateReferral: () => void;
 }) {
   const firstName = (profile?.full_name ?? "User").split(" ")[0];
   const initial = firstName[0]?.toUpperCase() ?? "?";
@@ -986,7 +994,7 @@ function ProfileScreen({
 
       <div className="px-5 mt-6 space-y-2">
         <MenuItem icon={Trophy}      label="The Hustle League"  sub={`Level ${xp?.level ?? 1}`}      tint="text-gold" />
-        <MenuItem icon={Gift}        label="Referral Program"   sub="₦500 per friend"                tint="text-pink" />
+        <MenuItem icon={Gift}        label="Referral Program"   sub="₦500 per friend"                tint="text-pink"   onClick={onNavigateReferral} />
         <MenuItem icon={ShieldCheck} label="Security & KYC"     sub={profile?.kyc_status === "verified" ? "✅ Verified" : profile?.kyc_status === "submitted" ? "⏳ Under Review" : "Tap to verify"} tint="text-cyan" onClick={onNavigateKYC} />
         <MenuItem icon={Wallet}      label="Payout Accounts"    sub="Manage bank accounts"           tint="text-orange" onClick={onNavigatePayout} />
         <MenuItem icon={Gamepad2}    label="Low Data Mode"      sub="Save bandwidth"                 tint="text-cyan" toggle />
