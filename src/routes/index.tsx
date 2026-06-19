@@ -1,12 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDownLeft,
   ArrowUpRight,
   Bell,
   Bitcoin,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
+  Copy,
   Crown,
   Eye,
   EyeOff,
@@ -14,34 +16,37 @@ import {
   Gamepad2,
   Gift,
   Home,
-  Music,
+  Loader2,
   Plus,
+  RefreshCw,
   ScanLine,
   Send,
   ShieldCheck,
   Sparkles,
   Trophy,
-  Tv,
   User,
   Wallet,
+  XCircle,
   Zap,
 } from "lucide-react";
+import logoBadge from "../assets/logo-badge.png.asset.json";
+import logoFull from "../assets/logo-full.png.asset.json";
 
 export const Route = createFileRoute("/")({
   component: App,
 });
 
-type Tab = "home" | "sell" | "league" | "wallet" | "profile";
+type Tab = "home" | "sell" | "verify" | "league" | "wallet" | "profile";
 
 function App() {
   const [tab, setTab] = useState<Tab>("home");
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {/* Phone frame — feels mobile-first on any screen */}
       <div className="mx-auto flex min-h-screen max-w-[480px] flex-col bg-background pb-24 relative">
         {tab === "home" && <HomeScreen onSell={() => setTab("sell")} />}
-        {tab === "sell" && <SellScreen />}
+        {tab === "sell" && <SellScreen onVerify={() => setTab("verify")} />}
+        {tab === "verify" && <VerifyScreen onBack={() => setTab("sell")} onDone={() => setTab("wallet")} />}
         {tab === "league" && <LeagueScreen />}
         {tab === "wallet" && <WalletScreen />}
         {tab === "profile" && <ProfileScreen />}
@@ -66,8 +71,8 @@ function HomeScreen({ onSell }: { onSell: () => void }) {
 
         <div className="flex items-center justify-between relative">
           <div className="flex items-center gap-3">
-            <div className="size-11 rounded-2xl bg-gradient-gold grid place-items-center font-display font-extrabold text-jungle-deep text-lg shadow-glow-gold">
-              7
+            <div className="size-11 rounded-2xl bg-jungle-deep grid place-items-center overflow-hidden ring-1 ring-gold/40 shadow-glow-gold">
+              <img src={logoBadge.url} alt="7SEVEN" className="size-11 object-cover" />
             </div>
             <div>
               <p className="text-xs text-white/60 font-medium">Welcome back</p>
@@ -274,7 +279,7 @@ function TxRow({
 
 /* ---------------------------------- SELL ---------------------------------- */
 
-function SellScreen() {
+function SellScreen({ onVerify }: { onVerify: () => void }) {
   const brands = [
     { name: "Apple", emoji: "🍎", rate: "₦1,485" },
     { name: "Amazon", emoji: "📦", rate: "₦1,420" },
@@ -381,7 +386,7 @@ function SellScreen() {
 
       {/* CTA */}
       <div className="px-5 mt-6">
-        <button className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold">
+        <button onClick={onVerify} className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold active:scale-[0.99] transition">
           Continue to Verify <ChevronRight className="size-5" />
         </button>
         <div className="mt-3 flex items-center justify-center gap-2 text-[11px] text-muted-foreground">
@@ -706,7 +711,390 @@ function MenuItem({
   );
 }
 
+/* --------------------------------- VERIFY --------------------------------- */
+
+type VState = "scanning" | "valid" | "invalid" | "processing" | "paid";
+
+const BRAND_LOGOS = [
+  { name: "Apple", emoji: "🍎", color: "from-slate-700 to-slate-900" },
+  { name: "Amazon", emoji: "📦", color: "from-orange-500 to-yellow-600" },
+  { name: "Steam", emoji: "🎮", color: "from-blue-700 to-indigo-900" },
+  { name: "Google Play", emoji: "▶️", color: "from-emerald-600 to-teal-800" },
+  { name: "Xbox", emoji: "🟢", color: "from-green-700 to-green-900" },
+  { name: "PlayStation", emoji: "🎯", color: "from-blue-600 to-blue-900" },
+  { name: "Netflix", emoji: "🎬", color: "from-red-700 to-red-950" },
+];
+
+function VerifyScreen({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
+  const [state, setState] = useState<VState>("scanning");
+  const [progress, setProgress] = useState(0);
+
+  // Auto-progress: scanning -> valid -> processing -> paid
+  useEffect(() => {
+    if (state === "scanning") {
+      const i = setInterval(() => setProgress((p) => Math.min(100, p + 4)), 80);
+      const t = setTimeout(() => { setState("valid"); setProgress(0); }, 2400);
+      return () => { clearInterval(i); clearTimeout(t); };
+    }
+    if (state === "processing") {
+      const i = setInterval(() => setProgress((p) => Math.min(100, p + 3)), 90);
+      const t = setTimeout(() => { setState("paid"); setProgress(100); }, 3200);
+      return () => { clearInterval(i); clearTimeout(t); };
+    }
+  }, [state]);
+
+  const cfg = STATE_CONFIG[state];
+
+  return (
+    <div className="flex flex-col">
+      <header className="px-5 pt-12 pb-3 flex items-center justify-between">
+        <button onClick={onBack} className="size-10 rounded-full bg-card border border-border grid place-items-center">
+          <ChevronLeft className="size-5" />
+        </button>
+        <div className="text-center">
+          <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Step 3 of 3</p>
+          <p className="text-sm font-extrabold">Verification</p>
+        </div>
+        <button
+          onClick={() => { setState("scanning"); setProgress(0); }}
+          className="size-10 rounded-full bg-card border border-border grid place-items-center"
+        >
+          <RefreshCw className="size-4 text-muted-foreground" />
+        </button>
+      </header>
+
+      {/* The Money Maker — central animation */}
+      <div className="px-5 mt-2">
+        <div
+          className={`relative aspect-square rounded-[2.5rem] overflow-hidden border-2 transition-colors duration-500 ${cfg.borderClass}`}
+          style={{ background: cfg.bg }}
+        >
+          {/* Speed lines */}
+          <div className="absolute inset-0 opacity-40">
+            {Array.from({ length: 12 }).map((_, i) => (
+              <div
+                key={i}
+                className={`absolute left-1/2 top-1/2 h-px w-32 origin-left ${cfg.lineClass}`}
+                style={{
+                  transform: `rotate(${i * 30}deg) translateX(80px)`,
+                  animation: `pulse-ring 1.6s ${i * 0.08}s ease-out infinite`,
+                }}
+              />
+            ))}
+          </div>
+
+          {/* Pulsing aura rings */}
+          <div className={`absolute inset-8 rounded-full border-2 ${cfg.ringClass} ${state === "scanning" ? "animate-ping" : ""}`} />
+          <div className={`absolute inset-16 rounded-full border ${cfg.ringClass} opacity-60`} />
+
+          {/* 7 gift cards rotating around the central 7 */}
+          <div className="absolute inset-0 grid place-items-center">
+            <div
+              className="relative size-56"
+              style={{
+                animation:
+                  state === "scanning" || state === "processing"
+                    ? `spin-slow 6s linear infinite`
+                    : "none",
+              }}
+            >
+              {BRAND_LOGOS.map((b, i) => {
+                const angle = (i / 7) * 2 * Math.PI - Math.PI / 2;
+                const radius = 96;
+                const x = Math.cos(angle) * radius;
+                const y = Math.sin(angle) * radius;
+                return (
+                  <div
+                    key={b.name}
+                    className={`absolute top-1/2 left-1/2 -mt-7 -ml-5 w-10 h-14 rounded-lg bg-gradient-to-br ${b.color} shadow-card grid place-items-center text-lg ring-1 ring-white/30`}
+                    style={{
+                      transform: `translate(${x}px, ${y}px) rotate(${(i / 7) * 360}deg)`,
+                      animation:
+                        state === "scanning"
+                          ? `card-pulse 1.4s ${i * 0.15}s ease-in-out infinite`
+                          : "none",
+                    }}
+                  >
+                    <span style={{ transform: `rotate(${-(i / 7) * 360}deg)` }}>{b.emoji}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Central 7 + status overlay */}
+            <div className="absolute grid place-items-center">
+              <div className="size-28 rounded-full bg-jungle-deep/80 backdrop-blur-md grid place-items-center ring-2 ring-gold/40 shadow-glow-gold">
+                {cfg.centerIcon ?? <span className="text-6xl font-extrabold text-white font-display">7</span>}
+              </div>
+            </div>
+          </div>
+
+          {/* Status pill */}
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full bg-black/40 backdrop-blur-md flex items-center gap-2 border border-white/15">
+            <span className={`size-2 rounded-full ${cfg.dotClass} ${state === "scanning" || state === "processing" ? "animate-pulse" : ""}`} />
+            <span className="text-[11px] font-bold text-white uppercase tracking-wider">{cfg.statusLabel}</span>
+          </div>
+
+          {/* Progress bar bottom */}
+          {(state === "scanning" || state === "processing") && (
+            <div className="absolute bottom-4 left-6 right-6">
+              <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                <div className={`h-full ${cfg.barClass} transition-all`} style={{ width: `${progress}%` }} />
+              </div>
+            </div>
+          )}
+
+          {/* Confetti for paid */}
+          {state === "paid" && (
+            <div className="absolute inset-0 pointer-events-none">
+              {Array.from({ length: 24 }).map((_, i) => {
+                const colors = ["bg-gold", "bg-cyan", "bg-pink", "bg-orange"];
+                return (
+                  <span
+                    key={i}
+                    className={`absolute size-2 rounded-sm ${colors[i % 4]}`}
+                    style={{
+                      left: `${(i * 37) % 100}%`,
+                      top: `${10 + ((i * 53) % 70)}%`,
+                      animation: `confetti 1.8s ${i * 0.05}s ease-out forwards`,
+                    }}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Status card */}
+      <div className="px-5 mt-5">
+        <div className="bg-card rounded-3xl border border-border p-5">
+          <div className="flex items-start gap-3">
+            <div className={`size-11 rounded-2xl grid place-items-center ${cfg.iconBg}`}>
+              {cfg.smallIcon}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-base font-extrabold">{cfg.title}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{cfg.subtitle}</p>
+            </div>
+          </div>
+
+          {/* State-specific detail */}
+          <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+            <DetailRow label="Brand" value="Apple USA" />
+            <DetailRow label="Card Value" value="$100" />
+            <DetailRow label="Locked Rate" value="₦1,485 / $1" />
+            <DetailRow label="You Receive" value="₦148,500" highlight />
+          </div>
+
+          {state === "invalid" && (
+            <div className="mt-4 p-3 rounded-2xl bg-pink/10 border border-pink/30 flex items-start gap-2">
+              <XCircle className="size-4 text-pink shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs font-bold text-pink">Reason: Card already redeemed</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  This code shows $0 balance. Try a different card or contact support.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {state === "paid" && (
+            <div className="mt-4 p-3 rounded-2xl bg-cyan/10 border border-cyan/30">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] text-muted-foreground font-bold uppercase">Transaction ID</p>
+                  <p className="text-xs font-mono font-bold text-cyan">7SC-AX9F2-1485-NGN</p>
+                </div>
+                <button className="size-8 rounded-lg bg-cyan/15 grid place-items-center text-cyan">
+                  <Copy className="size-3.5" />
+                </button>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-2">
+                Credited to GTBank ••6721 · +50 XP earned · Streak day 13 🔥
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* CTA buttons */}
+      <div className="px-5 mt-5 space-y-2">
+        {state === "valid" && (
+          <button
+            onClick={() => { setState("processing"); setProgress(0); }}
+            className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold"
+          >
+            Redeem & Credit Wallet <ChevronRight className="size-5" />
+          </button>
+        )}
+        {state === "invalid" && (
+          <button
+            onClick={() => { setState("scanning"); setProgress(0); }}
+            className="w-full bg-pink text-white font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2"
+          >
+            Try a Different Card
+          </button>
+        )}
+        {state === "paid" && (
+          <>
+            <button
+              onClick={onDone}
+              className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold"
+            >
+              View Wallet <Wallet className="size-5" />
+            </button>
+            <button
+              onClick={() => { setState("scanning"); setProgress(0); }}
+              className="w-full bg-card border border-border text-foreground font-semibold py-3 rounded-2xl"
+            >
+              Sell Another Card
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* State preview rail (demo control) */}
+      <div className="px-5 mt-6">
+        <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-2">Preview verification states</p>
+        <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-2">
+          {(["scanning", "valid", "invalid", "processing", "paid"] as VState[]).map((s) => {
+            const c = STATE_CONFIG[s];
+            const active = s === state;
+            return (
+              <button
+                key={s}
+                onClick={() => { setState(s); setProgress(s === "paid" ? 100 : 0); }}
+                className={`shrink-0 px-3 py-2 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 transition ${
+                  active ? `${c.iconBg} ${c.borderActiveClass}` : "bg-card border-border text-muted-foreground"
+                }`}
+              >
+                <span className={`size-1.5 rounded-full ${c.dotClass}`} />
+                {c.statusLabel}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes spin-slow { to { transform: rotate(360deg); } }
+        @keyframes card-pulse {
+          0%, 100% { transform: translate(var(--tw-translate-x, 0), var(--tw-translate-y, 0)) scale(1); }
+          50% { filter: brightness(1.3) drop-shadow(0 0 8px rgba(255,215,0,0.6)); }
+        }
+        @keyframes confetti {
+          0% { transform: translateY(-20px) rotate(0); opacity: 0; }
+          20% { opacity: 1; }
+          100% { transform: translateY(140px) rotate(720deg); opacity: 0; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+const STATE_CONFIG: Record<VState, {
+  statusLabel: string;
+  title: string;
+  subtitle: string;
+  bg: string;
+  borderClass: string;
+  borderActiveClass: string;
+  ringClass: string;
+  lineClass: string;
+  dotClass: string;
+  barClass: string;
+  iconBg: string;
+  smallIcon: React.ReactNode;
+  centerIcon?: React.ReactNode;
+}> = {
+  scanning: {
+    statusLabel: "Scanning",
+    title: "Verifying your card…",
+    subtitle: "Talking to Reloadly · checking 7 networks",
+    bg: "radial-gradient(circle at 50% 50%, oklch(0.3 0.15 200 / 0.4), oklch(0.18 0.08 160) 70%)",
+    borderClass: "border-cyan/40",
+    borderActiveClass: "border-cyan text-cyan",
+    ringClass: "border-cyan/60",
+    lineClass: "bg-gradient-to-r from-cyan to-transparent",
+    dotClass: "bg-cyan",
+    barClass: "bg-gradient-to-r from-cyan to-cyan/60",
+    iconBg: "bg-cyan/15 text-cyan",
+    smallIcon: <ScanLine className="size-5 text-cyan animate-pulse" />,
+  },
+  valid: {
+    statusLabel: "Valid",
+    title: "Card verified — rate locked",
+    subtitle: "Balance confirmed · ready to redeem",
+    bg: "radial-gradient(circle at 50% 50%, oklch(0.45 0.18 145 / 0.5), oklch(0.18 0.08 160) 70%)",
+    borderClass: "border-emerald-400/60",
+    borderActiveClass: "border-emerald-400 text-emerald-400",
+    ringClass: "border-emerald-400/60",
+    lineClass: "bg-gradient-to-r from-emerald-400 to-transparent",
+    dotClass: "bg-emerald-400",
+    barClass: "bg-emerald-400",
+    iconBg: "bg-emerald-400/15 text-emerald-400",
+    smallIcon: <CheckCircle2 className="size-5" />,
+    centerIcon: <CheckCircle2 className="size-14 text-emerald-400" strokeWidth={2.5} />,
+  },
+  invalid: {
+    statusLabel: "Invalid",
+    title: "Card rejected",
+    subtitle: "We couldn't verify this code",
+    bg: "radial-gradient(circle at 50% 50%, oklch(0.45 0.22 15 / 0.45), oklch(0.18 0.05 20) 70%)",
+    borderClass: "border-pink/60",
+    borderActiveClass: "border-pink text-pink",
+    ringClass: "border-pink/60",
+    lineClass: "bg-gradient-to-r from-pink to-transparent",
+    dotClass: "bg-pink",
+    barClass: "bg-pink",
+    iconBg: "bg-pink/15 text-pink",
+    smallIcon: <XCircle className="size-5" />,
+    centerIcon: <XCircle className="size-14 text-pink" strokeWidth={2.5} />,
+  },
+  processing: {
+    statusLabel: "Processing",
+    title: "Crediting your wallet…",
+    subtitle: "Paystack payout in progress",
+    bg: "radial-gradient(circle at 50% 50%, oklch(0.7 0.18 90 / 0.4), oklch(0.18 0.08 160) 70%)",
+    borderClass: "border-gold/60",
+    borderActiveClass: "border-gold text-gold",
+    ringClass: "border-gold/60",
+    lineClass: "bg-gradient-to-r from-gold to-transparent",
+    dotClass: "bg-gold",
+    barClass: "bg-gradient-to-r from-gold to-orange",
+    iconBg: "bg-gold/15 text-gold",
+    smallIcon: <Loader2 className="size-5 animate-spin" />,
+    centerIcon: <Loader2 className="size-14 text-gold animate-spin" strokeWidth={2.5} />,
+  },
+  paid: {
+    statusLabel: "Paid",
+    title: "₦148,500 sent to your wallet 🎉",
+    subtitle: "Settled in 47 seconds",
+    bg: "radial-gradient(circle at 50% 50%, oklch(0.5 0.2 145 / 0.55), oklch(0.18 0.08 160) 70%)",
+    borderClass: "border-emerald-400/60",
+    borderActiveClass: "border-emerald-400 text-emerald-400",
+    ringClass: "border-emerald-400/60",
+    lineClass: "bg-gradient-to-r from-emerald-400 to-transparent",
+    dotClass: "bg-emerald-400",
+    barClass: "bg-emerald-400",
+    iconBg: "bg-emerald-400/15 text-emerald-400",
+    smallIcon: <CheckCircle2 className="size-5" />,
+    centerIcon: <Sparkles className="size-14 text-gold" strokeWidth={2.5} />,
+  },
+};
+
+function DetailRow({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+  return (
+    <div className="bg-secondary/40 rounded-xl p-2.5">
+      <p className="text-[10px] text-muted-foreground font-medium">{label}</p>
+      <p className={`text-xs font-extrabold ${highlight ? "text-gold" : ""}`}>{value}</p>
+    </div>
+  );
+}
+
 /* ------------------------------- BOTTOM NAV ------------------------------- */
+
 
 function BottomNav({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
   const items: { id: Tab; icon: any; label: string }[] = [
