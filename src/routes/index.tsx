@@ -1,12 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDownLeft,
   ArrowUpRight,
   Bell,
   Bitcoin,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
+  Copy,
   Crown,
   Eye,
   EyeOff,
@@ -14,34 +16,37 @@ import {
   Gamepad2,
   Gift,
   Home,
-  Music,
+  Loader2,
   Plus,
+  RefreshCw,
   ScanLine,
   Send,
   ShieldCheck,
   Sparkles,
   Trophy,
-  Tv,
   User,
   Wallet,
+  XCircle,
   Zap,
 } from "lucide-react";
+import logoBadge from "../assets/logo-badge.png.asset.json";
+import logoFull from "../assets/logo-full.png.asset.json";
 
 export const Route = createFileRoute("/")({
   component: App,
 });
 
-type Tab = "home" | "sell" | "league" | "wallet" | "profile";
+type Tab = "home" | "sell" | "verify" | "league" | "wallet" | "profile";
 
 function App() {
   const [tab, setTab] = useState<Tab>("home");
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {/* Phone frame — feels mobile-first on any screen */}
       <div className="mx-auto flex min-h-screen max-w-[480px] flex-col bg-background pb-24 relative">
         {tab === "home" && <HomeScreen onSell={() => setTab("sell")} />}
-        {tab === "sell" && <SellScreen />}
+        {tab === "sell" && <SellScreen onVerify={() => setTab("verify")} />}
+        {tab === "verify" && <VerifyScreen onBack={() => setTab("sell")} onDone={() => setTab("wallet")} />}
         {tab === "league" && <LeagueScreen />}
         {tab === "wallet" && <WalletScreen />}
         {tab === "profile" && <ProfileScreen />}
@@ -66,8 +71,8 @@ function HomeScreen({ onSell }: { onSell: () => void }) {
 
         <div className="flex items-center justify-between relative">
           <div className="flex items-center gap-3">
-            <div className="size-11 rounded-2xl bg-gradient-gold grid place-items-center font-display font-extrabold text-jungle-deep text-lg shadow-glow-gold">
-              7
+            <div className="size-11 rounded-2xl bg-jungle-deep grid place-items-center overflow-hidden ring-1 ring-gold/40 shadow-glow-gold">
+              <img src={logoBadge.url} alt="7SEVEN" className="size-11 object-cover" />
             </div>
             <div>
               <p className="text-xs text-white/60 font-medium">Welcome back</p>
@@ -274,7 +279,7 @@ function TxRow({
 
 /* ---------------------------------- SELL ---------------------------------- */
 
-function SellScreen() {
+function SellScreen({ onVerify }: { onVerify: () => void }) {
   const brands = [
     { name: "Apple", emoji: "🍎", rate: "₦1,485" },
     { name: "Amazon", emoji: "📦", rate: "₦1,420" },
