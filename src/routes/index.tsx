@@ -386,7 +386,7 @@ function SellScreen({ onVerify }: { onVerify: () => void }) {
 
       {/* CTA */}
       <div className="px-5 mt-6">
-        <button className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold">
+        <button onClick={onVerify} className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold active:scale-[0.99] transition">
           Continue to Verify <ChevronRight className="size-5" />
         </button>
         <div className="mt-3 flex items-center justify-center gap-2 text-[11px] text-muted-foreground">
