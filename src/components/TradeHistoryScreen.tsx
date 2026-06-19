@@ -34,6 +34,7 @@ type Trade = {
 type Props = {
   userId: string;
   onBack: () => void;
+  onViewStatus?: (tradeId: string) => void;
 };
 
 const STATUS_FILTERS = [
@@ -157,11 +158,20 @@ function TradeCard({ trade, onShare }: { trade: Trade; onShare: (t: Trade) => vo
               <Share2 className="size-3.5" />
               Share Receipt
             </button>
-            {isPaid && (
-              <div className="flex items-center gap-1 bg-cyan/10 rounded-xl px-3 py-2.5 text-xs font-semibold text-cyan">
-                <CheckCircle2 className="size-3.5" />
-                Completed
-              </div>
+            {onViewStatus && (
+              <button
+                onClick={() => onViewStatus(trade.id)}
+                className={`flex items-center gap-1 rounded-xl px-3 py-2.5 text-xs font-semibold ${
+                  isPaid
+                    ? "bg-cyan/10 text-cyan"
+                    : isFailed
+                    ? "bg-red-500/10 text-red-400"
+                    : "bg-gold/10 text-gold"
+                }`}
+              >
+                {isPaid ? <CheckCircle2 className="size-3.5" /> : <RefreshCw className="size-3.5" />}
+                {isPaid ? "Receipt" : "Track"}
+              </button>
             )}
           </div>
         </div>
@@ -181,7 +191,7 @@ function Detail({ label, value, mono, highlight }: { label: string; value: strin
 
 const PAGE_SIZE = 20;
 
-export function TradeHistoryScreen({ userId, onBack }: Props) {
+export function TradeHistoryScreen({ userId, onBack, onViewStatus }: Props) {
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [page, setPage] = useState(0);

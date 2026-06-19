@@ -41,6 +41,7 @@ import { NotificationsScreen } from "../components/NotificationsScreen";
 import { ReferralScreen } from "../components/ReferralScreen";
 import { PremiumScreen } from "../components/PremiumScreen";
 import { TradeHistoryScreen } from "../components/TradeHistoryScreen";
+import { TradeStatusScreen } from "../components/TradeStatusScreen";
 import { useSession } from "../hooks/useSession";
 import {
   useExchangeRates,
@@ -60,7 +61,7 @@ export const Route = createFileRoute("/")({
   component: App,
 });
 
-type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications" | "referral" | "premium" | "history";
+type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications" | "referral" | "premium" | "history" | "status";
 
 type ActiveSell = {
   brand: string;
@@ -76,6 +77,7 @@ function App() {
   const [activeSell, setActiveSell] = useState<ActiveSell | null>(null);
   const [pendingCode, setPendingCode] = useState<{ code: string; pin?: string } | null>(null);
   const [activeTradeId, setActiveTradeId] = useState<string | null>(null);
+  const [activeStatusTradeId, setActiveStatusTradeId] = useState<string | null>(null);
   const [creatingTrade, setCreatingTrade] = useState(false);
 
   // ── Real data hooks ──────────────────────────────────────────────────────
@@ -308,10 +310,17 @@ function App() {
           <TradeHistoryScreen
             userId={user.id}
             onBack={() => setTab("wallet")}
+            onViewStatus={(id) => { setActiveStatusTradeId(id); setTab("status"); }}
+          />
+        )}
+        {tab === "status" && activeStatusTradeId && (
+          <TradeStatusScreen
+            tradeId={activeStatusTradeId}
+            onBack={() => setTab("history")}
           />
         )}
 
-        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && tab !== "premium" && tab !== "history" && (
+        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && tab !== "premium" && tab !== "history" && tab !== "status" && (
           <BottomNav tab={tab} setTab={(t) => setTab(t as Tab)} />
         )}
       </div>
