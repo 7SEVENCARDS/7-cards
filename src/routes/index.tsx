@@ -30,6 +30,7 @@ import {
   XCircle,
   Zap,
   LogOut,
+  MessageCircle as MessageCircleIcon,
 } from "lucide-react";
 import logoBadge from "../assets/logo-badge.png.asset.json";
 import logoFull from "../assets/logo-full.png.asset.json";
@@ -42,6 +43,7 @@ import { ReferralScreen } from "../components/ReferralScreen";
 import { PremiumScreen } from "../components/PremiumScreen";
 import { TradeHistoryScreen } from "../components/TradeHistoryScreen";
 import { TradeStatusScreen } from "../components/TradeStatusScreen";
+import { SupportScreen } from "../components/SupportScreen";
 import { useSession } from "../hooks/useSession";
 import {
   useExchangeRates,
@@ -61,7 +63,7 @@ export const Route = createFileRoute("/")({
   component: App,
 });
 
-type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications" | "referral" | "premium" | "history" | "status";
+type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications" | "referral" | "premium" | "history" | "status" | "support";
 
 type ActiveSell = {
   brand: string;
@@ -267,6 +269,7 @@ function App() {
             onNavigatePayout={() => setTab("payout")}
             onNavigateReferral={() => setTab("referral")}
             onNavigatePremium={() => setTab("premium")}
+            onNavigateSupport={() => setTab("support")}
           />
         )}
         {tab === "kyc" && user && (
@@ -319,8 +322,16 @@ function App() {
             onBack={() => setTab("history")}
           />
         )}
+        {tab === "support" && user && (
+          <SupportScreen
+            userId={user.id}
+            isPremium={(profile as ProfileData | null | undefined)?.premium ?? false}
+            userName={(profile as ProfileData | null | undefined)?.full_name ?? "User"}
+            onBack={() => setTab("profile")}
+          />
+        )}
 
-        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && tab !== "premium" && tab !== "history" && tab !== "status" && (
+        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && tab !== "premium" && tab !== "history" && tab !== "status" && tab !== "support" && (
           <BottomNav tab={tab} setTab={(t) => setTab(t as Tab)} />
         )}
       </div>
@@ -988,9 +999,9 @@ function CircleBtn({ icon: Icon, label }: { icon: React.ComponentType<{ classNam
 /* ─────────────────────────────────── PROFILE ─────────────────────────────────── */
 
 function ProfileScreen({
-  profile, xp, onSignOut, onNavigateKYC, onNavigatePayout, onNavigateReferral, onNavigatePremium,
+  profile, xp, onSignOut, onNavigateKYC, onNavigatePayout, onNavigateReferral, onNavigatePremium, onNavigateSupport,
 }: {
-  profile?: ProfileData | null; xp?: XPData; onSignOut: () => void; onNavigateKYC: () => void; onNavigatePayout: () => void; onNavigateReferral: () => void; onNavigatePremium: () => void;
+  profile?: ProfileData | null; xp?: XPData; onSignOut: () => void; onNavigateKYC: () => void; onNavigatePayout: () => void; onNavigateReferral: () => void; onNavigatePremium: () => void; onNavigateSupport: () => void;
 }) {
   const firstName = (profile?.full_name ?? "User").split(" ")[0];
   const initial = firstName[0]?.toUpperCase() ?? "?";
@@ -1033,6 +1044,7 @@ function ProfileScreen({
         <MenuItem icon={Gift}        label="Referral Program"   sub="₦500 per friend"                tint="text-pink"   onClick={onNavigateReferral} />
         <MenuItem icon={ShieldCheck} label="Security & KYC"     sub={profile?.kyc_status === "verified" ? "✅ Verified" : profile?.kyc_status === "submitted" ? "⏳ Under Review" : "Tap to verify"} tint="text-cyan" onClick={onNavigateKYC} />
         <MenuItem icon={Wallet}      label="Payout Accounts"    sub="Manage bank accounts"           tint="text-orange" onClick={onNavigatePayout} />
+        <MenuItem icon={MessageCircleIcon} label="Support & Help" sub={profile?.premium ? "Priority · replies in 1 hour" : "24/7 AI · 1-day human reply"} tint="text-gold" onClick={onNavigateSupport} />
         <MenuItem icon={Gamepad2}    label="Low Data Mode"      sub="Save bandwidth"                 tint="text-cyan" toggle />
       </div>
 
