@@ -39,6 +39,7 @@ import { KYCScreen } from "../components/KYCScreen";
 import { PayoutAccountsScreen } from "../components/PayoutAccountsScreen";
 import { NotificationsScreen } from "../components/NotificationsScreen";
 import { ReferralScreen } from "../components/ReferralScreen";
+import { PremiumScreen } from "../components/PremiumScreen";
 import { useSession } from "../hooks/useSession";
 import {
   useExchangeRates,
@@ -58,7 +59,7 @@ export const Route = createFileRoute("/")({
   component: App,
 });
 
-type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications" | "referral";
+type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications" | "referral" | "premium";
 
 type ActiveSell = {
   brand: string;
@@ -261,6 +262,7 @@ function App() {
             onNavigateKYC={() => setTab("kyc")}
             onNavigatePayout={() => setTab("payout")}
             onNavigateReferral={() => setTab("referral")}
+            onNavigatePremium={() => setTab("premium")}
           />
         )}
         {tab === "kyc" && user && (
@@ -292,8 +294,16 @@ function App() {
             onBack={() => setTab("profile")}
           />
         )}
+        {tab === "premium" && user && (
+          <PremiumScreen
+            userId={user.id}
+            userEmail={user.email ?? ""}
+            userName={(profile as ProfileData | null | undefined)?.full_name ?? "User"}
+            onBack={() => setTab("profile")}
+          />
+        )}
 
-        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && (
+        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && tab !== "premium" && (
           <BottomNav tab={tab} setTab={(t) => setTab(t as Tab)} />
         )}
       </div>
@@ -952,9 +962,9 @@ function CircleBtn({ icon: Icon, label }: { icon: React.ComponentType<{ classNam
 /* ─────────────────────────────────── PROFILE ─────────────────────────────────── */
 
 function ProfileScreen({
-  profile, xp, onSignOut, onNavigateKYC, onNavigatePayout, onNavigateReferral,
+  profile, xp, onSignOut, onNavigateKYC, onNavigatePayout, onNavigateReferral, onNavigatePremium,
 }: {
-  profile?: ProfileData | null; xp?: XPData; onSignOut: () => void; onNavigateKYC: () => void; onNavigatePayout: () => void; onNavigateReferral: () => void;
+  profile?: ProfileData | null; xp?: XPData; onSignOut: () => void; onNavigateKYC: () => void; onNavigatePayout: () => void; onNavigateReferral: () => void; onNavigatePremium: () => void;
 }) {
   const firstName = (profile?.full_name ?? "User").split(" ")[0];
   const initial = firstName[0]?.toUpperCase() ?? "?";
@@ -1009,8 +1019,11 @@ function ProfileScreen({
           <p className="text-xs text-muted-foreground mt-1">
             Higher limits · +2% better rates · Priority payouts · 24/7 support
           </p>
-          <button className="mt-4 bg-gradient-gold text-jungle-deep font-bold px-4 py-2.5 rounded-xl text-sm shadow-glow-gold">
-            Get Premium · ₦2,000/mo
+          <button
+            onClick={onNavigatePremium}
+            className="mt-4 bg-gradient-gold text-jungle-deep font-bold px-4 py-2.5 rounded-xl text-sm shadow-glow-gold"
+          >
+            {profile?.premium ? "Manage Premium" : "Get Premium · ₦2,000/mo"}
           </button>
         </div>
       </div>
