@@ -58,6 +58,7 @@ import {
   useLeaderboard,
   useUserBadges,
   useNotifications,
+  useCryptoRates,
 } from "../hooks/useAppData";
 import { supabase } from "../lib/supabase";
 import { createTrade, verifyGiftCard, processPayout } from "../server-functions/trades";
@@ -90,6 +91,7 @@ function App() {
 
   // ── Real data hooks ──────────────────────────────────────────────────────
   const { data: rates = [] } = useExchangeRates();
+  const { data: cryptoRates = [] } = useCryptoRates();
   const { data: wallets = [] } = useWallets(user?.id);
   const { data: portfolio } = usePortfolioValue(user?.id);
   const { data: recentTrades = [] } = useRecentTrades(user?.id, 5);
@@ -193,6 +195,12 @@ function App() {
 
   const unreadCount = (notifications as Array<{read:boolean}>).filter((n) => !n.read).length;
 
+  // Alert badge: any tracked coin moved ≥ 5% in the last 24 h
+  const hasCryptoAlert = (cryptoRates as Array<{ change?: string }>).some((r) => {
+    const pct = parseFloat((r.change ?? "0").replace(/[^0-9.\-]/g, ""));
+    return Math.abs(pct) >= 5;
+  });
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="mx-auto flex min-h-screen max-w-[480px] flex-col bg-background pb-24 relative">
@@ -201,6 +209,7 @@ function App() {
             onSell={() => setTab("sell")}
             onNotifications={() => setTab("notifications")}
             onCrypto={() => setTab("crypto")}
+            hasCryptoAlert={hasCryptoAlert}
             userName={userName}
             ngnBalance={ngnBalance}
             recentTrades={recentTrades as TradeRow[]}
@@ -402,10 +411,10 @@ function timeAgo(iso: string): string {
 }
 
 function HomeScreen({
-  onSell, onNotifications, onCrypto, userName, ngnBalance, recentTrades, bestRate, xp, unreadCount,
+  onSell, onNotifications, onCrypto, hasCryptoAlert, userName, ngnBalance, recentTrades, bestRate, xp, unreadCount,
 }: {
-  onSell: () => void; onNotifications: () => void; onCrypto?: () => void; userName: string; ngnBalance: number;
-  recentTrades: TradeRow[]; bestRate: number; xp?: XPData; unreadCount: number;
+  onSell: () => void; onNotifications: () => void; onCrypto?: () => void; hasCryptoAlert?: boolean;
+  userName: string; ngnBalance: number; recentTrades: TradeRow[]; bestRate: number; xp?: XPData; unreadCount: number;
 }) {
   const [hideBalance, setHideBalance] = useState(false);
 
@@ -520,14 +529,22 @@ function HomeScreen({
       <div className="px-5 mt-6">
         <div className="grid grid-cols-4 gap-3">
           {[
-            { icon: Gift,     label: "Gift Card", color: "bg-gold/15 text-gold",    onClick: onSell },
-            { icon: Bitcoin,  label: "Crypto",    color: "bg-cyan/15 text-cyan",    onClick: onCrypto },
-            { icon: ScanLine, label: "Scan",      color: "bg-pink/15 text-pink",    onClick: undefined },
-            { icon: Sparkles, label: "Rewards",   color: "bg-orange/15 text-orange", onClick: undefined },
-          ].map(({ icon: Icon, label, color, onClick }) => (
+            { icon: Gift,     label: "Gift Card", color: "bg-gold/15 text-gold",     onClick: onSell,    alert: false },
+            { icon: Bitcoin,  label: "Crypto",    color: "bg-cyan/15 text-cyan",     onClick: onCrypto,  alert: hasCryptoAlert },
+            { icon: ScanLine, label: "Scan",      color: "bg-pink/15 text-pink",     onClick: undefined, alert: false },
+            { icon: Sparkles, label: "Rewards",   color: "bg-orange/15 text-orange", onClick: undefined, alert: false },
+          ].map(({ icon: Icon, label, color, onClick, alert }) => (
             <button key={label} onClick={onClick} className="flex flex-col items-center gap-2 active:scale-95 transition">
-              <div className={`size-14 rounded-2xl grid place-items-center ${color}`}>
-                <Icon className="size-6" />
+              <div className="relative">
+                <div className={`size-14 rounded-2xl grid place-items-center ${color}`}>
+                  <Icon className="size-6" />
+                </div>
+                {alert && (
+                  <span className="absolute -top-1 -right-1 flex size-3.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full size-3.5 bg-orange-500 border-2 border-background" />
+                  </span>
+                )}
               </div>
               <span className="text-[11px] font-semibold text-muted-foreground">{label}</span>
             </button>
