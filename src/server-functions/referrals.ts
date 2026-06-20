@@ -157,52 +157,12 @@ export const creditReferrerCommission = createServerFn({ method: "POST" })
   .validator((d: {
     traderId: string;
     tradeId: string;
-    tradeAmountNgn: number; // the amount the trader received (85% of gross)
+    tradeAmountNgn: number;
   }) => d)
   .handler(async ({ data }) => {
     const db = getServerSupabase();
-
-    // Get referrer
-    const { data: trader } = await db
-      .from("profiles")
-      .select("referred_by, full_name")
-      .eq("id", data.traderId)
-      .single();
-
-    if (!trader?.referred_by) return { success: false, reason: "no_referrer" };
-
-    // Commission = 5% of trader's received amount
-    // (this comes from the platform's 15% margin, leaving 10% net)
-    const COMMISSION_RATE = 0.05;
-    const commissionNgn = Math.round(data.tradeAmountNgn * COMMISSION_RATE);
-
-    if (commissionNgn <= 0) return { success: false, reason: "amount_too_small" };
-
-    // Credit referrer's NGN wallet atomically
-    await db.rpc("increment_wallet_balance", {
-      p_user_id: trader.referred_by,
-      p_currency: "NGN",
-      p_amount: commissionNgn,
-    });
-
-    // Record in referral_commissions for transparency
-    await db.from("referral_commissions").insert({
-      referrer_id: trader.referred_by,
-      referee_id: data.traderId,
-      trade_id: data.tradeId,
-      amount_ngn: commissionNgn,
-      commission_rate: COMMISSION_RATE,
-    });
-
-    // Notify referrer
-    await db.from("notifications").insert({
-      user_id: trader.referred_by,
-      title: "Commission Earned! 💰",
-      message: `₦${commissionNgn.toLocaleString()} (5%) commission from ${trader.full_name ?? "your referral"}'s trade.`,
-      type: "success",
-    });
-
-    return { success: true, commissionNgn };
+    const { creditReferrerCommissionFn } = await import("../lib/db-helpers");
+    return creditReferrerCommissionFn(db, data.traderId, data.tradeId, data.tradeAmountNgn);
   });
 
 // ─── Check verification allowance ────────────────────────────────────────────
@@ -214,80 +174,8 @@ export const getVerificationAllowance = createServerFn({ method: "GET" })
   .validator((d: { userId: string }) => d)
   .handler(async ({ data }) => {
     const db = getServerSupabase();
-
-    // Check premium status
-    const { data: profile } = await db
-      .from("profiles")
-      .select("premium")
-      .eq("id", data.userId)
-      .single();
-
-    if (profile?.premium) {
-      return { allowed: true, unlimited: true, reason: "premium" };
-    }
-
-    // Check weekly trade volume ($25+ = ₦37,125 at ₦1485/USD)
-    const weekStart = new Date();
-    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
-    weekStart.setHours(0, 0, 0, 0);
-
-    const { data: weeklyTrades } = await db
-      .from("trades")
-      .select("amount_ngn")
-      .eq("user_id", data.userId)
-      .eq("status", "paid")
-      .gte("settled_at", weekStart.toISOString());
-
-    const weeklyNgn = (weeklyTrades ?? []).reduce((sum, t) => sum + Number(t.amount_ngn ?? 0), 0);
-    const WEEKLY_THRESHOLD_NGN = 25 * 1485; // $25 × ₦1485
-
-    if (weeklyNgn >= WEEKLY_THRESHOLD_NGN) {
-      return { allowed: true, unlimited: true, reason: "weekly_volume", weeklyNgn };
-    }
-
-    // Check monthly trade volume ($50+ = ₦74,250 at ₦1485/USD)
-    const monthStart = new Date();
-    monthStart.setDate(1);
-    monthStart.setHours(0, 0, 0, 0);
-
-    const { data: monthlyTrades } = await db
-      .from("trades")
-      .select("amount_ngn")
-      .eq("user_id", data.userId)
-      .eq("status", "paid")
-      .gte("settled_at", monthStart.toISOString());
-
-    const monthlyNgn = (monthlyTrades ?? []).reduce((sum, t) => sum + Number(t.amount_ngn ?? 0), 0);
-    const MONTHLY_THRESHOLD_NGN = 50 * 1485; // $50 × ₦1485
-
-    if (monthlyNgn >= MONTHLY_THRESHOLD_NGN) {
-      return { allowed: true, unlimited: true, reason: "monthly_volume", monthlyNgn };
-    }
-
-    // Free tier — check today's verification count
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-
-    const { count: usedToday } = await db
-      .from("verification_usage")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", data.userId)
-      .gte("created_at", todayStart.toISOString());
-
-    const FREE_DAILY_LIMIT = 3;
-    const remaining = Math.max(0, FREE_DAILY_LIMIT - (usedToday ?? 0));
-
-    return {
-      allowed: remaining > 0,
-      unlimited: false,
-      remaining,
-      dailyLimit: FREE_DAILY_LIMIT,
-      reason: remaining > 0 ? "free_tier" : "limit_reached",
-      weeklyNgn: Math.round(weeklyNgn),
-      monthlyNgn: Math.round(monthlyNgn),
-      weeklyThresholdNgn: WEEKLY_THRESHOLD_NGN,
-      monthlyThresholdNgn: MONTHLY_THRESHOLD_NGN,
-    };
+    const { checkVerificationAllowance } = await import("../lib/db-helpers");
+    return checkVerificationAllowance(db, data.userId);
   });
 
 // ─── Record a verification usage ─────────────────────────────────────────────
@@ -295,9 +183,7 @@ export const recordVerificationUsage = createServerFn({ method: "POST" })
   .validator((d: { userId: string; tradeId: string }) => d)
   .handler(async ({ data }) => {
     const db = getServerSupabase();
-    await db.from("verification_usage").insert({
-      user_id: data.userId,
-      trade_id: data.tradeId,
-    });
+    const { addVerificationUsage } = await import("../lib/db-helpers");
+    await addVerificationUsage(db, data.userId, data.tradeId);
     return { success: true };
   });
