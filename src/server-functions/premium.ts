@@ -38,51 +38,45 @@ export const createPremiumCheckout = createServerFn({ method: "POST" })
     const transactionRef = `7SC-PREM-${data.userId.slice(0, 8)}-${Date.now()}`;
 
     try {
-      const apiKey = process.env.SQUADCO_API_KEY;
-      const env    = process.env.SQUADCO_ENV || "sandbox";
+      const { createPaymentLink } = await import("../lib/squadco");
 
-      if (!apiKey || apiKey.includes("YOUR_")) {
-        // Demo mode — return a mock checkout URL
-        return {
-          success: true,
-          demo: true,
-          checkoutUrl: null,
-          transactionRef,
-        };
-      }
+      // Pre-create a pending subscription row so the webhook can find it
+      const db = getServerSupabase();
+      const expiresAt = new Date();
+      expiresAt.setMonth(expiresAt.getMonth() + 1);
 
-      const base = env === "production"
-        ? "https://api-d.squadco.com"
-        : "https://sandbox-api-d.squadco.com";
+      await db.from("subscriptions").insert({
+        user_id: data.userId,
+        plan: "premium",
+        status: "pending",
+        amount_ngn: PREMIUM_PRICE_NGN,
+        transaction_ref: transactionRef,
+        expires_at: expiresAt.toISOString(),
+      }).onConflict("transaction_ref").ignore();
 
-      const res = await fetch(`${base}/merchant/create-payment-link`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          amount: PREMIUM_PRICE_KOBO,
-          currency: "NGN",
-          transaction_ref: transactionRef,
-          email: data.email,
-          customer_name: data.name,
-          payment_description: "7SEVEN Premium — Monthly",
-          redirect_link: `${process.env.VITE_APP_URL || "https://7sevencards.app"}/premium/success`,
-          pass_charge: false,
-        }),
+      const result = await createPaymentLink({
+        amountKobo: PREMIUM_PRICE_KOBO,
+        transactionRef,
+        email: data.email,
+        name: data.name,
+        description: "7SEVEN Premium — Monthly",
+        redirectUrl: `${process.env.VITE_APP_URL ?? "https://7sevencards.app"}/premium/success`,
       });
-
-      const json = await res.json() as { data?: { checkout_url?: string } };
 
       return {
         success: true,
         demo: false,
-        checkoutUrl: json.data?.checkout_url ?? null,
+        checkoutUrl: result.checkoutUrl,
         transactionRef,
       };
-    } catch (e) {
+    } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
+      const isConfig = msg.includes("not configured");
+
+      if (isConfig) {
+        return { success: true, demo: true, checkoutUrl: null, transactionRef };
+      }
+
       return { success: false, error: msg };
     }
   });
