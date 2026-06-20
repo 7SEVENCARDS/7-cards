@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
 import { assertNotRateLimited, rlKey } from "../lib/rate-limiter";
+import { assertBvn, assertNin } from "../lib/validate";
 
 // ─── Name-match helper ────────────────────────────────────────────────────────
 // Returns true if the Dojah identity name loosely matches the registered name.
@@ -29,9 +30,8 @@ function namesMatch(registered: string | null, dojahFirst: string, dojahLast: st
 export const verifyBVN = createServerFn({ method: "POST" })
   .validator((d: { bvn: string }) => d)
   .handler(async ({ data }) => {
-    if (!/^\d{11}$/.test(data.bvn)) {
-      return { success: false, error: "BVN must be exactly 11 digits" };
-    }
+    // Throw 422 with clear message before touching auth or Dojah
+    assertBvn(data.bvn);
 
     const userId = await requireUser();
     // 10 Dojah lookups per user per 10 minutes — prevents downstream API abuse
@@ -144,9 +144,7 @@ export const verifyBVN = createServerFn({ method: "POST" })
 export const verifyNIN = createServerFn({ method: "POST" })
   .validator((d: { nin: string }) => d)
   .handler(async ({ data }) => {
-    if (!/^\d{11}$/.test(data.nin)) {
-      return { success: false, error: "NIN must be exactly 11 digits" };
-    }
+    assertNin(data.nin);
 
     const userId = await requireUser();
     // 10 Dojah lookups per user per 10 minutes — prevents downstream API abuse
