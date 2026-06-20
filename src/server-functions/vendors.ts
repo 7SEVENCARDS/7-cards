@@ -6,6 +6,7 @@
 
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
+import { requireUser, requireAdmin, requireVendorAuth } from "../lib/auth-server";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type VendorProfile = {
@@ -158,18 +159,14 @@ export const vendorLogin = createServerFn({ method: "POST" })
 export const getVendorSession = createServerFn({ method: "GET" })
   .validator((d: Record<string, never>) => d)
   .handler(async () => {
-    const db = getServerSupabase();
     try {
-      const { data: sessionData } = await db.auth.getSession();
-      const userId = sessionData?.session?.user?.id;
-      if (!userId) return { authenticated: false };
-
+      const userId = await requireUser();
+      const db = getServerSupabase();
       const { data: vendor } = await db
         .from("vendors")
         .select("*")
         .eq("user_id", userId)
         .single();
-
       if (!vendor) return { authenticated: false };
       return { authenticated: true, vendor: vendor as VendorProfile };
     } catch {
@@ -190,10 +187,8 @@ export const vendorLogout = createServerFn({ method: "POST" })
 export const getVendorProfile = createServerFn({ method: "GET" })
   .validator((d: Record<string, never>) => d)
   .handler(async () => {
+    const userId = await requireUser();
     const db = getServerSupabase();
-    const { data: sessionData } = await db.auth.getSession();
-    const userId = sessionData?.session?.user?.id;
-    if (!userId) throw new Error("Unauthenticated");
 
     const { data, error } = await db.from("vendors").select("*").eq("user_id", userId).single();
     if (error) throw error;
@@ -215,10 +210,8 @@ export const updateVendorProfile = createServerFn({ method: "POST" })
     }) => d
   )
   .handler(async ({ data }) => {
+    const userId = await requireUser();
     const db = getServerSupabase();
-    const { data: sessionData } = await db.auth.getSession();
-    const userId = sessionData?.session?.user?.id;
-    if (!userId) throw new Error("Unauthenticated");
 
     const { error } = await db
       .from("vendors")
@@ -245,10 +238,8 @@ export const updateVendorProfile = createServerFn({ method: "POST" })
 export const getMyAssignments = createServerFn({ method: "GET" })
   .validator((d: { status?: string; limit?: number }) => d)
   .handler(async ({ data }) => {
+    const userId = await requireUser();
     const db = getServerSupabase();
-    const { data: sessionData } = await db.auth.getSession();
-    const userId = sessionData?.session?.user?.id;
-    if (!userId) throw new Error("Unauthenticated");
 
     const vendor = await getVendorId(db, userId);
     if (!vendor) throw new Error("Not a vendor");
@@ -287,10 +278,8 @@ export const getMyAssignments = createServerFn({ method: "GET" })
 export const markAssignmentRedeemed = createServerFn({ method: "POST" })
   .validator((d: { assignmentId: string; notes?: string }) => d)
   .handler(async ({ data }) => {
+    const userId = await requireUser();
     const db = getServerSupabase();
-    const { data: sessionData } = await db.auth.getSession();
-    const userId = sessionData?.session?.user?.id;
-    if (!userId) throw new Error("Unauthenticated");
 
     const vendor = await getVendorId(db, userId);
     if (!vendor) throw new Error("Not a vendor");
@@ -316,31 +305,21 @@ export const markAssignmentRedeemed = createServerFn({ method: "POST" })
       })
       .eq("id", data.assignmentId);
 
-    // Credit vendor wallet
+    // Credit vendor wallet — atomic RPC prevents lost-update race
     const amountNgn = assignment.amount_ngn ?? 0;
     if (amountNgn > 0) {
-      const { data: wallet } = await db
-        .from("vendor_wallets")
-        .select("balance, total_funded")
-        .eq("vendor_id", vendor.id)
-        .single();
-
-      const newBalance = Number(wallet?.balance ?? 0) + Number(amountNgn);
-      await db
-        .from("vendor_wallets")
-        .update({
-          balance: newBalance,
-          total_funded: Number(wallet?.total_funded ?? 0) + Number(amountNgn),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("vendor_id", vendor.id);
-
+      await db.rpc("increment_vendor_wallet_balance", {
+        p_vendor_id: vendor.id,
+        p_amount: amountNgn,
+      });
+      const { data: updWallet } = await db
+        .from("vendor_wallets").select("balance").eq("vendor_id", vendor.id).single();
       await db.from("vendor_transactions").insert({
         vendor_id: vendor.id,
         type: "assignment_credit",
         amount: amountNgn,
-        balance_after: newBalance,
-        description: `Card redeemed: ${assignment.brand} $${assignment.amount_usd}`,
+        balance_after: updWallet?.balance ?? null,
+        description: `Card redeemed: ${assignment.brand} ${assignment.amount_usd}`,
         assignment_id: data.assignmentId,
       });
     }
@@ -367,10 +346,8 @@ export const markAssignmentRedeemed = createServerFn({ method: "POST" })
 export const markAssignmentFailed = createServerFn({ method: "POST" })
   .validator((d: { assignmentId: string; reason: string }) => d)
   .handler(async ({ data }) => {
+    const userId = await requireUser();
     const db = getServerSupabase();
-    const { data: sessionData } = await db.auth.getSession();
-    const userId = sessionData?.session?.user?.id;
-    if (!userId) throw new Error("Unauthenticated");
 
     const vendor = await getVendorId(db, userId);
     if (!vendor) throw new Error("Not a vendor");
@@ -393,10 +370,8 @@ export const markAssignmentFailed = createServerFn({ method: "POST" })
 export const getVendorWallet = createServerFn({ method: "GET" })
   .validator((d: Record<string, never>) => d)
   .handler(async () => {
+    const userId = await requireUser();
     const db = getServerSupabase();
-    const { data: sessionData } = await db.auth.getSession();
-    const userId = sessionData?.session?.user?.id;
-    if (!userId) throw new Error("Unauthenticated");
 
     const vendor = await getVendorId(db, userId);
     if (!vendor) throw new Error("Not a vendor");
@@ -418,10 +393,8 @@ export const getVendorWallet = createServerFn({ method: "GET" })
 export const getActiveVirtualAccounts = createServerFn({ method: "GET" })
   .validator((d: Record<string, never>) => d)
   .handler(async () => {
+    const userId = await requireUser();
     const db = getServerSupabase();
-    const { data: sessionData } = await db.auth.getSession();
-    const userId = sessionData?.session?.user?.id;
-    if (!userId) throw new Error("Unauthenticated");
 
     const vendor = await getVendorId(db, userId);
     if (!vendor) throw new Error("Not a vendor");
@@ -442,10 +415,8 @@ export const getActiveVirtualAccounts = createServerFn({ method: "GET" })
 export const provisionVirtualAccount = createServerFn({ method: "POST" })
   .validator((d: { amountNgn: number }) => d)
   .handler(async ({ data }) => {
+    const userId = await requireUser();
     const db = getServerSupabase();
-    const { data: sessionData } = await db.auth.getSession();
-    const userId = sessionData?.session?.user?.id;
-    if (!userId) throw new Error("Unauthenticated");
 
     const { data: vendor } = await db
       .from("vendors")
@@ -505,12 +476,22 @@ export const provisionVirtualAccount = createServerFn({ method: "POST" })
       } catch { /* fall through to mock */ }
     }
 
-    // Mock VAN if Squadco is unavailable
+    // Never return a fake account in production — fail loudly so ops is alerted.
+    // Set SQUADCO_DEMO=true for local dev/sandbox testing only.
     if (!accountNumber) {
+      const isDemoMode =
+        process.env.SQUADCO_DEMO === "true" && process.env.NODE_ENV !== "production";
+      if (!isDemoMode) {
+        throw new Error(
+          "Virtual account creation failed — Squad API unavailable. Check SQUADCO_SECRET_KEY and Squad dashboard."
+        );
+      }
+      // Demo mode only — clearly labelled so the frontend can warn the user
       const seed = Date.now();
       accountNumber = String(9000000000 + (seed % 1000000000)).slice(0, 10);
-      bankName = "7SEVEN Wema Collection";
+      bankName = "DEMO — DO NOT USE";
       bankCode = "035";
+      console.warn("[VAN] DEMO MODE: Returning fake virtual account. Do NOT use in production.");
     }
 
     const { data: van, error } = await db
@@ -537,14 +518,8 @@ export const provisionVirtualAccount = createServerFn({ method: "POST" })
 export const adminGetVendors = createServerFn({ method: "GET" })
   .validator((d: { status?: string }) => d)
   .handler(async ({ data }) => {
+    const userId = await requireAdmin();
     const db = getServerSupabase();
-    // Verify admin (re-use same pattern)
-    const { data: session } = await db.auth.getSession();
-    const userId = session?.session?.user?.id;
-    if (!userId) throw new Error("Unauthenticated");
-
-    const { data: profile } = await db.from("profiles").select("role").eq("id", userId).single();
-    if (profile?.role !== "admin") throw new Error("Forbidden");
 
     let query = db
       .from("vendors")
@@ -562,13 +537,8 @@ export const adminGetVendors = createServerFn({ method: "GET" })
 export const adminUpdateVendorStatus = createServerFn({ method: "POST" })
   .validator((d: { vendorId: string; status: "active" | "pending" | "suspended"; notes?: string }) => d)
   .handler(async ({ data }) => {
+    const userId = await requireAdmin();
     const db = getServerSupabase();
-    const { data: session } = await db.auth.getSession();
-    const userId = session?.session?.user?.id;
-    if (!userId) throw new Error("Unauthenticated");
-
-    const { data: profile } = await db.from("profiles").select("role").eq("id", userId).single();
-    if (profile?.role !== "admin") throw new Error("Forbidden");
 
     await db
       .from("vendors")
@@ -597,13 +567,8 @@ export const adminAssignCard = createServerFn({ method: "POST" })
     }) => d
   )
   .handler(async ({ data }) => {
+    const userId = await requireAdmin();
     const db = getServerSupabase();
-    const { data: session } = await db.auth.getSession();
-    const userId = session?.session?.user?.id;
-    if (!userId) throw new Error("Unauthenticated");
-
-    const { data: profile } = await db.from("profiles").select("role").eq("id", userId).single();
-    if (profile?.role !== "admin") throw new Error("Forbidden");
 
     // Create assignment
     const { data: assignment, error } = await db
@@ -674,13 +639,8 @@ export const adminAssignCard = createServerFn({ method: "POST" })
 export const adminSendTelegramNotification = createServerFn({ method: "POST" })
   .validator((d: { assignmentId: string }) => d)
   .handler(async ({ data }) => {
+    const userId = await requireAdmin();
     const db = getServerSupabase();
-    const { data: session } = await db.auth.getSession();
-    const userId = session?.session?.user?.id;
-    if (!userId) throw new Error("Unauthenticated");
-
-    const { data: profile } = await db.from("profiles").select("role").eq("id", userId).single();
-    if (profile?.role !== "admin") throw new Error("Forbidden");
 
     const { data: assignment } = await db
       .from("vendor_card_assignments")
@@ -733,8 +693,8 @@ export const requestWithdrawal = createServerFn({ method: "POST" })
     }
   )
   .handler(async ({ data }) => {
-    const { userId } = await requireVendorAuth();
-    const db = getDb();
+    const userId = await requireVendorAuth();
+    const db = getServerSupabase();
     const vendor = await getVendorId(db, userId);
     if (!vendor) throw new Error("Not a vendor");
 
@@ -765,21 +725,18 @@ export const requestWithdrawal = createServerFn({ method: "POST" })
       .single();
     if (error) throw new Error(error.message);
 
-    // Lock the balance (deduct from available, add to locked)
-    await db
-      .from("vendor_wallets")
-      .update({
-        balance: balance - data.amount,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("vendor_id", vendor.id);
-
-    // Log the locked transaction
+    // Atomically deduct — prevents race between concurrent withdrawal requests
+    await db.rpc("deduct_vendor_wallet_balance", {
+      p_vendor_id: vendor.id,
+      p_amount: data.amount,
+    });
+    const { data: postWallet } = await db
+      .from("vendor_wallets").select("balance").eq("vendor_id", vendor.id).single();
     await db.from("vendor_transactions").insert({
       vendor_id: vendor.id,
-      type: "withdrawal_pending",
+      type: "withdrawal",
       amount: -data.amount,
-      balance_after: balance - data.amount,
+      balance_after: postWallet?.balance ?? null,
       description: `Withdrawal request — ${data.bankName} ${data.accountNumber}`,
       reference: req.id,
     });
@@ -790,8 +747,8 @@ export const requestWithdrawal = createServerFn({ method: "POST" })
 // ─── Get My Withdrawals ────────────────────────────────────────────────────────
 export const getMyWithdrawals = createServerFn({ method: "GET" })
   .handler(async () => {
-    const { userId } = await requireVendorAuth();
-    const db = getDb();
+    const userId = await requireVendorAuth();
+    const db = getServerSupabase();
     const vendor = await getVendorId(db, userId);
     if (!vendor) throw new Error("Not a vendor");
 
@@ -809,8 +766,8 @@ export const getMyWithdrawals = createServerFn({ method: "GET" })
 export const adminGetWithdrawalRequests = createServerFn({ method: "GET" })
   .validator((d: unknown) => d as { status?: string })
   .handler(async ({ data }) => {
-    const { userId } = await requireAuth();
-    const db = getDb();
+    const userId = await requireAdmin();
+    const db = getServerSupabase();
     const { data: profile } = await db
       .from("profiles")
       .select("role")
@@ -838,8 +795,8 @@ export const adminGetWithdrawalRequests = createServerFn({ method: "GET" })
 export const adminApproveWithdrawal = createServerFn({ method: "POST" })
   .validator((d: unknown) => d as { requestId: string })
   .handler(async ({ data }) => {
-    const { userId } = await requireAuth();
-    const db = getDb();
+    const userId = await requireAdmin();
+    const db = getServerSupabase();
     const { data: profile } = await db
       .from("profiles")
       .select("role")
@@ -901,19 +858,11 @@ export const adminApproveWithdrawal = createServerFn({ method: "POST" })
       .eq("id", data.requestId);
 
     if (!paidSuccessfully) {
-      // Restore the balance on failure
-      const { data: wallet } = await db
-        .from("vendor_wallets")
-        .select("balance")
-        .eq("vendor_id", req.vendor_id)
-        .single();
-      await db
-        .from("vendor_wallets")
-        .update({
-          balance: Number(wallet?.balance ?? 0) + Number(req.amount),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("vendor_id", req.vendor_id);
+      // Atomically restore the deducted balance
+      await db.rpc("increment_vendor_wallet_balance", {
+        p_vendor_id: req.vendor_id,
+        p_amount: Number(req.amount),
+      });
       throw new Error(payoutData?.message ?? "Payout failed — balance restored");
     }
 
@@ -945,8 +894,8 @@ export const adminApproveWithdrawal = createServerFn({ method: "POST" })
 export const adminRejectWithdrawal = createServerFn({ method: "POST" })
   .validator((d: unknown) => d as { requestId: string; reason?: string })
   .handler(async ({ data }) => {
-    const { userId } = await requireAuth();
-    const db = getDb();
+    const userId = await requireAdmin();
+    const db = getServerSupabase();
     const { data: profile } = await db
       .from("profiles")
       .select("role")
@@ -962,25 +911,19 @@ export const adminRejectWithdrawal = createServerFn({ method: "POST" })
       .single();
     if (!req) throw new Error("Request not found or already processed");
 
-    // Restore the locked balance
-    const { data: wallet } = await db
-      .from("vendor_wallets")
-      .select("balance")
-      .eq("vendor_id", req.vendor_id)
-      .single();
-    const restoredBalance = Number(wallet?.balance ?? 0) + Number(req.amount);
-
-    await db
-      .from("vendor_wallets")
-      .update({ balance: restoredBalance, updated_at: new Date().toISOString() })
-      .eq("vendor_id", req.vendor_id);
-
+    // Atomically restore the locked balance
+    await db.rpc("increment_vendor_wallet_balance", {
+      p_vendor_id: req.vendor_id,
+      p_amount: Number(req.amount),
+    });
+    const { data: rstWallet } = await db
+      .from("vendor_wallets").select("balance").eq("vendor_id", req.vendor_id).single();
     await db.from("vendor_transactions").insert({
       vendor_id: req.vendor_id,
-      type: "withdrawal_reversed",
+      type: "credit",
       amount: Number(req.amount),
-      balance_after: restoredBalance,
-      description: `Withdrawal rejected: ${data.reason ?? "Admin decision"}`,
+      balance_after: rstWallet?.balance ?? null,
+      description: `Withdrawal rejected — balance restored: ${data.reason ?? "Admin decision"}`,
       reference: req.id,
     });
 
@@ -1020,8 +963,8 @@ export const adminRejectWithdrawal = createServerFn({ method: "POST" })
 // ─── Admin: Vendor Leaderboard ─────────────────────────────────────────────────
 export const adminGetVendorLeaderboard = createServerFn({ method: "GET" })
   .handler(async () => {
-    const { userId } = await requireAuth();
-    const db = getDb();
+    const userId = await requireAdmin();
+    const db = getServerSupabase();
     const { data: profile } = await db
       .from("profiles")
       .select("role")
@@ -1058,8 +1001,8 @@ export const adminGetVendorLeaderboard = createServerFn({ method: "GET" })
 export const adminPromoteVendorTier = createServerFn({ method: "POST" })
   .validator((d: unknown) => d as { vendorId: string; tier: "standard" | "premium" })
   .handler(async ({ data }) => {
-    const { userId } = await requireAuth();
-    const db = getDb();
+    const userId = await requireAdmin();
+    const db = getServerSupabase();
     const { data: profile } = await db
       .from("profiles")
       .select("role")
@@ -1104,8 +1047,8 @@ export const adminPromoteVendorTier = createServerFn({ method: "POST" })
 // Computed entirely from existing data — no separate badges table needed.
 export const getMyBadges = createServerFn({ method: "GET" })
   .handler(async () => {
-    const { userId } = await requireVendorAuth();
-    const db = getDb();
+    const userId = await requireVendorAuth();
+    const db = getServerSupabase();
     const vendor = await getVendorId(db, userId);
     if (!vendor) throw new Error("Not a vendor");
 
@@ -1202,7 +1145,7 @@ export const getMyBadges = createServerFn({ method: "GET" })
 // ─── Internal: Check & Pay Referral Bonus ──────────────────────────────────────
 // Called after each redemption. Pays ₦2,500 to referrer when referred vendor
 // hits their 10th redemption. Fire-and-forget (non-fatal).
-export async function checkReferralBonus(db: ReturnType<typeof getDb>, vendorId: string, newTotalRedeemed: number) {
+export async function checkReferralBonus(db: ReturnType<typeof getServerSupabase>, vendorId: string, newTotalRedeemed: number) {
   if (newTotalRedeemed !== 10) return; // only triggers at exactly the 10th
   try {
     const { data: referral } = await db
@@ -1215,25 +1158,19 @@ export async function checkReferralBonus(db: ReturnType<typeof getDb>, vendorId:
 
     const bonusNgn = Number(referral.bonus_amount_ngn) || 2500;
 
-    // Credit referrer's wallet
-    const { data: wallet } = await db
-      .from("vendor_wallets")
-      .select("balance, total_funded")
-      .eq("vendor_id", referral.referrer_id)
-      .single() as { data: { balance: number; total_funded: number } | null };
-
-    const newBalance = Number(wallet?.balance ?? 0) + bonusNgn;
-    await db.from("vendor_wallets").update({
-      balance: newBalance,
-      total_funded: Number(wallet?.total_funded ?? 0) + bonusNgn,
-      updated_at: new Date().toISOString(),
-    }).eq("vendor_id", referral.referrer_id);
-
+    // Credit referrer's wallet — atomic RPC prevents concurrent-credit races
+    await db.rpc("increment_vendor_wallet_balance", {
+      p_vendor_id: referral.referrer_id,
+      p_amount: bonusNgn,
+    });
+    const { data: bonusWallet } = await db
+      .from("vendor_wallets").select("balance").eq("vendor_id", referral.referrer_id)
+      .single() as { data: { balance: number } | null };
     await db.from("vendor_transactions").insert({
       vendor_id: referral.referrer_id,
       type: "referral_bonus",
       amount: bonusNgn,
-      balance_after: newBalance,
+      balance_after: bonusWallet?.balance ?? null,
       description: `Referral bonus: your recruit completed 10 redemptions`,
     });
 
@@ -1273,8 +1210,8 @@ export async function checkReferralBonus(db: ReturnType<typeof getDb>, vendorId:
 // ─── Get My Referral Info ──────────────────────────────────────────────────────
 export const getMyReferralInfo = createServerFn({ method: "GET" })
   .handler(async () => {
-    const { userId } = await requireVendorAuth();
-    const db = getDb();
+    const userId = await requireVendorAuth();
+    const db = getServerSupabase();
     const vendor = await getVendorId(db, userId);
     if (!vendor) throw new Error("Not a vendor");
 

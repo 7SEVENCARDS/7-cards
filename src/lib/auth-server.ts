@@ -114,3 +114,30 @@ export async function logAdminAction(
     meta: meta ?? null,
   });
 }
+
+// ─── requireVendorAuth ────────────────────────────────────────────────────────
+// Validates session AND confirms the caller has a row in the vendors table.
+// Returns the authenticated user's UUID.
+// Throws AuthError (401) if not authenticated.
+// Throws ForbiddenError (403) if authenticated but not a vendor, or suspended.
+
+export async function requireVendorAuth(): Promise<string> {
+  const userId = await requireUser();
+  const db = getServerSupabase();
+
+  const { data: vendor } = await db
+    .from("vendors")
+    .select("id, status")
+    .eq("user_id", userId)
+    .single();
+
+  if (!vendor) {
+    throw new ForbiddenError("Vendor account required");
+  }
+
+  if (vendor.status === "suspended") {
+    throw new ForbiddenError("Vendor account is suspended");
+  }
+
+  return userId;
+}
