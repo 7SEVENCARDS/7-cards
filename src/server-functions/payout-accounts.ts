@@ -99,6 +99,7 @@ export const addPayoutAccount = createServerFn({ method: "POST" })
 
     const { error } = await db.from("payout_accounts").insert({
       user_id: data.userId,
+      bank_name: data.bankName,
       bank_code: data.bankCode,
       account_number: data.accountNumber,
       account_name: data.accountName,
