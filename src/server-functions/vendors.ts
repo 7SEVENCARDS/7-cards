@@ -30,6 +30,13 @@ type VendorProfile = {
   total_volume_ngn: number;
   last_active_at: string | null;
   created_at: string;
+  // Security deposit & strike fields (migration 013)
+  security_deposit_required: number;
+  security_deposit_held: number;
+  failed_assignments: number;
+  consecutive_failures: number;
+  last_failure_at: string | null;
+  suspension_reason: string | null;
 };
 
 type CardAssignment = {
@@ -53,6 +60,66 @@ type CardAssignment = {
 async function getVendorId(db: ReturnType<typeof getServerSupabase>, userId: string) {
   const { data } = await db.from("vendors").select("id, status").eq("user_id", userId).single();
   return data;
+}
+
+// Non-fatal Telegram notification sent to a vendor when an assignment fails.
+async function notifyVendorFailure(
+  db: ReturnType<typeof getServerSupabase>,
+  vendorId: string,
+  assignment: { brand: string; amount_usd: number },
+  forfeitedNgn: number,
+  consecutive: number,
+  threshold: number,
+  autoSuspended: boolean,
+): Promise<void> {
+  try {
+    const { data: v } = await db
+      .from("vendors")
+      .select("telegram_chat_id, telegram_username, contact_name, business_name")
+      .eq("id", vendorId)
+      .single() as {
+        data: {
+          telegram_chat_id: number | null;
+          telegram_username: string | null;
+          contact_name: string | null;
+          business_name: string;
+        } | null;
+      };
+    const chatId = v?.telegram_chat_id ?? v?.telegram_username;
+    if (!chatId) return;
+
+    const name = v?.contact_name ?? v?.business_name ?? "Vendor";
+    const lines: string[] = [
+      autoSuspended ? `⛔ <b>Account Suspended</b>` : `⚠️ <b>Assignment Failed</b>`,
+      ``,
+      `Hi ${name},`,
+      ``,
+      `Your <b>${assignment.brand} $${assignment.amount_usd}</b> assignment has been marked as <b>failed</b>.`,
+    ];
+
+    if (forfeitedNgn > 0) {
+      lines.push(``, `💸 <b>₦${forfeitedNgn.toLocaleString("en-NG")}</b> has been deducted from your security deposit.`);
+    }
+
+    if (autoSuspended) {
+      lines.push(
+        ``,
+        `Your account is now <b>suspended</b> after ${consecutive} consecutive failed assignments.`,
+        ``,
+        `To appeal or reactivate, contact 7SEVEN support.`,
+      );
+    } else {
+      lines.push(
+        ``,
+        `⚡ Strike <b>${consecutive}/${threshold}</b> — you will be auto-suspended at ${threshold} consecutive failures.`,
+        ``,
+        `Complete your next assignment successfully to reset your strike count.`,
+      );
+    }
+
+    const { sendTelegramMessage } = await import("../lib/telegram");
+    await sendTelegramMessage(chatId, lines.join("\n"), "HTML");
+  } catch { /* non-fatal */ }
 }
 
 // ─── Register as Vendor ───────────────────────────────────────────────────────
@@ -343,6 +410,9 @@ export const markAssignmentRedeemed = createServerFn({ method: "POST" })
       })
       .eq("user_id", userId);
 
+    // Reset consecutive-failure counter — clean redemption streak is good standing
+    db.rpc("record_vendor_success", { p_vendor_id: vendor.id }).catch(() => {});
+
     // Check and pay referral bonus (non-fatal, fire-and-forget)
     checkReferralBonus(db, vendor.id, newTotalRedeemed).catch(() => {});
 
@@ -350,6 +420,9 @@ export const markAssignmentRedeemed = createServerFn({ method: "POST" })
   });
 
 // ─── Mark Assignment Failed ────────────────────────────────────────────────────
+// Auto-suspends the vendor at 3 consecutive failures.
+// Forfeits security deposit proportional to the assignment value.
+// Notifies the vendor via DB notification + Telegram (non-fatal).
 export const markAssignmentFailed = createServerFn({ method: "POST" })
   .validator((d: { assignmentId: string; reason: string }) => d)
   .handler(async ({ data }) => {
@@ -359,6 +432,18 @@ export const markAssignmentFailed = createServerFn({ method: "POST" })
     const vendor = await getVendorId(db, userId);
     if (!vendor) throw new Error("Not a vendor");
 
+    // Fetch assignment to verify ownership and get value for forfeit calculation
+    const { data: assignment, error: fetchErr } = await db
+      .from("vendor_card_assignments")
+      .select("id, brand, amount_usd, amount_ngn, status")
+      .eq("id", data.assignmentId)
+      .eq("vendor_id", vendor.id)
+      .single();
+
+    if (fetchErr || !assignment) throw new Error("Assignment not found");
+    if (assignment.status === "failed") return { success: true, alreadyFailed: true };
+
+    // Mark assignment failed
     await db
       .from("vendor_card_assignments")
       .update({
@@ -367,10 +452,82 @@ export const markAssignmentFailed = createServerFn({ method: "POST" })
         failure_reason: data.reason,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", data.assignmentId)
-      .eq("vendor_id", vendor.id);
+      .eq("id", data.assignmentId);
 
-    return { success: true };
+    // Record failure — auto-suspends at 3 consecutive failures
+    const { data: failureResult } = await db.rpc("record_vendor_failure", {
+      p_vendor_id: vendor.id,
+    });
+    const strike = failureResult as {
+      consecutive_failures: number;
+      threshold: number;
+      auto_suspended: boolean;
+      suspension_reason: string | null;
+      deposit_held: number;
+    } | null;
+
+    const autoSuspended    = strike?.auto_suspended ?? false;
+    const consecutive      = strike?.consecutive_failures ?? 1;
+    const threshold        = strike?.threshold ?? 3;
+    const depositHeld      = Number(strike?.deposit_held ?? 0);
+
+    // ── Forfeit security deposit ────────────────────────────────────────────
+    // Amount forfeited = assignment value, capped at actual deposit held.
+    // The forfeited funds are retained by 7SEVEN to compensate the user/trade.
+    const assignmentNgn = Number(assignment.amount_ngn ?? 0);
+    let forfeitedAmount = 0;
+
+    if (depositHeld > 0 && assignmentNgn > 0) {
+      const { data: forfeited } = await db.rpc("forfeit_vendor_security_deposit", {
+        p_vendor_id: vendor.id,
+        p_amount: assignmentNgn,
+      });
+      forfeitedAmount = Number(forfeited ?? 0);
+
+      if (forfeitedAmount > 0) {
+        const { data: updWallet } = await db
+          .from("vendor_wallets")
+          .select("balance")
+          .eq("vendor_id", vendor.id)
+          .single();
+        await db.from("vendor_transactions").insert({
+          vendor_id: vendor.id,
+          type: "security_deposit_forfeit",
+          amount: forfeitedAmount,
+          balance_after: updWallet?.balance ?? null,
+          description: `Deposit forfeited: failed ${assignment.brand} $${assignment.amount_usd} (${data.reason})`,
+          assignment_id: data.assignmentId,
+        });
+      }
+    }
+
+    // ── Build user-facing messages ──────────────────────────────────────────
+    const remainingStr = autoSuspended
+      ? "Your account has been suspended due to repeated failures. Contact support to appeal."
+      : `You have ${threshold - consecutive} attempt(s) remaining before auto-suspension.`;
+
+    const forfeitStr = forfeitedAmount > 0
+      ? ` ₦${forfeitedAmount.toLocaleString("en-NG")} has been deducted from your security deposit.`
+      : "";
+
+    // DB notification for vendor (non-fatal)
+    db.from("notifications").insert({
+      user_id: userId,
+      title: autoSuspended ? "Account Suspended ⛔" : "Assignment Failed ⚠️",
+      message: `Your ${assignment.brand} $${assignment.amount_usd} assignment was marked failed: "${data.reason}".${forfeitStr} ${remainingStr}`,
+      type: autoSuspended ? "error" : "warning",
+    }).catch(() => {});
+
+    // Telegram notification to vendor (non-fatal, fire-and-forget)
+    notifyVendorFailure(db, vendor.id, assignment, forfeitedAmount, consecutive, threshold, autoSuspended).catch(() => {});
+
+    return {
+      success: true,
+      autoSuspended,
+      forfeitedAmount,
+      consecutiveFailures: consecutive,
+      remainingBeforeSuspension: Math.max(0, threshold - consecutive),
+    };
   });
 
 // ─── Get Vendor Wallet ─────────────────────────────────────────────────────────
@@ -1247,4 +1404,246 @@ export const getMyReferralInfo = createServerFn({ method: "GET" })
       bonusesPaid,
       totalEarnedNgn,
     };
+  });
+
+// ─── Security Deposit: Lock Funds ────────────────────────────────────────────
+// Vendor self-service: moves wallet balance into locked security deposit.
+// Satisfies the admin-set deposit requirement so the vendor can receive
+// assignments (or stay eligible for them).
+export const lockSecurityDeposit = createServerFn({ method: "POST" })
+  .validator((d: { amount: number }) => d)
+  .handler(async ({ data }) => {
+    if (data.amount <= 0) throw new Error("Amount must be positive");
+
+    const userId = await requireVendorAuth();
+    const db = getServerSupabase();
+    const vendor = await getVendorId(db, userId);
+    if (!vendor) throw new Error("Not a vendor");
+    if (vendor.status === "suspended") throw new Error("Suspended vendors cannot post deposits");
+
+    // Atomic RPC: moves balance → locked and updates security_deposit_held
+    await db.rpc("lock_vendor_security_deposit", {
+      p_vendor_id: vendor.id,
+      p_amount: data.amount,
+    });
+
+    const { data: updWallet } = await db
+      .from("vendor_wallets").select("balance, locked").eq("vendor_id", vendor.id).single();
+
+    await db.from("vendor_transactions").insert({
+      vendor_id: vendor.id,
+      type: "security_deposit",
+      amount: data.amount,
+      balance_after: updWallet?.balance ?? null,
+      description: `Security deposit posted: ₦${data.amount.toLocaleString("en-NG")}`,
+    });
+
+    return {
+      success: true,
+      depositedAmount: data.amount,
+      newBalance: updWallet?.balance ?? null,
+      newLocked: updWallet?.locked ?? null,
+    };
+  });
+
+// ─── Security Deposit: Status ─────────────────────────────────────────────────
+// Vendor view of their deposit health, strike count, and suspension risk.
+export const getSecurityDepositStatus = createServerFn({ method: "GET" })
+  .handler(async () => {
+    const userId = await requireVendorAuth();
+    const db = getServerSupabase();
+    const vendor = await getVendorId(db, userId);
+    if (!vendor) throw new Error("Not a vendor");
+
+    const { data: v } = await db
+      .from("vendors")
+      .select(
+        "status, security_deposit_required, security_deposit_held, " +
+        "failed_assignments, consecutive_failures, last_failure_at, suspension_reason",
+      )
+      .eq("id", vendor.id)
+      .single() as {
+        data: {
+          status: string;
+          security_deposit_required: number;
+          security_deposit_held: number;
+          failed_assignments: number;
+          consecutive_failures: number;
+          last_failure_at: string | null;
+          suspension_reason: string | null;
+        } | null;
+      };
+
+    if (!v) throw new Error("Vendor record not found");
+
+    const THRESHOLD = 3;
+    const depositGap = Math.max(0, Number(v.security_deposit_required) - Number(v.security_deposit_held));
+
+    return {
+      status: v.status,
+      depositRequired: Number(v.security_deposit_required),
+      depositHeld: Number(v.security_deposit_held),
+      depositGap,
+      depositMet: depositGap === 0,
+      failedAssignments: v.failed_assignments,
+      consecutiveFailures: v.consecutive_failures,
+      strikesRemaining: Math.max(0, THRESHOLD - v.consecutive_failures),
+      suspensionThreshold: THRESHOLD,
+      atRisk: v.consecutive_failures >= THRESHOLD - 1,
+      lastFailureAt: v.last_failure_at,
+      suspensionReason: v.suspension_reason,
+    };
+  });
+
+// ─── Admin: Set Deposit Requirement ──────────────────────────────────────────
+// Admin sets how much a vendor must hold as security deposit before they can
+// receive (or continue to receive) card assignments.
+export const adminSetDepositRequirement = createServerFn({ method: "POST" })
+  .validator((d: { vendorId: string; requiredAmount: number; notes?: string }) => d)
+  .handler(async ({ data }) => {
+    if (data.requiredAmount < 0) throw new Error("Required amount must be ≥ 0");
+
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    await db
+      .from("vendors")
+      .update({
+        security_deposit_required: data.requiredAmount,
+        ...(data.notes !== undefined && { notes: data.notes }),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", data.vendorId);
+
+    return { success: true };
+  });
+
+// ─── Admin: Forfeit Deposit ───────────────────────────────────────────────────
+// Admin manually forfeits part of a vendor's security deposit (e.g. to
+// compensate a user whose trade was not fulfilled by the vendor).
+export const adminForfeitDeposit = createServerFn({ method: "POST" })
+  .validator((d: {
+    vendorId: string;
+    amount: number;
+    reason: string;
+    assignmentId?: string;
+  }) => d)
+  .handler(async ({ data }) => {
+    if (data.amount <= 0) throw new Error("Amount must be positive");
+
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    const { data: forfeited } = await db.rpc("forfeit_vendor_security_deposit", {
+      p_vendor_id: data.vendorId,
+      p_amount: data.amount,
+    });
+    const actualForfeited = Number(forfeited ?? 0);
+
+    if (actualForfeited > 0) {
+      const { data: updWallet } = await db
+        .from("vendor_wallets").select("balance").eq("vendor_id", data.vendorId).single();
+      await db.from("vendor_transactions").insert({
+        vendor_id: data.vendorId,
+        type: "security_deposit_forfeit",
+        amount: actualForfeited,
+        balance_after: updWallet?.balance ?? null,
+        description: `Admin forfeit: ${data.reason}`,
+        ...(data.assignmentId && { assignment_id: data.assignmentId }),
+      });
+    }
+
+    return { success: true, actualForfeited };
+  });
+
+// ─── Admin: Refund Deposit ────────────────────────────────────────────────────
+// Admin returns locked deposit funds to the vendor's spendable balance.
+// Use when the vendor is in good standing, retiring, or was incorrectly charged.
+export const adminRefundDeposit = createServerFn({ method: "POST" })
+  .validator((d: { vendorId: string; amount: number; reason: string }) => d)
+  .handler(async ({ data }) => {
+    if (data.amount <= 0) throw new Error("Amount must be positive");
+
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    const { data: released } = await db.rpc("release_vendor_security_deposit", {
+      p_vendor_id: data.vendorId,
+      p_amount: data.amount,
+    });
+    const actualReleased = Number(released ?? 0);
+
+    if (actualReleased > 0) {
+      const { data: updWallet } = await db
+        .from("vendor_wallets").select("balance").eq("vendor_id", data.vendorId).single();
+      await db.from("vendor_transactions").insert({
+        vendor_id: data.vendorId,
+        type: "security_deposit_refund",
+        amount: actualReleased,
+        balance_after: updWallet?.balance ?? null,
+        description: `Deposit refunded by admin: ${data.reason}`,
+      });
+    }
+
+    return { success: true, actualReleased };
+  });
+
+// ─── Admin: Reactivate Vendor ─────────────────────────────────────────────────
+// Reactivates a suspended vendor.  Resets the consecutive-failure counter so
+// the vendor starts fresh.  Checks that the deposit requirement is met (or
+// waives it if forceActivate = true).
+export const adminReactivateVendor = createServerFn({ method: "POST" })
+  .validator((d: {
+    vendorId: string;
+    forceActivate?: boolean;
+    newDepositRequired?: number;
+    notes?: string;
+  }) => d)
+  .handler(async ({ data }) => {
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    const { data: v } = await db
+      .from("vendors")
+      .select("status, security_deposit_required, security_deposit_held")
+      .eq("id", data.vendorId)
+      .single() as {
+        data: {
+          status: string;
+          security_deposit_required: number;
+          security_deposit_held: number;
+        } | null;
+      };
+
+    if (!v) throw new Error("Vendor not found");
+
+    const required = data.newDepositRequired !== undefined
+      ? data.newDepositRequired
+      : Number(v.security_deposit_required);
+
+    const depositMet = Number(v.security_deposit_held) >= required;
+
+    if (!depositMet && !data.forceActivate) {
+      throw new Error(
+        `Vendor's deposit (₦${Number(v.security_deposit_held).toLocaleString("en-NG")}) ` +
+        `is below the required ₦${required.toLocaleString("en-NG")}. ` +
+        `Pass forceActivate=true to override.`,
+      );
+    }
+
+    await db
+      .from("vendors")
+      .update({
+        status: "active",
+        consecutive_failures: 0,
+        suspension_reason: null,
+        ...(data.newDepositRequired !== undefined && {
+          security_deposit_required: data.newDepositRequired,
+        }),
+        ...(data.notes !== undefined && { notes: data.notes }),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", data.vendorId);
+
+    return { success: true, depositWaived: !depositMet && !!data.forceActivate };
   });
