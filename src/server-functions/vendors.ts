@@ -122,8 +122,11 @@ async function notifyVendorFailure(
   } catch { /* non-fatal */ }
 }
 
-// ─── Register as Vendor ───────────────────────────────────────────────────────
-export const registerVendor = createServerFn({ method: "POST" })
+// ─── Admin: Register Vendor ───────────────────────────────────────────────────
+// Vendor self-registration has been removed. Only admins can create vendor
+// accounts. This prevents spam applications and ensures every vendor is
+// manually vetted before receiving card assignments.
+export const adminRegisterVendor = createServerFn({ method: "POST" })
   .validator(
     (d: {
       email: string;
@@ -132,9 +135,11 @@ export const registerVendor = createServerFn({ method: "POST" })
       contactName: string;
       phone: string;
       referralCode?: string;
+      securityDepositRequired?: number;
     }) => d
   )
   .handler(async ({ data }) => {
+    await requireAdmin();
     const db = getServerSupabase();
 
     // Create Supabase auth user
@@ -176,6 +181,14 @@ export const registerVendor = createServerFn({ method: "POST" })
 
     // Create vendor wallet
     await db.from("vendor_wallets").insert({ vendor_id: vendor.id });
+
+    // Set admin-specified deposit requirement (default 0)
+    if (data.securityDepositRequired && data.securityDepositRequired > 0) {
+      await db
+        .from("vendors")
+        .update({ security_deposit_required: data.securityDepositRequired })
+        .eq("id", vendor.id);
+    }
 
     // Hook up referral if a referral code was provided
     if (data.referralCode) {
