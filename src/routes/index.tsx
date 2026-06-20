@@ -211,6 +211,8 @@ function App() {
               setTab("code");
             }}
             rates={rates as RateData[]}
+            kycStatus={kycStatus?.status ?? profile?.kyc_status ?? "pending"}
+            onNavigateKYC={() => setTab("kyc")}
           />
         )}
         {tab === "code" && activeSell && (
@@ -613,12 +615,19 @@ function TxRow({ icon: Icon, title, sub, amount, color, status }: {
 
 /* ─────────────────────────────────── SELL ─────────────────────────────────── */
 
+const UNVERIFIED_LIMIT_USD = 200;
+const VERIFIED_LIMIT_USD   = 5_000;
+
 function SellScreen({
   onVerify,
   rates,
+  kycStatus,
+  onNavigateKYC,
 }: {
   onVerify: (brand: string, amountUsd: string, rate: number) => void;
   rates: RateData[];
+  kycStatus?: string;
+  onNavigateKYC?: () => void;
 }) {
   const brands = [
     { name: "Apple",       emoji: "🍎" },
@@ -633,6 +642,10 @@ function SellScreen({
 
   const [selected, setSelected] = useState("Apple");
   const [amount, setAmount] = useState("100");
+  const isVerified = kycStatus === "verified";
+  const limitUsd = isVerified ? VERIFIED_LIMIT_USD : UNVERIFIED_LIMIT_USD;
+  const amountNum = Number(amount || 0);
+  const overLimit = amountNum > limitUsd;
 
   const currentRate = useMemo(() => {
     const r = rates.find((r) => r.brand === selected);
@@ -651,6 +664,24 @@ function SellScreen({
         <h1 className="text-2xl font-extrabold mt-1">Sell a Gift Card</h1>
         <p className="text-sm text-muted-foreground mt-1">Verified in 3 seconds. Paid in under 5 minutes.</p>
       </header>
+
+      {/* Trade limit banner */}
+      {!isVerified && onNavigateKYC && (
+        <button
+          onClick={onNavigateKYC}
+          className="mx-5 mb-1 flex items-center justify-between gap-3 bg-gold/10 border border-gold/30 rounded-2xl px-4 py-3"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <ShieldCheck className="size-4 text-gold shrink-0" />
+            <p className="text-xs text-left">
+              <span className="font-bold text-gold">₦200k limit</span>
+              <span className="text-muted-foreground"> · Verify ID to unlock </span>
+              <span className="font-bold text-gold">₦5M per trade</span>
+            </p>
+          </div>
+          <ChevronRight className="size-4 text-gold shrink-0" />
+        </button>
+      )}
 
       {/* Progress dots */}
       <div className="px-5 flex items-center gap-2">
@@ -730,12 +761,33 @@ function SellScreen({
 
       {/* CTA */}
       <div className="px-5 mt-6">
-        <button
-          onClick={() => onVerify(selected, amount, currentRate)}
-          className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold active:scale-[0.99] transition"
-        >
-          Continue to Verify <ChevronRight className="size-5" />
-        </button>
+        {overLimit && !isVerified ? (
+          <div className="space-y-2">
+            <div className="bg-red-500/10 border border-red-500/30 rounded-2xl px-4 py-3 text-xs text-red-400 font-semibold text-center">
+              ${limitUsd} max per trade without KYC verification
+            </div>
+            <button
+              onClick={onNavigateKYC}
+              className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold"
+            >
+              <ShieldCheck className="size-5" /> Verify ID to Unlock $5,000 Limit
+            </button>
+            <button
+              onClick={() => setAmount(String(limitUsd))}
+              className="w-full bg-card border border-border text-foreground font-semibold py-3 rounded-2xl text-sm"
+            >
+              Reduce to ${limitUsd} and continue
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => onVerify(selected, amount, currentRate)}
+            disabled={amountNum <= 0}
+            className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold active:scale-[0.99] transition disabled:opacity-50"
+          >
+            Continue to Verify <ChevronRight className="size-5" />
+          </button>
+        )}
         <div className="mt-3 flex items-center justify-center gap-2 text-[11px] text-muted-foreground">
           <ShieldCheck className="size-3.5 text-cyan" />
           Verified with Reloadly · Paid via Squad
