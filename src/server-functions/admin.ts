@@ -339,6 +339,50 @@ export const updateExchangeRate = createServerFn({ method: "POST" })
     return { success: true, trend };
   });
 
+// ─── Bulk update gift card rates (CSV import) ────────────────────────────────
+export const bulkUpdateRates = createServerFn({ method: "POST" })
+  .validator((d: {
+    adminId: string;
+    rows: Array<{ brand: string; region: string; ratePerDollar: number }>;
+  }) => d)
+  .handler(async ({ data }) => {
+    const db = getServerSupabase();
+    await assertAdmin(db, data.adminId);
+
+    const results: Array<{ brand: string; ok: boolean; error?: string }> = [];
+    const now = new Date().toISOString();
+
+    for (const row of data.rows) {
+      if (!row.brand.trim()) continue;
+      if (row.ratePerDollar < 100 || row.ratePerDollar > 10_000) {
+        results.push({ brand: row.brand, ok: false, error: "Rate out of range (₦100–₦10,000)" });
+        continue;
+      }
+      const { error } = await db.from("exchange_rates").upsert(
+        {
+          brand: row.brand.trim(),
+          region: row.region.trim() || "USA",
+          rate_per_dollar: row.ratePerDollar,
+          source: "admin",
+          trend: "+0.0%",
+          updated_at: now,
+        },
+        { onConflict: "brand,region" }
+      );
+      results.push(error
+        ? { brand: row.brand, ok: false, error: error.message }
+        : { brand: row.brand, ok: true }
+      );
+    }
+
+    return {
+      success: true,
+      imported: results.filter(r => r.ok).length,
+      failed: results.filter(r => !r.ok).length,
+      results,
+    };
+  });
+
 // ─── Internal: assert admin role ─────────────────────────────────────────────
 async function assertAdmin(db: ReturnType<typeof import("../lib/supabase.server")["getServerSupabase"]>, userId: string) {
   const { data } = await db
