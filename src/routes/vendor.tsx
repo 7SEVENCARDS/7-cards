@@ -9,7 +9,6 @@ import {
 } from "lucide-react";
 import {
   getVendorSession,
-  registerVendor,
   vendorLogin,
   vendorLogout,
   getMyAssignments,
@@ -45,7 +44,6 @@ type Assignment = {
 type WalletData = { wallet: { balance: number; total_funded: number } | null; transactions: Array<{ id: string; type: string; amount: number; description: string | null; created_at: string }> };
 
 type VendorTab = "dashboard" | "cards" | "wallet" | "profile";
-type AuthView = "login" | "register";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtNgn(n: number) { return "₦" + Number(n).toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -71,20 +69,11 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled:"text-muted-foreground bg-secondary border-border",
 };
 
-// ─── Auth Screens ─────────────────────────────────────────────────────────────
+// ─── Auth Screen — Login Only ─────────────────────────────────────────────────
+// Vendor self-registration is disabled. Accounts are created by admin only.
 function AuthScreen({ onAuth }: { onAuth: (v: VendorSession) => void }) {
-  const [view, setView] = useState<AuthView>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [businessName, setBusinessName] = useState("");
-  const [contactName, setContactName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [referralCode, setReferralCode] = useState(() => {
-    if (typeof window !== "undefined") {
-      return new URLSearchParams(window.location.search).get("ref") ?? "";
-    }
-    return "";
-  });
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -102,58 +91,18 @@ function AuthScreen({ onAuth }: { onAuth: (v: VendorSession) => void }) {
     finally { setLoading(false); }
   };
 
-  const handleRegister = async () => {
-    if (!email || !password || !businessName || !contactName || !phone)
-      return setError("All fields are required");
-    if (password.length < 8) return setError("Password must be at least 8 characters");
-    setLoading(true); setError("");
-    try {
-      const res = await registerVendor({ data: { email, password, businessName, contactName, phone, referralCode: referralCode.trim() || undefined } }) as { success: boolean; error?: string };
-      if (!res.success) return setError(res.error ?? "Registration failed");
-      setError("");
-      setView("login");
-      alert("Registration successful! Your account is pending admin approval. Login once approved.");
-    } catch (e) { setError(e instanceof Error ? e.message : "Registration failed"); }
-    finally { setLoading(false); }
-  };
-
   return (
     <div className="min-h-screen bg-background flex items-center justify-center px-4 py-10">
       <div className="w-full max-w-sm">
-        {/* Logo */}
         <div className="text-center mb-8">
           <div className="inline-flex size-16 rounded-3xl bg-gradient-to-br from-gold/30 to-gold/10 border border-gold/20 items-center justify-center mb-4">
             <Building2 className="size-8 text-gold" />
           </div>
           <h1 className="text-2xl font-extrabold text-white">7SEVEN Vendor Portal</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {view === "login" ? "Sign in to your vendor account" : "Apply to become a vendor"}
-          </p>
+          <p className="text-sm text-muted-foreground mt-1">Sign in to your vendor account</p>
         </div>
 
         <div className="bg-card border border-border/60 rounded-3xl p-6 space-y-4">
-          {view === "register" && (
-            <>
-              <div>
-                <label className="text-xs font-bold text-muted-foreground mb-1.5 block">Business Name</label>
-                <input value={businessName} onChange={e => setBusinessName(e.target.value)} placeholder="Your business name" className="w-full bg-secondary border border-border/60 rounded-xl px-4 py-3 text-sm outline-none focus:border-gold/40" />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-muted-foreground mb-1.5 block">Contact Name</label>
-                <input value={contactName} onChange={e => setContactName(e.target.value)} placeholder="Your full name" className="w-full bg-secondary border border-border/60 rounded-xl px-4 py-3 text-sm outline-none focus:border-gold/40" />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-muted-foreground mb-1.5 block">Phone Number</label>
-                <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="+234..." className="w-full bg-secondary border border-border/60 rounded-xl px-4 py-3 text-sm outline-none focus:border-gold/40" />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-muted-foreground mb-1.5 block">Referral Code <span className="font-normal text-muted-foreground">(optional)</span></label>
-                <input value={referralCode} onChange={e => setReferralCode(e.target.value.toUpperCase())} placeholder="e.g. AB12CD34" className="w-full bg-secondary border border-border/60 rounded-xl px-4 py-3 text-sm font-mono outline-none focus:border-gold/40" />
-                {referralCode && <p className="text-[10px] text-gold mt-1">✓ Referred by a vendor — you're set!</p>}
-              </div>
-            </>
-          )}
-
           <div>
             <label className="text-xs font-bold text-muted-foreground mb-1.5 block">Email</label>
             <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@business.com" className="w-full bg-secondary border border-border/60 rounded-xl px-4 py-3 text-sm outline-none focus:border-gold/40" />
@@ -161,7 +110,7 @@ function AuthScreen({ onAuth }: { onAuth: (v: VendorSession) => void }) {
           <div>
             <label className="text-xs font-bold text-muted-foreground mb-1.5 block">Password</label>
             <div className="relative">
-              <input type={showPass ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => { if (e.key === "Enter") view === "login" ? handleLogin() : handleRegister(); }} placeholder="••••••••" className="w-full bg-secondary border border-border/60 rounded-xl px-4 py-3 text-sm outline-none focus:border-gold/40 pr-12" />
+              <input type={showPass ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => { if (e.key === "Enter") handleLogin(); }} placeholder="••••••••" className="w-full bg-secondary border border-border/60 rounded-xl px-4 py-3 text-sm outline-none focus:border-gold/40 pr-12" />
               <button onClick={() => setShowPass(!showPass)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">
                 {showPass ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
               </button>
@@ -176,19 +125,16 @@ function AuthScreen({ onAuth }: { onAuth: (v: VendorSession) => void }) {
           )}
 
           <button
-            onClick={view === "login" ? handleLogin : handleRegister}
+            onClick={handleLogin}
             disabled={loading}
             className="w-full bg-gold text-jungle-deep font-extrabold rounded-xl py-3.5 flex items-center justify-center gap-2 disabled:opacity-50"
           >
             {loading ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
-            {loading ? "Please wait…" : view === "login" ? "Sign In" : "Apply to Join"}
+            {loading ? "Signing in…" : "Sign In"}
           </button>
 
           <p className="text-center text-xs text-muted-foreground">
-            {view === "login" ? "New vendor? " : "Already have an account? "}
-            <button onClick={() => { setView(view === "login" ? "register" : "login"); setError(""); }} className="text-gold font-semibold">
-              {view === "login" ? "Apply here" : "Sign in"}
-            </button>
+            No account? Contact <span className="text-gold font-semibold">7SEVEN support</span> to get set up.
           </p>
         </div>
       </div>
