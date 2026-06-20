@@ -2,6 +2,10 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+import {
+  handleSquadPayoutWebhook,
+  handleSquadPaymentWebhook,
+} from "./server-functions/webhooks";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -39,6 +43,29 @@ async function normalizeCatastrophicSsrResponse(response: Response): Promise<Res
 
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
+    const url = new URL(request.url);
+
+    // ── Webhook routes — handled before TanStack Start ──────────────────────
+    // Configure these URLs in Squad dashboard:
+    //   Payout (transfer) webhook: POST /api/webhooks/squadco/payout
+    //   Payment (charge) webhook:  POST /api/webhooks/squadco/payment
+    if (request.method === "POST") {
+      if (url.pathname === "/api/webhooks/squadco/payout") {
+        return handleSquadPayoutWebhook(request);
+      }
+      if (url.pathname === "/api/webhooks/squadco/payment") {
+        return handleSquadPaymentWebhook(request);
+      }
+    }
+
+    // ── Health check ────────────────────────────────────────────────────────
+    if (url.pathname === "/api/health") {
+      return new Response(JSON.stringify({ ok: true, ts: Date.now() }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // ── All other routes → TanStack React Start ─────────────────────────────
     try {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
