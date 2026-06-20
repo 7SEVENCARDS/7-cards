@@ -1,17 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Shield,
-  Clock,
   CheckCircle2,
   Loader2,
   Gift,
   Banknote,
   Eye,
   Zap,
-  Timer,
   RotateCcw,
   Lock,
   ArrowRight,
+  Sparkles,
+  Clock,
 } from "lucide-react";
 import { getTradeStatus } from "../server-functions/trades";
 
@@ -32,9 +32,7 @@ function useCountdownMs(targetMs: number) {
   const [remaining, setRemaining] = useState(() => Math.max(0, targetMs - Date.now()));
   useEffect(() => {
     setRemaining(Math.max(0, targetMs - Date.now()));
-    const id = setInterval(() => {
-      setRemaining(() => Math.max(0, targetMs - Date.now()));
-    }, 250);
+    const id = setInterval(() => setRemaining(Math.max(0, targetMs - Date.now())), 200);
     return () => clearInterval(id);
   }, [targetMs]);
   return remaining;
@@ -45,42 +43,18 @@ const BRAND_EMOJI: Record<string, string> = {
   Xbox: "🟢", PlayStation: "🎯", Netflix: "🎬", Spotify: "🎵",
 };
 
-const STEPS = [
-  {
-    icon: CheckCircle2,
-    label: "Card Verified",
-    sub: "Reloadly confirmed card is valid",
-    done: true,
-    active: false,
-  },
-  {
-    icon: Lock,
-    label: "Funds Reserved",
-    sub: "Your NGN payout is locked & guaranteed",
-    done: true,
-    active: false,
-  },
-  {
-    icon: Eye,
-    label: "Admin Receiving Card",
-    sub: "Operator is processing your card now",
-    done: false,
-    active: true,
-  },
-  {
-    icon: Gift,
-    label: "Card Being Redeemed",
-    sub: "Gift card value being captured",
-    done: false,
-    active: false,
-  },
-  {
-    icon: Banknote,
-    label: "NGN Payout Releasing",
-    sub: "Funds being sent to your account",
-    done: false,
-    active: false,
-  },
+interface Step {
+  icon: typeof CheckCircle2;
+  label: string;
+  sub: string;
+}
+
+const STEPS: Step[] = [
+  { icon: CheckCircle2, label: "Card Verified",       sub: "Reloadly confirmed card is valid"           },
+  { icon: Lock,        label: "Funds Reserved",       sub: "Your NGN payout is locked & guaranteed"    },
+  { icon: Eye,         label: "Admin Receiving Card", sub: "Operator is processing your card now"      },
+  { icon: Gift,        label: "Card Being Redeemed",  sub: "Gift card value being captured"             },
+  { icon: Banknote,    label: "NGN Payout Releasing", sub: "Funds being sent to your account"          },
 ];
 
 export function EscrowScreen({
@@ -98,14 +72,26 @@ export function EscrowScreen({
   const isLow = remaining < 60_000 && remaining > 0;
   const [escrowStatus, setEscrowStatus] = useState<EscrowStatus>("holding");
   const [activeStep, setActiveStep] = useState(2);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [tick, setTick] = useState(0);
+  const [celebrated, setCelebrated] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const totalMs = extended ? 8 * 60_000 : 5 * 60_000;
   const progressPct = Math.max(0, Math.min(100, ((totalMs - remaining) / totalMs) * 100));
 
   const mins = Math.floor(remaining / 60_000);
   const secs = Math.floor((remaining % 60_000) / 1_000);
+
+  const isAdminProcessing = escrowStatus === "admin_processing" || escrowStatus === "admin_paid";
+
+  const ringCircumference = 2 * Math.PI * 54;
+  const ringStroke = isAdminProcessing
+    ? "oklch(0.88 0.17 180)"
+    : isExpired
+    ? "oklch(0.72 0.19 42)"
+    : isLow
+    ? "oklch(0.82 0.19 55)"
+    : "oklch(0.87 0.17 92)";
 
   const pollTradeStatus = useCallback(async () => {
     if (!tradeId || tradeId.startsWith("demo-")) return;
@@ -115,12 +101,12 @@ export function EscrowScreen({
         setEscrowStatus("admin_processing");
         setActiveStep(4);
         if (pollRef.current) clearInterval(pollRef.current);
-        setTimeout(() => onProceed(), 1500);
+        setTimeout(() => onProceed(), 2000);
       } else if (trade.status === "paid") {
         setEscrowStatus("admin_paid");
         setActiveStep(5);
         if (pollRef.current) clearInterval(pollRef.current);
-        setTimeout(() => onProceed(), 1000);
+        setTimeout(() => onProceed(), 1200);
       }
     } catch { /* non-critical */ }
   }, [tradeId, onProceed]);
@@ -130,120 +116,158 @@ export function EscrowScreen({
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [pollTradeStatus]);
 
+  // Tick for particle animations
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 100);
+    const id = setInterval(() => setTick((t) => t + 1), 80);
     return () => clearInterval(id);
   }, []);
 
+  // Escrow expiry state machine
   useEffect(() => {
     if (isExpired && escrowStatus === "holding") {
       setEscrowStatus(extended ? "timeout" : "extended");
     }
   }, [isExpired, escrowStatus, extended]);
 
+  // Step progress during active escrow
   useEffect(() => {
     if (escrowStatus === "holding" || escrowStatus === "extended") {
-      const stepProgress = progressPct / 100;
-      if (stepProgress > 0.6) setActiveStep(3);
-      else if (stepProgress > 0.3) setActiveStep(2);
+      if (progressPct > 55) setActiveStep(3);
       else setActiveStep(2);
     }
   }, [progressPct, escrowStatus]);
 
-  const brandEmoji = BRAND_EMOJI[brand] ?? "🎁";
-  const isAdminProcessing = escrowStatus === "admin_processing" || escrowStatus === "admin_paid";
+  // Celebration bounce for admin processing
+  useEffect(() => {
+    if (isAdminProcessing && !celebrated) {
+      setCelebrated(true);
+    }
+  }, [isAdminProcessing, celebrated]);
 
-  const ringCircumference = 2 * Math.PI * 54;
-  const ringDashOffset = ringCircumference * (1 - progressPct / 100);
+  const brandEmoji = BRAND_EMOJI[brand] ?? "🎁";
 
   return (
     <div className="flex flex-col min-h-screen bg-background">
-      <header className="px-5 pt-12 pb-4 flex items-center gap-3">
-        <div className="size-10 rounded-full bg-card border border-border grid place-items-center">
-          <Shield className="size-5 text-gold" />
-        </div>
-        <div>
-          <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Step 3 of 3</p>
-          <p className="text-sm font-extrabold">Escrow &amp; Processing</p>
-        </div>
-        <div className="ml-auto">
-          <span className="px-2.5 py-1 rounded-full bg-gold/15 text-gold text-[10px] font-extrabold flex items-center gap-1">
-            <span className="size-1.5 rounded-full bg-gold animate-pulse" />
-            LIVE
+      {/* Header */}
+      <header className="px-5 pt-12 pb-4">
+        <div className="flex items-center gap-3">
+          <div className={`size-10 rounded-full border grid place-items-center transition-all duration-500 ${
+            isAdminProcessing
+              ? "bg-cyan/20 border-cyan/40"
+              : "bg-card border-border"
+          }`}>
+            <Shield className={`size-5 transition-colors duration-500 ${isAdminProcessing ? "text-cyan" : "text-gold"}`} />
+          </div>
+          <div className="flex-1">
+            <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">
+              Step 3 of 3 · Escrow &amp; Processing
+            </p>
+            <p className="text-sm font-extrabold text-white">
+              {isAdminProcessing
+                ? "Card Redeemed — Paying Out!"
+                : escrowStatus === "timeout"
+                ? "Escrow Ended · Trade Queued"
+                : "Waiting for Admin"}
+            </p>
+          </div>
+          <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold flex items-center gap-1 transition-all duration-500 ${
+            isAdminProcessing
+              ? "bg-cyan/15 text-cyan"
+              : escrowStatus === "timeout"
+              ? "bg-muted/60 text-muted-foreground"
+              : "bg-gold/15 text-gold"
+          }`}>
+            <span className={`size-1.5 rounded-full animate-pulse ${
+              isAdminProcessing ? "bg-cyan" : escrowStatus === "timeout" ? "bg-muted-foreground" : "bg-gold"
+            }`} />
+            {isAdminProcessing ? "DONE" : escrowStatus === "timeout" ? "QUEUED" : "LIVE"}
           </span>
         </div>
       </header>
 
-      {/* Main escrow timer */}
-      <div className="px-5 mt-2">
+      {/* Main escrow timer card */}
+      <div className="px-5 mt-1">
         <div
-          className="relative rounded-[2rem] overflow-hidden border-2 border-gold/40 p-6"
+          className="relative rounded-[2rem] overflow-hidden border-2 p-6 transition-all duration-700"
           style={{
-            background: isAdminProcessing
-              ? "radial-gradient(circle at 50% 40%, oklch(0.4 0.18 150 / 0.55), oklch(0.18 0.08 160) 70%)"
+            borderColor: isAdminProcessing
+              ? "oklch(0.88 0.17 180 / 0.5)"
               : isExpired
-              ? "radial-gradient(circle at 50% 40%, oklch(0.35 0.15 50 / 0.45), oklch(0.18 0.08 50) 70%)"
-              : "radial-gradient(circle at 50% 40%, oklch(0.35 0.18 85 / 0.5), oklch(0.18 0.05 100) 70%)",
+              ? "oklch(0.72 0.19 42 / 0.4)"
+              : "oklch(0.87 0.17 92 / 0.35)",
+            background: isAdminProcessing
+              ? "radial-gradient(circle at 50% 35%, oklch(0.35 0.20 165 / 0.6), oklch(0.15 0.06 180) 75%)"
+              : isExpired
+              ? "radial-gradient(circle at 50% 35%, oklch(0.32 0.14 45 / 0.5), oklch(0.15 0.05 45) 75%)"
+              : "radial-gradient(circle at 50% 35%, oklch(0.32 0.16 85 / 0.55), oklch(0.15 0.04 100) 75%)",
           }}
         >
-          {/* Subtle animated background particles */}
+          {/* Animated particles */}
           <div className="absolute inset-0 overflow-hidden pointer-events-none">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <div
-                key={i}
-                className="absolute size-1.5 rounded-full bg-gold/30"
-                style={{
-                  left: `${10 + (i * 12) % 80}%`,
-                  top: `${10 + (i * 17) % 70}%`,
-                  animation: `float-particle ${2 + (i * 0.4)}s ${i * 0.3}s ease-in-out infinite alternate`,
-                  transform: `translateY(${Math.sin((tick * 0.05) + i) * 6}px)`,
-                  opacity: 0.4 + Math.sin((tick * 0.08) + i * 1.2) * 0.3,
-                }}
-              />
-            ))}
+            {Array.from({ length: 10 }).map((_, i) => {
+              const x = 8 + (i * 9.3) % 84;
+              const y = 8 + (i * 13.7) % 78;
+              const phase = (tick * 0.06) + i * 0.68;
+              const opacity = isAdminProcessing
+                ? 0.5 + Math.sin(phase) * 0.35
+                : 0.2 + Math.sin(phase) * 0.18;
+              return (
+                <div
+                  key={i}
+                  className={`absolute rounded-full transition-colors duration-500 ${
+                    isAdminProcessing ? "bg-cyan/60" : isExpired ? "bg-orange-400/40" : "bg-gold/40"
+                  }`}
+                  style={{
+                    width: 4 + (i % 3) * 2,
+                    height: 4 + (i % 3) * 2,
+                    left: `${x}%`,
+                    top: `${y}%`,
+                    transform: `translateY(${Math.sin(phase) * 7}px) scale(${0.8 + Math.abs(Math.sin(phase)) * 0.5})`,
+                    opacity,
+                  }}
+                />
+              );
+            })}
           </div>
 
-          <div className="flex items-center gap-4 relative">
+          <div className="flex items-center gap-5 relative">
             {/* Circular countdown ring */}
             <div className="relative shrink-0">
-              <svg width="128" height="128" viewBox="0 0 128 128" className="-rotate-90">
-                {/* Background ring */}
+              <svg width="120" height="120" viewBox="0 0 128 128" className="-rotate-90">
+                <circle cx="64" cy="64" r="54" fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="9" />
                 <circle
                   cx="64" cy="64" r="54"
                   fill="none"
-                  stroke="rgba(255,255,255,0.08)"
-                  strokeWidth="8"
-                />
-                {/* Progress ring */}
-                <circle
-                  cx="64" cy="64" r="54"
-                  fill="none"
-                  stroke={isAdminProcessing ? "oklch(0.88 0.17 180)" : isExpired ? "oklch(0.72 0.19 42)" : "oklch(0.87 0.17 92)"}
-                  strokeWidth="8"
+                  stroke={ringStroke}
+                  strokeWidth="9"
                   strokeLinecap="round"
                   strokeDasharray={ringCircumference}
-                  strokeDashoffset={isAdminProcessing ? 0 : ringDashOffset}
-                  style={{ transition: "stroke-dashoffset 0.5s ease, stroke 0.5s ease" }}
+                  strokeDashoffset={isAdminProcessing ? 0 : ringCircumference * (1 - progressPct / 100)}
+                  style={{ transition: "stroke-dashoffset 0.6s ease, stroke 0.6s ease" }}
                 />
               </svg>
-              {/* Center content */}
               <div className="absolute inset-0 grid place-items-center">
                 {isAdminProcessing ? (
                   <div className="text-center">
-                    <CheckCircle2 className="size-8 text-cyan mx-auto" />
-                    <p className="text-[9px] text-cyan font-bold mt-1">DONE</p>
+                    <Sparkles className="size-7 text-cyan mx-auto" />
+                    <p className="text-[9px] text-cyan font-extrabold mt-1 tracking-wider">DONE</p>
                   </div>
                 ) : isExpired && !extended ? (
                   <div className="text-center">
-                    <Timer className="size-7 text-orange mx-auto animate-pulse" />
-                    <p className="text-[9px] text-orange font-bold mt-1">EXTEND?</p>
+                    <Clock className="size-6 text-orange-400 mx-auto animate-pulse" />
+                    <p className="text-[9px] text-orange-400 font-extrabold mt-1">EXTEND?</p>
+                  </div>
+                ) : escrowStatus === "timeout" ? (
+                  <div className="text-center">
+                    <Shield className="size-6 text-gold mx-auto" />
+                    <p className="text-[9px] text-gold font-extrabold mt-1">QUEUED</p>
                   </div>
                 ) : (
                   <div className="text-center">
-                    <p className="text-2xl font-extrabold text-white font-mono leading-none">
-                      {mins < 10 ? `0${mins}` : mins}:{secs < 10 ? `0${secs}` : secs}
+                    <p className="text-[22px] font-extrabold text-white font-mono leading-none tabular-nums">
+                      {mins < 10 ? `0${mins}` : `${mins}`}:{secs < 10 ? `0${secs}` : `${secs}`}
                     </p>
-                    <p className="text-[9px] text-white/60 font-bold mt-0.5">
+                    <p className="text-[9px] text-white/50 font-bold mt-0.5 tracking-wider">
                       {extended ? "EXTENDED" : "ESCROW"}
                     </p>
                   </div>
@@ -251,108 +275,120 @@ export function EscrowScreen({
               </div>
             </div>
 
-            {/* Status info */}
+            {/* Status text */}
             <div className="flex-1 min-w-0">
               {isAdminProcessing ? (
                 <>
-                  <p className="text-base font-extrabold text-cyan">Card Redeemed!</p>
-                  <p className="text-xs text-muted-foreground mt-1">Admin processed your card — payout is on its way.</p>
+                  <p className="text-base font-extrabold text-cyan">Card Redeemed! 🎉</p>
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                    Admin processed your card successfully. Your payout is on its way.
+                  </p>
+                  <div className="mt-2.5 flex items-center gap-1.5">
+                    <Loader2 className="size-3.5 text-cyan animate-spin" />
+                    <p className="text-[11px] text-cyan font-semibold">Crediting your wallet…</p>
+                  </div>
                 </>
-              ) : isExpired && escrowStatus === "timeout" ? (
+              ) : escrowStatus === "timeout" ? (
                 <>
-                  <p className="text-base font-extrabold text-orange">Escrow Ended</p>
-                  <p className="text-xs text-muted-foreground mt-1">Your trade is queued for manual processing. Payout is guaranteed.</p>
+                  <p className="text-base font-extrabold text-gold">Trade Queued ✓</p>
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                    Escrow window closed. Your trade is in our priority queue — payout is guaranteed.
+                  </p>
                 </>
               ) : (
                 <>
-                  <p className="text-base font-extrabold text-gold">
+                  <p className={`text-base font-extrabold transition-colors duration-300 ${
+                    isLow ? "text-orange-400" : "text-gold"
+                  }`}>
                     {isLow ? "Almost done!" : "Card in Escrow"}
                   </p>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
                     Our operator is processing your card in real-time.
-                    {isLow && !extended && " Timer running low."}
+                    {isLow && !extended && " Timer running low — extend if needed."}
                   </p>
-                  <div className="mt-2 flex items-center gap-1.5">
+                  <div className="mt-2.5 flex items-center gap-1.5 bg-black/20 rounded-xl px-3 py-1.5 w-fit">
                     <Zap className="size-3 text-gold" />
-                    <p className="text-[11px] text-gold font-semibold">
-                      ₦{amountNgn.toLocaleString()} guaranteed · rate locked
-                    </p>
+                    <p className="text-[11px] text-gold font-bold">₦{amountNgn.toLocaleString()} · rate locked</p>
                   </div>
                 </>
               )}
 
               {/* Card badge */}
-              <div className="mt-2.5 flex items-center gap-2 bg-black/20 rounded-xl px-3 py-1.5 w-fit">
+              <div className="mt-2.5 flex items-center gap-2 bg-white/6 rounded-full px-3 py-1 w-fit">
                 <span className="text-sm">{brandEmoji}</span>
                 <span className="text-xs font-bold text-white">{brand} ${amountUsd}</span>
               </div>
             </div>
           </div>
 
-          {/* Progress bar */}
-          {!isAdminProcessing && (
-            <div className="mt-4 relative">
-              <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+          {/* Linear progress bar */}
+          {!isAdminProcessing && escrowStatus !== "timeout" && (
+            <div className="mt-4">
+              <div className="h-1 rounded-full bg-white/8 overflow-hidden">
                 <div
-                  className="h-full rounded-full transition-all duration-500"
+                  className="h-full rounded-full transition-all duration-700"
                   style={{
                     width: `${progressPct}%`,
                     background: isExpired
                       ? "oklch(0.72 0.19 42)"
-                      : "linear-gradient(90deg, oklch(0.87 0.17 92), oklch(0.72 0.19 42))",
+                      : isLow
+                      ? "linear-gradient(90deg, oklch(0.87 0.17 92), oklch(0.82 0.19 55))"
+                      : "linear-gradient(90deg, oklch(0.87 0.17 92), oklch(0.82 0.19 65))",
                   }}
                 />
               </div>
-              <div className="flex justify-between text-[10px] text-white/50 mt-1 font-medium">
-                <span>Start</span>
-                <span>{extended ? "8:00 total" : "5:00 total"}</span>
+              <div className="flex justify-between text-[9px] text-white/35 mt-1.5 font-medium">
+                <span>START</span>
+                <span>{extended ? "8:00 TOTAL" : "5:00 TOTAL"}</span>
               </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* Transparency panel — what's happening */}
+      {/* Transparency panel */}
       <div className="px-5 mt-4">
-        <div className="bg-card rounded-2xl border border-border/60 p-4">
-          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-1.5">
+        <div className="bg-card rounded-2xl border border-border/50 p-4">
+          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-3 flex items-center gap-1.5">
             <Eye className="size-3" /> What's happening right now
           </p>
           <div className="space-y-0">
             {STEPS.map((step, i) => {
-              const isDone = i < activeStep || step.done;
-              const isActive = i === activeStep && !isAdminProcessing;
-              const isAdminDoneStep = isAdminProcessing && i <= 4;
+              const isDone = i < activeStep || (i <= 1);
+              const isActive = i === activeStep && !isAdminProcessing && escrowStatus !== "timeout";
+              const isAdminDone = isAdminProcessing && i <= activeStep;
 
               return (
                 <div key={i} className="flex gap-3">
                   <div className="flex flex-col items-center">
-                    <div className={`size-6 rounded-full grid place-items-center shrink-0 transition-all ${
-                      isAdminDoneStep && i >= 2 ? "bg-cyan/20 text-cyan"
-                      : isDone ? "bg-cyan/20 text-cyan"
+                    <div className={`size-6 rounded-full grid place-items-center shrink-0 transition-all duration-400 ${
+                      isAdminDone ? "bg-cyan/20 text-cyan"
+                      : isDone ? "bg-cyan/15 text-cyan"
                       : isActive ? "bg-gold/20 text-gold"
-                      : "bg-secondary text-muted-foreground/40"
+                      : "bg-secondary/80 text-muted-foreground/30"
                     }`}>
-                      {isActive && !isAdminDoneStep
+                      {isActive
                         ? <Loader2 className="size-3 animate-spin" />
-                        : isDone || (isAdminDoneStep && i >= 2)
+                        : isDone || isAdminDone
                         ? <CheckCircle2 className="size-3" />
-                        : <Clock className="size-3" />
+                        : <step.icon className="size-3" />
                       }
                     </div>
                     {i < STEPS.length - 1 && (
-                      <div className={`w-px h-6 mt-0.5 mb-0.5 rounded-full transition-colors ${
-                        isDone ? "bg-cyan/30" : "bg-border/40"
+                      <div className={`w-px h-6 mt-0.5 mb-0.5 rounded-full transition-colors duration-400 ${
+                        (isDone || isAdminDone) ? "bg-cyan/25" : "bg-border/30"
                       }`} />
                     )}
                   </div>
-                  <div className="pb-2 pt-0.5 flex-1">
-                    <p className={`text-xs font-bold ${
-                      isActive && !isAdminDoneStep ? "text-gold" : isDone ? "text-foreground" : "text-muted-foreground/50"
+                  <div className="pb-2 pt-0.5 flex-1 min-w-0">
+                    <p className={`text-xs font-bold transition-colors duration-300 ${
+                      isActive ? "text-gold"
+                      : isDone || isAdminDone ? "text-foreground"
+                      : "text-muted-foreground/40"
                     }`}>
                       {step.label}
                     </p>
-                    <p className="text-[10px] text-muted-foreground">{step.sub}</p>
+                    <p className="text-[10px] text-muted-foreground/70 leading-snug">{step.sub}</p>
                   </div>
                 </div>
               );
@@ -361,71 +397,70 @@ export function EscrowScreen({
         </div>
       </div>
 
-      {/* Security badge */}
+      {/* Security guarantee badge */}
       <div className="px-5 mt-3">
-        <div className="flex items-center gap-3 bg-gold/5 border border-gold/20 rounded-2xl px-4 py-3">
-          <Shield className="size-5 text-gold shrink-0" />
-          <div className="flex-1">
-            <p className="text-xs font-bold text-gold">Funds Secured &amp; Guaranteed</p>
-            <p className="text-[11px] text-muted-foreground">
-              Your ₦{amountNgn.toLocaleString()} is reserved. You will be paid regardless of processing time.
+        <div className="flex items-center gap-3 bg-gold/5 border border-gold/15 rounded-2xl px-4 py-3">
+          <Shield className="size-4 text-gold shrink-0" />
+          <div>
+            <p className="text-xs font-bold text-gold">₦{amountNgn.toLocaleString()} Guaranteed</p>
+            <p className="text-[11px] text-muted-foreground/80 leading-snug">
+              Your payout is secured regardless of processing time. You will always be paid.
             </p>
           </div>
         </div>
       </div>
 
       {/* CTA area */}
-      <div className="px-5 mt-4 pb-8 space-y-3">
-        {/* Extension button — shown when low or expired but not yet extended */}
-        {(isLow || isExpired) && !extended && escrowStatus !== "timeout" && !isAdminProcessing && (
+      <div className="px-5 mt-4 pb-10 space-y-3">
+        {/* Extension button */}
+        {(isLow || (isExpired && escrowStatus === "extended")) && !extended && !isAdminProcessing && (
           <button
             onClick={onExtend}
-            className="w-full flex items-center justify-center gap-2 bg-orange/15 border border-orange/30 text-orange rounded-2xl py-3.5 text-sm font-extrabold"
+            className="w-full flex items-center justify-center gap-2 bg-orange-500/12 border border-orange-500/25 text-orange-400 rounded-2xl py-3.5 text-sm font-extrabold active:scale-[0.98] transition-transform"
           >
             <RotateCcw className="size-4" />
             Extend 3 Minutes — Give Admin More Time
           </button>
         )}
 
-        {/* Timeout state — after full escrow including extension */}
+        {/* Timeout CTA */}
         {escrowStatus === "timeout" && (
-          <div className="space-y-2">
-            <div className="bg-gold/10 border border-gold/30 rounded-2xl p-4">
-              <p className="text-sm font-extrabold text-gold">Trade Queued for Payout</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Escrow period ended. Your trade is in our priority queue and will be paid within 30 minutes.
-                No action needed — we will notify you.
+          <div className="space-y-2.5">
+            <div className="bg-gold/8 border border-gold/20 rounded-2xl p-4">
+              <p className="text-sm font-extrabold text-gold">Trade Queued for Priority Payout</p>
+              <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
+                The escrow window closed but your trade is in our priority queue. We'll process it within 30 minutes and notify you immediately.
               </p>
             </div>
             <button
               onClick={onProceed}
-              className="w-full flex items-center justify-center gap-2 bg-gradient-gold text-jungle-deep rounded-2xl py-3.5 text-sm font-extrabold shadow-glow-gold"
+              className="w-full flex items-center justify-center gap-2 bg-gradient-gold text-jungle-deep rounded-2xl py-3.5 text-sm font-extrabold shadow-glow-gold active:scale-[0.98] transition-transform"
             >
               View Trade Status <ArrowRight className="size-4" />
             </button>
           </div>
         )}
 
-        {/* Admin done — auto proceeding */}
+        {/* Admin processing auto-advance */}
         {isAdminProcessing && (
-          <div className="flex items-center justify-center gap-2 text-cyan text-sm font-semibold">
-            <Loader2 className="size-4 animate-spin" />
-            Admin processed — loading payout…
+          <div className="flex items-center justify-center gap-2 text-cyan text-xs font-semibold py-2">
+            <Loader2 className="size-3.5 animate-spin" />
+            Admin processed — loading your wallet…
           </div>
         )}
 
-        {/* While waiting — info */}
+        {/* Waiting state hint */}
         {!isExpired && !isAdminProcessing && !isLow && (
-          <p className="text-center text-[11px] text-muted-foreground">
-            Please keep this screen open · Closing won't cancel your trade
+          <p className="text-center text-[11px] text-muted-foreground/60 leading-relaxed">
+            Keep this screen open · Closing won't cancel your trade
           </p>
         )}
       </div>
 
       <style>{`
-        @keyframes float-particle {
-          0% { transform: translateY(0px) scale(1); }
-          100% { transform: translateY(-8px) scale(1.2); }
+        @keyframes pulse-ring {
+          0%, 100% { transform: scale(1); opacity: 0.6; }
+          50% { transform: scale(1.08); opacity: 1; }
         }
       `}</style>
     </div>

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -23,6 +23,9 @@ import {
   Save,
   X,
   Upload,
+  Timer,
+  Zap,
+  ArrowRight,
 } from "lucide-react";
 import {
   getAdminStats,
@@ -37,9 +40,11 @@ import {
   getAdminRates,
   updateExchangeRate,
   bulkUpdateRates,
+  getEscrowQueue,
+  processEscrowTrade,
 } from "../server-functions/admin";
 
-type AdminTab = "stats" | "kyc" | "review" | "trades" | "rates" | "credit";
+type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit";
 
 type Props = {
   adminId: string;
@@ -963,6 +968,324 @@ function CreditTab({ adminId }: { adminId: string }) {
   );
 }
 
+// ─── Escrow Queue Tab ─────────────────────────────────────────────────────────
+const BRAND_EMOJI_ADMIN: Record<string, string> = {
+  Apple: "🍎", Amazon: "📦", Steam: "🎮", "Google Play": "▶️",
+  Xbox: "🟢", PlayStation: "🎯", Netflix: "🎬", Spotify: "🎵",
+};
+
+function useElapsedMs(createdAt: string) {
+  const [elapsed, setElapsed] = useState(() => Date.now() - new Date(createdAt).getTime());
+  useEffect(() => {
+    const id = setInterval(() => setElapsed(Date.now() - new Date(createdAt).getTime()), 1000);
+    return () => clearInterval(id);
+  }, [createdAt]);
+  return elapsed;
+}
+
+function EscrowCard({
+  entry,
+  acting,
+  revealed,
+  onProcess,
+  onReject,
+  onReveal,
+}: {
+  entry: {
+    id: string; brand: string | null; region: string | null;
+    amount_usd: number | null; amount_ngn: number | null; card_code: string | null;
+    created_at: string;
+    profiles: { id: string; full_name: string | null; phone: string | null } | null;
+  };
+  acting: string | null;
+  revealed: Set<string>;
+  onProcess: (id: string) => void;
+  onReject: (id: string) => void;
+  onReveal: (id: string) => void;
+}) {
+  const elapsed = useElapsedMs(entry.created_at);
+  const elapsedMin = elapsed / 60_000;
+  const remainingMs = Math.max(0, 5 * 60_000 - elapsed);
+  const remainMin = Math.floor(remainingMs / 60_000);
+  const remainSec = Math.floor((remainingMs % 60_000) / 1_000);
+  const isExpired = remainingMs <= 0;
+  const isLow = !isExpired && remainingMs < 90_000;
+
+  const urgencyColor = isExpired
+    ? "text-red-400"
+    : isLow
+    ? "text-orange-400"
+    : elapsedMin < 2
+    ? "text-cyan"
+    : "text-gold";
+
+  const urgencyBg = isExpired
+    ? "bg-red-500/10 border-red-500/20"
+    : isLow
+    ? "bg-orange-500/10 border-orange-500/20"
+    : elapsedMin < 2
+    ? "bg-cyan/10 border-cyan/20"
+    : "bg-gold/10 border-gold/20";
+
+  const urgencyLabel = isExpired
+    ? "EXPIRED — EXTENDED"
+    : isLow
+    ? "URGENT"
+    : elapsedMin < 2
+    ? "FRESH"
+    : "ACTIVE";
+
+  const brandEmoji = BRAND_EMOJI_ADMIN[entry.brand ?? ""] ?? "🎁";
+
+  return (
+    <div className={`bg-gradient-card rounded-2xl border ${isExpired ? "border-red-500/30" : isLow ? "border-orange-400/30" : "border-white/5"} p-4 space-y-3 transition-all`}>
+      {/* Top row */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2.5 flex-1 min-w-0">
+          <span className="text-2xl shrink-0">{brandEmoji}</span>
+          <div className="min-w-0">
+            <p className="font-bold text-sm truncate">
+              {entry.brand ?? "Gift Card"}{" "}
+              <span className="text-muted-foreground font-normal text-xs">({entry.region ?? "USA"})</span>
+            </p>
+            <p className="text-xs text-muted-foreground truncate">
+              {entry.profiles?.full_name ?? "—"} · {entry.profiles?.phone ?? ""}
+            </p>
+          </div>
+        </div>
+        <div className="text-right shrink-0">
+          <p className="font-extrabold text-base text-cyan">
+            ₦{entry.amount_ngn != null ? Number(entry.amount_ngn).toLocaleString() : "—"}
+          </p>
+          <p className="text-xs text-muted-foreground">${entry.amount_usd ?? "—"} USD</p>
+        </div>
+      </div>
+
+      {/* Countdown + urgency badge */}
+      <div className={`flex items-center justify-between rounded-xl px-3 py-2.5 border ${urgencyBg}`}>
+        <div className="flex items-center gap-2">
+          <Timer className={`size-3.5 ${urgencyColor} shrink-0`} />
+          <div>
+            <p className={`text-xs font-extrabold ${urgencyColor}`}>
+              {isExpired
+                ? "Window expired — extended window"
+                : `${remainMin}:${remainSec < 10 ? `0${remainSec}` : remainSec} remaining`}
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              User waiting {Math.floor(elapsedMin)}m {Math.floor((elapsedMin % 1) * 60)}s
+            </p>
+          </div>
+        </div>
+        <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full ${urgencyBg} ${urgencyColor} border`}>
+          {urgencyLabel}
+        </span>
+      </div>
+
+      {/* Card code */}
+      <div className="bg-secondary rounded-xl px-4 py-3 flex items-center justify-between">
+        <div>
+          <p className="text-[10px] text-muted-foreground mb-0.5 font-semibold">CARD CODE</p>
+          <p className="font-mono text-xs font-bold tracking-wider">
+            {revealed.has(entry.id)
+              ? (entry.card_code ?? "—")
+              : `${(entry.card_code ?? "").slice(0, 4)}••••••••••`}
+          </p>
+        </div>
+        <button
+          onClick={() => onReveal(entry.id)}
+          className="text-xs text-cyan font-semibold"
+        >
+          {revealed.has(entry.id) ? "Hide" : "Reveal"}
+        </button>
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-2">
+        <button
+          onClick={() => onProcess(entry.id)}
+          disabled={!!acting}
+          className="flex-1 flex items-center justify-center gap-1.5 py-3 rounded-xl bg-cyan/15 text-cyan text-xs font-extrabold disabled:opacity-50 active:scale-95 transition-all"
+        >
+          {acting === entry.id
+            ? <Loader2 className="size-3.5 animate-spin" />
+            : <Zap className="size-3.5" />}
+          Card Processed
+        </button>
+        <button
+          onClick={() => onReject(entry.id)}
+          disabled={!!acting}
+          className="flex-1 flex items-center justify-center gap-1.5 py-3 rounded-xl bg-red-500/10 text-red-400 text-xs font-extrabold disabled:opacity-50 active:scale-95 transition-all"
+        >
+          <Ban className="size-3.5" />
+          Reject
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function EscrowTab({ adminId }: { adminId: string }) {
+  type EscrowEntry = {
+    id: string; brand: string | null; region: string | null;
+    amount_usd: number | null; amount_ngn: number | null; card_code: string | null;
+    created_at: string;
+    profiles: { id: string; full_name: string | null; phone: string | null } | null;
+  };
+
+  const [queue, setQueue] = useState<EscrowEntry[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [acting, setActing] = useState<string | null>(null);
+  const [rejectModal, setRejectModal] = useState<{ id: string; text: string } | null>(null);
+  const [revealed, setRevealed] = useState<Set<string>>(new Set());
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await getEscrowQueue({ data: {} });
+      setQueue(rows as EscrowEntry[]);
+      setLastRefresh(new Date());
+    } catch { setQueue([]); } finally { setLoading(false); }
+  }, [adminId]);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 15_000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  const handleProcess = async (tradeId: string) => {
+    setActing(tradeId);
+    try {
+      await processEscrowTrade({ data: { tradeId } });
+      setQueue((q) => (q ?? []).filter((r) => r.id !== tradeId));
+    } finally { setActing(null); }
+  };
+
+  const handleReject = async () => {
+    if (!rejectModal) return;
+    setActing(rejectModal.id);
+    try {
+      await rejectManualTrade({ data: { tradeId: rejectModal.id, reason: rejectModal.text } });
+      setQueue((q) => (q ?? []).filter((r) => r.id !== rejectModal.id));
+      setRejectModal(null);
+    } finally { setActing(null); }
+  };
+
+  const handleReveal = (id: string) => {
+    setRevealed((s) => {
+      const n = new Set(s);
+      s.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  };
+
+  const urgentCount = (queue ?? []).filter((t) => {
+    const ms = Date.now() - new Date(t.created_at).getTime();
+    return ms > 4 * 60_000;
+  }).length;
+
+  return (
+    <div className="px-5 pt-4 pb-10 space-y-3">
+      {/* Reject modal */}
+      {rejectModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-end z-50 p-4">
+          <div className="w-full bg-card rounded-3xl p-6 space-y-4">
+            <p className="font-bold text-sm">Why is this card rejected?</p>
+            <textarea
+              className="w-full bg-secondary rounded-xl px-4 py-3 text-sm resize-none h-24 outline-none"
+              placeholder="e.g. Invalid code, already redeemed, wrong denomination..."
+              value={rejectModal.text}
+              onChange={(e) => setRejectModal({ ...rejectModal, text: e.target.value })}
+            />
+            <div className="flex gap-3">
+              <button onClick={() => setRejectModal(null)} className="flex-1 py-3 rounded-xl bg-secondary text-sm font-semibold">Cancel</button>
+              <button
+                onClick={handleReject}
+                disabled={!rejectModal.text.trim() || !!acting}
+                className="flex-1 py-3 rounded-xl bg-red-500 text-white text-sm font-semibold disabled:opacity-50"
+              >
+                {acting ? <Loader2 className="size-4 animate-spin mx-auto" /> : "Reject & Notify User"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs text-muted-foreground font-semibold uppercase tracking-widest">
+            {loading ? "Refreshing…" : `${queue?.length ?? 0} cards in escrow`}
+            {urgentCount > 0 && (
+              <span className="ml-2 px-1.5 py-0.5 rounded-full bg-red-500/20 text-red-400 text-[9px] font-extrabold">
+                {urgentCount} URGENT
+              </span>
+            )}
+          </p>
+          {lastRefresh && (
+            <p className="text-[10px] text-muted-foreground/50 mt-0.5">
+              Auto-refreshes every 15s · Last: {lastRefresh.toLocaleTimeString()}
+            </p>
+          )}
+        </div>
+        <button
+          onClick={load}
+          disabled={loading}
+          className="flex items-center gap-1.5 text-xs text-cyan font-semibold py-1.5 px-3 rounded-xl bg-cyan/10"
+        >
+          <RefreshCw className={`size-3 ${loading ? "animate-spin" : ""}`} />
+          Refresh
+        </button>
+      </div>
+
+      {/* Info banner */}
+      {queue && queue.length > 0 && (
+        <div className="flex items-start gap-2.5 bg-gold/8 border border-gold/20 rounded-2xl px-4 py-3">
+          <AlertTriangle className="size-4 text-gold shrink-0 mt-0.5" />
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            <span className="text-gold font-bold">Action required:</span> Each user is watching a live countdown. Tap{" "}
+            <span className="font-bold text-white">"Card Processed"</span> after you've redeemed the card to instantly credit their wallet and clear their screen.
+          </p>
+        </div>
+      )}
+
+      {/* Empty or list */}
+      {!queue && loading ? (
+        <CenterLoader />
+      ) : !queue || queue.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-20 gap-4 text-muted-foreground">
+          <div className="size-16 rounded-full bg-cyan/10 grid place-items-center">
+            <Timer className="size-7 text-cyan opacity-60" />
+          </div>
+          <div className="text-center">
+            <p className="text-sm font-semibold">No cards in escrow</p>
+            <p className="text-xs mt-1 text-muted-foreground/60">Cards appear here the moment a user's verification succeeds</p>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {queue.map((entry) => (
+            <EscrowCard
+              key={entry.id}
+              entry={entry}
+              acting={acting}
+              revealed={revealed}
+              onProcess={handleProcess}
+              onReject={(id) => setRejectModal({ id, text: "" })}
+              onReveal={handleReveal}
+            />
+          ))}
+          <div className="flex items-center justify-center gap-2 py-3 text-[11px] text-muted-foreground">
+            <ArrowRight className="size-3" />
+            Showing {queue.length} active escrow trade{queue.length !== 1 ? "s" : ""}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Admin Screen ────────────────────────────────────────────────────────
 export function AdminScreen({ adminId, onBack }: Props) {
   const [tab, setTab] = useState<AdminTab>("stats");
@@ -970,6 +1293,7 @@ export function AdminScreen({ adminId, onBack }: Props) {
   const TABS: { key: AdminTab; label: string; icon: typeof BarChart3 }[] = [
     { key: "stats",  label: "Stats",  icon: BarChart3 },
     { key: "kyc",    label: "KYC",    icon: ShieldCheck },
+    { key: "escrow", label: "Escrow", icon: Timer },
     { key: "review", label: "Review", icon: Eye },
     { key: "trades", label: "Trades", icon: TrendingUp },
     { key: "rates",  label: "Rates",  icon: DollarSign },
@@ -1014,6 +1338,7 @@ export function AdminScreen({ adminId, onBack }: Props) {
       <div className="flex-1 overflow-y-auto">
         {tab === "stats"  && <StatsTab  adminId={adminId} />}
         {tab === "kyc"    && <KYCTab    adminId={adminId} />}
+        {tab === "escrow" && <EscrowTab adminId={adminId} />}
         {tab === "review" && <ReviewTab adminId={adminId} />}
         {tab === "trades" && <TradesTab adminId={adminId} />}
         {tab === "rates"  && <RatesTab  adminId={adminId} />}

@@ -382,6 +382,82 @@ export const bulkUpdateRates = createServerFn({ method: "POST" })
     };
   });
 
+// ─── Escrow Queue — all verified trades waiting for admin to process ──────────
+export const getEscrowQueue = createServerFn({ method: "GET" })
+  .validator((d: { limit?: number }) => d)
+  .handler(async ({ data }) => {
+    await requireAdmin();
+    const db = getServerSupabase();
+    const { data: trades, error } = await db
+      .from("trades")
+      .select(`
+        id, brand, region, amount_usd, amount_ngn, card_code,
+        status, requires_manual_review, created_at,
+        profiles!inner(id, full_name, phone)
+      `)
+      .eq("status", "verified")
+      .order("created_at", { ascending: true })
+      .limit(data.limit ?? 100);
+    if (error) throw error;
+    return trades ?? [];
+  });
+
+// ─── Process Escrow Trade — admin confirms card redeemed, credits user ────────
+export const processEscrowTrade = createServerFn({ method: "POST" })
+  .validator((d: { tradeId: string }) => d)
+  .handler(async ({ data }) => {
+    const adminId = await requireAdmin();
+    const db = getServerSupabase();
+
+    const { data: trade } = await db
+      .from("trades")
+      .select("user_id, amount_ngn, brand, amount_usd")
+      .eq("id", data.tradeId)
+      .eq("status", "verified")
+      .single();
+
+    if (!trade) throw new Error("Trade not found or already processed");
+
+    // Mark as processing so user's EscrowScreen detects it
+    await db.from("trades")
+      .update({ status: "processing" })
+      .eq("id", data.tradeId);
+
+    // Credit user's NGN wallet
+    await db.rpc("increment_wallet_balance", {
+      p_user_id: trade.user_id,
+      p_currency: "NGN",
+      p_amount: Number(trade.amount_ngn),
+    });
+
+    // Mark as paid with settlement timestamp
+    await db.from("trades")
+      .update({ status: "paid", settled_at: new Date().toISOString(), requires_manual_review: false })
+      .eq("id", data.tradeId);
+
+    // Notify user
+    await db.from("notifications").insert({
+      user_id: trade.user_id,
+      title: "Card Redeemed! 💚",
+      message: `Your ${trade.brand ?? "gift card"} ($${trade.amount_usd}) has been processed. ₦${Number(trade.amount_ngn).toLocaleString()} credited to your wallet.`,
+      type: "success",
+    });
+
+    try {
+      const { pushNotify } = await import("../lib/onesignal");
+      pushNotify(
+        trade.user_id,
+        "Card Redeemed! 💚",
+        `₦${Number(trade.amount_ngn).toLocaleString()} has been credited to your wallet.`
+      );
+    } catch { /* non-critical */ }
+
+    await logAdminAction(adminId, "escrow_process", data.tradeId, {
+      amount_ngn: trade.amount_ngn,
+    });
+    return { success: true };
+  });
+
 // ─── Spread revenue aggregation (admin only) ──────────────────────────────────
 export const getSpreadRevenue = createServerFn({ method: "GET" })
   .inputValidator((d: { days?: number }) => d)
