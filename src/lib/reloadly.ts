@@ -129,64 +129,132 @@ export async function getNairaRateForBrand(brand: string, amountUsd: number): Pr
   }
 }
 
-// ─── Gift Card Redemption / Verification ─────────────────────────────────────
-export type RedeemResult = {
+// ─── Gift Card Verification ───────────────────────────────────────────────────
+// Used to verify a gift card code submitted by the user (7SEVEN buys their card).
+// Strategy:
+//  1. Confirm the brand exists on Reloadly
+//  2. Validate code format
+//  3. Use Reloadly's redeem-codes endpoint to check validity
+//  4. If endpoint unavailable (sandbox/starter tier), flag for manual review
+//     — standard practice for Nigerian gift card trading platforms
+// ─────────────────────────────────────────────────────────────────────────────
+export type VerifyResult = {
   success: boolean;
-  transactionId?: string;
-  orderId?: string;
-  status?: string;
+  productId?: number;
+  productName?: string;
+  cardCode?: string;
   balance?: number;
+  currency?: string;
   failureReason?: string;
+  requiresManualReview?: boolean;
 };
 
-export async function redeemGiftCard(params: {
-  productId: number;
+export async function verifyUserGiftCard(params: {
+  brand: string;
   cardCode: string;
   cardPin?: string;
   amountUsd: number;
-  tradeId: string;
-  recipientEmail: string;
-}): Promise<RedeemResult> {
+}): Promise<VerifyResult> {
   try {
-    const data = await reloadlyFetch("/orders", {
-      method: "POST",
-      body: JSON.stringify({
-        productId: params.productId,
-        quantity: 1,
-        unitPrice: params.amountUsd,
-        customIdentifier: params.tradeId,
-        senderName: "7SEVEN CARDS",
-        recipientEmail: params.recipientEmail,
-        preOrder: false,
-        // For digital gift card redemption with a code
-        giftCode: params.cardCode,
-        giftPin: params.cardPin,
-      }),
-    }) as {
-      transactionId: string;
-      orderId: string;
-      status: string;
-    };
+    // Step 1: Confirm brand is supported
+    const products = await getGiftCardProducts("US");
+    const product = products.find((p) =>
+      p.productName.toLowerCase().includes(params.brand.toLowerCase())
+    );
 
-    return {
-      success: true,
-      transactionId: String(data.transactionId),
-      orderId: String(data.orderId),
-      status: data.status,
-    };
+    if (!product) {
+      return {
+        success: false,
+        failureReason: `${params.brand} gift cards are not currently supported`,
+      };
+    }
+
+    // Step 2: Validate card code format
+    const cleanCode = params.cardCode.replace(/[\s\-]/g, "");
+    if (cleanCode.length < 8 || cleanCode.length > 25) {
+      return {
+        success: false,
+        failureReason: "Invalid card code format — check and re-enter",
+      };
+    }
+
+    // Step 3: Try Reloadly's redeem-codes endpoint
+    try {
+      const verifyRes = await reloadlyFetch("/redeem-codes", {
+        method: "POST",
+        body: JSON.stringify({
+          productId: product.productId,
+          cardCode: cleanCode,
+          ...(params.cardPin ? { cardPin: params.cardPin } : {}),
+          amount: params.amountUsd,
+        }),
+      }) as { cardCode?: string; balance?: number; currencyCode?: string; status?: string };
+
+      const isValid =
+        verifyRes.status === "VERIFIED" ||
+        verifyRes.status === "VALID" ||
+        verifyRes.cardCode != null;
+
+      if (isValid) {
+        return {
+          success: true,
+          productId: product.productId,
+          productName: product.productName,
+          cardCode: cleanCode,
+          balance: verifyRes.balance ?? params.amountUsd,
+          currency: verifyRes.currencyCode ?? "USD",
+        };
+      }
+
+      return {
+        success: false,
+        failureReason: "Card could not be verified — may be used, expired, or zero balance",
+      };
+
+    } catch (redeemErr: unknown) {
+      const msg = redeemErr instanceof Error ? redeemErr.message : String(redeemErr);
+
+      // 404/403 means this endpoint isn't available at this account tier — flag for manual review
+      if (msg.includes("404") || msg.includes("403") || msg.includes("not found")) {
+        console.warn("[Reloadly] redeem-codes unavailable — flagging for manual review");
+        return {
+          success: true,
+          productId: product.productId,
+          productName: product.productName,
+          cardCode: cleanCode,
+          requiresManualReview: true,
+        };
+      }
+
+      const isCardBad =
+        msg.toLowerCase().includes("redeemed") ||
+        msg.toLowerCase().includes("invalid") ||
+        msg.toLowerCase().includes("expired") ||
+        msg.toLowerCase().includes("zero balance") ||
+        msg.toLowerCase().includes("incorrect pin");
+
+      return {
+        success: false,
+        failureReason: isCardBad
+          ? "Card already used, expired, or wrong PIN"
+          : "Verification service temporarily unavailable — try again",
+      };
+    }
+
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : String(e);
-    const isInvalid =
-      message.includes("redeemed") ||
-      message.includes("invalid") ||
-      message.includes("expired") ||
-      message.includes("zero balance");
+    const msg = e instanceof Error ? e.message : String(e);
 
-    return {
-      success: false,
-      failureReason: isInvalid
-        ? "Card already redeemed or invalid"
-        : "Verification service unavailable",
-    };
+    if (msg.includes("not configured")) {
+      // Reloadly credentials not set — demo mode, flag for manual review
+      return {
+        success: true,
+        productId: 0,
+        productName: `${params.brand} (Demo)`,
+        cardCode: params.cardCode.replace(/[\s\-]/g, ""),
+        requiresManualReview: true,
+      };
+    }
+
+    return { success: false, failureReason: "Verification error — please try again" };
   }
 }
