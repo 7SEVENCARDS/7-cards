@@ -123,7 +123,7 @@ export function KYCScreen({
           </button>
           <div className="flex-1">
             <h1 className="text-xl font-extrabold">Identity Verification</h1>
-            <p className="text-xs text-muted-foreground">Required for Nigerian financial regulations</p>
+            <p className="text-xs text-muted-foreground">Optional · Unlock higher trade limits</p>
           </div>
           <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold ${badge.color}`}>
             {badge.icon} {badge.label}
@@ -134,6 +134,36 @@ export function KYCScreen({
         {step === "intro" && (
           <div className="px-5 flex flex-col gap-5 flex-1">
 
+            {/* Limits comparison */}
+            <div className="rounded-2xl border border-white/10 overflow-hidden">
+              <div className="grid grid-cols-2 divide-x divide-white/10">
+                <div className="p-4 space-y-1">
+                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Without KYC</p>
+                  <p className="text-xl font-extrabold text-foreground">₦200k</p>
+                  <p className="text-[11px] text-muted-foreground">per trade limit</p>
+                  <div className="space-y-1 pt-2">
+                    {["$200 max per trade", "Standard rates", "Normal processing"].map(t => (
+                      <p key={t} className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                        <span className="size-1 rounded-full bg-muted-foreground/50 shrink-0" />{t}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+                <div className="p-4 space-y-1 bg-gold/5">
+                  <p className="text-[10px] font-bold text-gold uppercase tracking-wider">✓ Verified</p>
+                  <p className="text-xl font-extrabold text-gold">₦5M</p>
+                  <p className="text-[11px] text-muted-foreground">per trade limit</p>
+                  <div className="space-y-1 pt-2">
+                    {["$5,000 max per trade", "+2% better rates", "Priority payouts"].map(t => (
+                      <p key={t} className="text-[11px] text-gold/80 flex items-center gap-1.5">
+                        <span className="size-1 rounded-full bg-gold shrink-0" />{t}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Why KYC */}
             <div className="bg-card rounded-2xl border border-border p-5">
               <div className="flex items-center gap-3 mb-4">
@@ -141,16 +171,16 @@ export function KYCScreen({
                   <ShieldCheck className="size-6 text-cyan" />
                 </div>
                 <div>
-                  <p className="text-sm font-extrabold">Why we need this</p>
-                  <p className="text-xs text-muted-foreground">CBN & NDIC compliance</p>
+                  <p className="text-sm font-extrabold">What you unlock</p>
+                  <p className="text-xs text-muted-foreground">One-time · Takes under 2 minutes</p>
                 </div>
               </div>
               <div className="space-y-3">
                 {[
-                  { icon: "🔒", text: "Protects your account from fraud" },
-                  { icon: "💳", text: "Enables higher daily payout limits" },
-                  { icon: "⚡", text: "Faster withdrawals to your bank" },
-                  { icon: "🏛️", text: "Required by Nigerian financial law" },
+                  { icon: "💰", text: "Sell cards worth up to $5,000 per trade" },
+                  { icon: "📈", text: "+2% better exchange rates on every trade" },
+                  { icon: "⚡", text: "Priority payout processing via Squad" },
+                  { icon: "🔒", text: "Account protected against fraud & takeover" },
                 ].map((i) => (
                   <div key={i.text} className="flex items-center gap-3">
                     <span className="text-lg">{i.icon}</span>
@@ -169,7 +199,6 @@ export function KYCScreen({
                   label="Bank Verification Number (BVN)"
                   sub="11-digit BVN from any Nigerian bank"
                   done={hasBVN}
-                  required
                 />
                 <KYCItem
                   icon={<User className="size-5 text-cyan" />}
@@ -183,7 +212,7 @@ export function KYCScreen({
             <div className="bg-gold/10 border border-gold/30 rounded-2xl p-4 flex items-start gap-3">
               <ShieldCheck className="size-4 text-gold shrink-0 mt-0.5" />
               <p className="text-xs text-muted-foreground">
-                Your data is encrypted and stored securely. We only verify — your raw BVN is never stored.
+                Your data is encrypted. We only verify your identity — your raw BVN is never stored.
                 Powered by <span className="font-semibold text-foreground">Dojah</span>.
               </p>
             </div>
@@ -192,7 +221,11 @@ export function KYCScreen({
               onClick={() => setStep("bvn")}
               className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold"
             >
-              Start Verification <ChevronRight className="size-5" />
+              Unlock Higher Limits <ChevronRight className="size-5" />
+            </button>
+
+            <button onClick={onBack} className="text-xs text-muted-foreground text-center py-1">
+              Maybe later — continue with ₦200k limit
             </button>
           </div>
         )}
