@@ -142,3 +142,41 @@ export async function getPayoutStatus(transactionRef: string) {
   ) as { data: { status: string; amount: number } };
   return data.data;
 }
+
+// ─── Create Payment Link (for premium subscriptions) ─────────────────────────
+export async function createPaymentLink(params: {
+  amountKobo: number;
+  transactionRef: string;
+  email: string;
+  name: string;
+  description: string;
+  redirectUrl: string;
+}): Promise<{ checkoutUrl: string | null; error?: string }> {
+  try {
+    const res = await fetch(`${BASE_URL}/merchant/create-payment-link`, {
+      method: "POST",
+      headers: getHeaders(),
+      body: JSON.stringify({
+        amount: params.amountKobo,
+        currency: "NGN",
+        transaction_ref: params.transactionRef,
+        email: params.email,
+        customer_name: params.name,
+        payment_description: params.description,
+        redirect_link: params.redirectUrl,
+        pass_charge: false,
+      }),
+    });
+
+    const json = await res.json() as {
+      success?: boolean;
+      data?: { checkout_url?: string };
+      message?: string;
+    };
+
+    return { checkoutUrl: json.data?.checkout_url ?? null };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { checkoutUrl: null, error: msg };
+  }
+}
