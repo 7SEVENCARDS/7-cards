@@ -318,10 +318,14 @@ function App() {
             onViewStatus={(id) => { setActiveStatusTradeId(id); setTab("status"); }}
           />
         )}
-        {tab === "status" && activeStatusTradeId && (
+        {tab === "status" && activeStatusTradeId && user && (
           <TradeStatusScreen
             tradeId={activeStatusTradeId}
+            userId={user.id}
             onBack={() => setTab("history")}
+            payoutBankCode={defaultPayoutAccount?.bank_code}
+            payoutAccountNumber={defaultPayoutAccount?.account_number}
+            payoutAccountName={defaultPayoutAccount?.account_name}
           />
         )}
         {tab === "support" && user && (
