@@ -93,7 +93,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
           </button>
           <div className="flex-1">
             <h1 className="text-xl font-extrabold">Referral Programme</h1>
-            <p className="text-xs text-muted-foreground">₦500 for you · ₦500 for them</p>
+            <p className="text-xs text-muted-foreground">Earn 5% of every trade your friends make</p>
           </div>
         </header>
 
@@ -110,11 +110,11 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
                 {isLoading
                   ? <div className="h-10 w-32 bg-white/10 rounded-xl animate-pulse mt-1" />
                   : <p className="text-4xl font-extrabold text-white mt-1">
-                      ₦{(stats?.totalEarned ?? 0).toLocaleString()}
+                      ₦{(stats?.totalEarnedNgn ?? 0).toLocaleString()}
                     </p>
                 }
                 <p className="text-xs text-gold mt-2 font-semibold">
-                  {stats?.earnedCount ?? 0} friend{(stats?.earnedCount ?? 0) !== 1 ? "s" : ""} traded · ₦500 each
+                  {stats?.earnedCount ?? 0} friend{(stats?.earnedCount ?? 0) !== 1 ? "s" : ""} traded · 5% each
                 </p>
               </div>
               <div className="size-14 rounded-2xl bg-white/10 grid place-items-center">
@@ -165,7 +165,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
                 </div>
               )}
             <p className="text-[11px] text-muted-foreground mt-3 text-center">
-              Share your code. You earn ₦500 when your friend completes their first trade.
+              Share your code. You earn 5% of every trade your friend completes — forever.
             </p>
             <button
               onClick={handleShare}
@@ -183,7 +183,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
                 { step: "1", icon: Share2,       text: "Share your code with friends"                         },
                 { step: "2", icon: Users,        text: "Friend signs up using your code"                      },
                 { step: "3", icon: Zap,          text: "They complete their first card trade"                  },
-                { step: "4", icon: Wallet,       text: "₦500 lands in your NGN wallet instantly"              },
+                { step: "4", icon: Wallet,       text: "5% of their trade value lands in your wallet instantly" },
               ].map(({ step, icon: Icon, text }) => (
                 <div key={step} className="flex items-center gap-3 bg-card rounded-2xl border border-border/60 p-4">
                   <div className="size-8 rounded-xl bg-gold/15 text-gold text-xs font-extrabold grid place-items-center flex-shrink-0">
@@ -247,7 +247,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
                     </div>
                     {f.has_traded ? (
                       <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-cyan/15 text-cyan text-[11px] font-bold">
-                        <CheckCircle2 className="size-3" /> ₦500 earned
+                        <CheckCircle2 className="size-3" /> ₦{(f.total_commission_ngn ?? 0).toLocaleString()} earned
                       </div>
                     ) : (
                       <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gold/15 text-gold text-[11px] font-bold">
@@ -269,7 +269,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
               <div>
                 <p className="text-sm font-bold">No referrals yet</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Share your code and start earning ₦500 per friend
+                  Share your code and start earning 5% per friend's trade
                 </p>
               </div>
             </div>
