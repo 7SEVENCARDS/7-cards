@@ -9,6 +9,9 @@ import { getWebRequest } from "@tanstack/react-start/server";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser, requireAdmin, requireVendorAuth } from "../lib/auth-server";
 import { clientIp, assertNotRateLimited, rlKey } from "../lib/rate-limiter";
+import {
+  assertEmail, assertPassword, sanitizeStr, assertPhone,
+} from "../lib/validate";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type VendorProfile = {
@@ -140,12 +143,20 @@ export const adminRegisterVendor = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     await requireAdmin();
+
+    // Sanitize and validate all fields before touching the DB
+    const email        = assertEmail(data.email);
+    const password     = assertPassword(data.password);
+    const businessName = sanitizeStr(data.businessName, 200, "business name");
+    const contactName  = sanitizeStr(data.contactName, 100, "contact name");
+    const phone        = assertPhone(data.phone);
+
     const db = getServerSupabase();
 
     // Create Supabase auth user
     const { data: authData, error: authError } = await db.auth.admin.createUser({
-      email: data.email,
-      password: data.password,
+      email,
+      password,
       email_confirm: true,
     });
 
@@ -166,10 +177,10 @@ export const adminRegisterVendor = createServerFn({ method: "POST" })
       .from("vendors")
       .insert({
         user_id: userId,
-        business_name: data.businessName,
-        contact_name: data.contactName,
-        phone: data.phone,
-        email: data.email,
+        business_name: businessName,
+        contact_name: contactName,
+        phone,
+        email,
         status: "pending",
       })
       .select("id")
@@ -216,6 +227,10 @@ export const adminRegisterVendor = createServerFn({ method: "POST" })
 export const vendorLogin = createServerFn({ method: "POST" })
   .validator((d: { email: string; password: string }) => d)
   .handler(async ({ data }) => {
+    // Validate before touching auth or the rate limiter
+    const email = assertEmail(data.email);
+    assertPassword(data.password);
+
     // 5 attempts per IP per minute — stops credential-stuffing
     const req = getWebRequest();
     const ip = req ? clientIp(req) : "unknown";
@@ -224,7 +239,7 @@ export const vendorLogin = createServerFn({ method: "POST" })
     const db = getServerSupabase();
 
     const { data: authData, error } = await db.auth.signInWithPassword({
-      email: data.email,
+      email,
       password: data.password,
     });
 
