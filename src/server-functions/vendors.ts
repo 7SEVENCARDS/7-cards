@@ -5,8 +5,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createServerFn } from "@tanstack/react-start";
+import { getWebRequest } from "@tanstack/react-start/server";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser, requireAdmin, requireVendorAuth } from "../lib/auth-server";
+import { clientIp, assertNotRateLimited, rlKey } from "../lib/rate-limiter";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type VendorProfile = {
@@ -134,6 +136,11 @@ export const registerVendor = createServerFn({ method: "POST" })
 export const vendorLogin = createServerFn({ method: "POST" })
   .validator((d: { email: string; password: string }) => d)
   .handler(async ({ data }) => {
+    // 5 attempts per IP per minute — stops credential-stuffing
+    const req = getWebRequest();
+    const ip = req ? clientIp(req) : "unknown";
+    assertNotRateLimited(rlKey("vendorLogin", ip), 5, 60_000);
+
     const db = getServerSupabase();
 
     const { data: authData, error } = await db.auth.signInWithPassword({

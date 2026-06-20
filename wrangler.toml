@@ -60,3 +60,32 @@ RELOADLY_ENV = "production"
 #   DOJAH_APP_ID
 #   DOJAH_SECRET_KEY
 #   APP_SECRET
+
+# ─── Workers Rate Limiting (distributed, edge-level) ─────────────────────────
+# The app currently uses per-isolate in-process rate limiting (src/lib/rate-limiter.ts).
+# To upgrade to true distributed rate limiting that spans all Worker instances,
+# uncomment the blocks below and update server.ts / server functions to use the bindings
+# (pass `env` down and call `await env.RATE_LIMITER_LOGIN.limit({ key: ip })`).
+#
+# Requires Workers Paid plan. Create namespaces via:
+#   wrangler rate-limit create --name rate-limiter-login
+#   wrangler rate-limit create --name rate-limiter-webhook
+#   wrangler rate-limit create --name rate-limiter-kyc
+#
+# [[unsafe.bindings]]
+# type         = "ratelimit"
+# name         = "RATE_LIMITER_LOGIN"
+# namespace_id = "1001"
+# simple       = { limit = 5, period = 60 }
+#
+# [[unsafe.bindings]]
+# type         = "ratelimit"
+# name         = "RATE_LIMITER_WEBHOOK"
+# namespace_id = "1002"
+# simple       = { limit = 120, period = 60 }
+#
+# [[unsafe.bindings]]
+# type         = "ratelimit"
+# name         = "RATE_LIMITER_KYC"
+# namespace_id = "1003"
+# simple       = { limit = 10, period = 600 }

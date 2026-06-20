@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
+import { assertNotRateLimited, rlKey } from "../lib/rate-limiter";
 
 // ─── Name-match helper ────────────────────────────────────────────────────────
 // Returns true if the Dojah identity name loosely matches the registered name.
@@ -33,6 +34,8 @@ export const verifyBVN = createServerFn({ method: "POST" })
     }
 
     const userId = await requireUser();
+    // 10 Dojah lookups per user per 10 minutes — prevents downstream API abuse
+    assertNotRateLimited(rlKey("verifyBVN", userId), 10, 10 * 60_000);
 
     try {
       const { lookupBVN, maskBVN } = await import("../lib/dojah");
@@ -146,6 +149,8 @@ export const verifyNIN = createServerFn({ method: "POST" })
     }
 
     const userId = await requireUser();
+    // 10 Dojah lookups per user per 10 minutes — prevents downstream API abuse
+    assertNotRateLimited(rlKey("verifyNIN", userId), 10, 10 * 60_000);
 
     try {
       const { lookupNIN, maskNIN } = await import("../lib/dojah");
