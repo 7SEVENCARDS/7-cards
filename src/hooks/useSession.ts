@@ -33,6 +33,21 @@ export function useSession(): SessionState {
           session,
           loading: false,
         });
+
+        // Link device to Supabase user ID for OneSignal server-side push targeting.
+        // Requires OneSignal Web SDK to be initialised in __root.tsx:
+        //   <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+        if (session?.user?.id) {
+          try {
+            const os = (window as unknown as { OneSignal?: { login: (id: string) => void } }).OneSignal;
+            if (os?.login) os.login(session.user.id);
+          } catch { /* OneSignal not loaded — add SDK script to __root.tsx */ }
+        } else {
+          try {
+            const os = (window as unknown as { OneSignal?: { logout: () => void } }).OneSignal;
+            if (os?.logout) os.logout();
+          } catch { /* non-critical */ }
+        }
       }
     );
 
