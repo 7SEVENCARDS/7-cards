@@ -68,7 +68,7 @@ export const createPremiumCheckout = createServerFn({ method: "POST" })
           email: data.email,
           customer_name: data.name,
           payment_description: "7SEVEN Premium — Monthly",
-          redirect_link: "https://7sevencards.app/premium/success",
+          redirect_link: `${process.env.VITE_APP_URL || "https://7sevencards.app"}/premium/success`,
           pass_charge: false,
         }),
       });
