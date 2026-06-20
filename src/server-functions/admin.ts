@@ -278,6 +278,67 @@ export const adminCreditWallet = createServerFn({ method: "POST" })
     return { success: true };
   });
 
+// ─── Get all gift card exchange rates ────────────────────────────────────────
+export const getAdminRates = createServerFn({ method: "GET" })
+  .validator((d: { adminId: string }) => d)
+  .handler(async ({ data }) => {
+    const db = getServerSupabase();
+    await assertAdmin(db, data.adminId);
+
+    const { data: rates, error } = await db
+      .from("exchange_rates")
+      .select("*")
+      .eq("region", "USA")
+      .order("brand");
+
+    if (error) throw error;
+    return rates ?? [];
+  });
+
+// ─── Update a single gift card rate ──────────────────────────────────────────
+export const updateExchangeRate = createServerFn({ method: "POST" })
+  .validator((d: {
+    adminId: string;
+    brand: string;
+    region: string;
+    ratePerDollar: number;
+  }) => d)
+  .handler(async ({ data }) => {
+    const db = getServerSupabase();
+    await assertAdmin(db, data.adminId);
+
+    if (data.ratePerDollar < 100 || data.ratePerDollar > 10_000) {
+      return { success: false, error: "Rate must be between ₦100 and ₦10,000 per dollar." };
+    }
+
+    // Compute trend vs previous rate
+    const { data: prev } = await db
+      .from("exchange_rates")
+      .select("rate_per_dollar")
+      .eq("brand", data.brand)
+      .eq("region", data.region)
+      .single();
+
+    const prevRate = prev?.rate_per_dollar ? Number(prev.rate_per_dollar) : data.ratePerDollar;
+    const changePct = prevRate > 0 ? ((data.ratePerDollar - prevRate) / prevRate) * 100 : 0;
+    const trend = (changePct >= 0 ? "+" : "") + changePct.toFixed(1) + "%";
+
+    const { error } = await db.from("exchange_rates").upsert(
+      {
+        brand: data.brand,
+        region: data.region,
+        rate_per_dollar: data.ratePerDollar,
+        source: "admin",
+        trend,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "brand,region" }
+    );
+
+    if (error) throw error;
+    return { success: true, trend };
+  });
+
 // ─── Internal: assert admin role ─────────────────────────────────────────────
 async function assertAdmin(db: ReturnType<typeof import("../lib/supabase.server")["getServerSupabase"]>, userId: string) {
   const { data } = await db
