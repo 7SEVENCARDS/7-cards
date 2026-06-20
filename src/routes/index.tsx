@@ -59,6 +59,7 @@ import {
 import { supabase } from "../lib/supabase";
 import { createTrade, verifyGiftCard, processPayout } from "../server-functions/trades";
 import { getKYCStatus } from "../server-functions/kyc";
+import { lookupAccount, addPayoutAccount } from "../server-functions/payout-accounts";
 
 export const Route = createFileRoute("/")({
   component: App,
@@ -1142,6 +1143,31 @@ function MenuItem({
 
 type VState = "scanning" | "valid" | "invalid" | "processing" | "paid";
 
+const NG_BANKS = [
+  { code: "058", name: "GTBank" },
+  { code: "011", name: "First Bank" },
+  { code: "033", name: "UBA" },
+  { code: "057", name: "Zenith Bank" },
+  { code: "044", name: "Access Bank" },
+  { code: "070", name: "Fidelity Bank" },
+  { code: "035", name: "Wema Bank / ALAT" },
+  { code: "076", name: "Polaris Bank" },
+  { code: "032", name: "Union Bank" },
+  { code: "039", name: "Stanbic IBTC" },
+  { code: "050", name: "Ecobank" },
+  { code: "068", name: "Standard Chartered" },
+  { code: "082", name: "Keystone Bank" },
+  { code: "030", name: "Heritage Bank" },
+  { code: "301", name: "Jaiz Bank" },
+  { code: "999991", name: "OPay" },
+  { code: "999992", name: "PalmPay" },
+  { code: "50515",  name: "Moniepoint MFB" },
+  { code: "090110", name: "VFD Microfinance Bank" },
+  { code: "120001", name: "9PSB (9mobile)" },
+  { code: "000013", name: "GTBank (MFB)" },
+  { code: "100004", name: "Opay (MFB)" },
+];
+
 const BRAND_LOGOS = [
   { name: "Apple",       emoji: "🍎", color: "from-slate-700 to-slate-900" },
   { name: "Amazon",      emoji: "📦", color: "from-orange-500 to-yellow-600" },
@@ -1170,6 +1196,35 @@ function VerifyScreen({
   const [transactionRef, setTransactionRef] = useState<string | null>(null);
   const [failureReason, setFailureReason] = useState<string>("");
   const queryClient = useQueryClient();
+  const hasSavedBank = !!payoutAccountNumber && payoutAccountNumber !== "0000000000";
+  const [bankEntry, setBankEntry] = useState({ bankCode: payoutBankCode ?? "", bankName: "", accountNumber: payoutAccountNumber ?? "" });
+  const [resolvedName, setResolvedName] = useState<string | null>(hasSavedBank ? (payoutAccountName ?? null) : null);
+  const [lookingUp, setLookingUp] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [bankConfirmed, setBankConfirmed] = useState(hasSavedBank);
+  const activeBankCode    = bankConfirmed ? bankEntry.bankCode    : (payoutBankCode    ?? "058");
+  const activeBankAccount = bankConfirmed ? bankEntry.accountNumber : (payoutAccountNumber ?? "0000000000");
+  const activeBankName    = bankConfirmed ? (resolvedName ?? bankEntry.bankName) : (payoutAccountName ?? "Account");
+
+  const handleBankLookup = async () => {
+    if (!bankEntry.bankCode || bankEntry.accountNumber.length < 10) return;
+    setLookingUp(true);
+    setLookupError(null);
+    setResolvedName(null);
+    try {
+      const res = await lookupAccount({ data: { bankCode: bankEntry.bankCode, accountNumber: bankEntry.accountNumber } });
+      if ((res as { success: boolean }).success) {
+        const name = (res as { accountName: string }).accountName;
+        setResolvedName(name);
+      } else {
+        setLookupError((res as { error?: string }).error ?? "Could not verify account");
+      }
+    } catch {
+      setLookupError("Account lookup failed — try again");
+    } finally {
+      setLookingUp(false);
+    }
+  };
 
   // ── Real verification on mount ────────────────────────────────────────────
   useEffect(() => {
@@ -1240,9 +1295,9 @@ function VerifyScreen({
           tradeId,
           userId,
           amountNgn,
-          bankCode: payoutBankCode ?? "058",
-          accountNumber: payoutAccountNumber ?? "0000000000",
-          accountName: payoutAccountName ?? "Demo Account",
+          bankCode: activeBankCode,
+          accountNumber: activeBankAccount,
+          accountName: activeBankName,
         },
       });
 
@@ -1257,6 +1312,21 @@ function VerifyScreen({
         queryClient.invalidateQueries({ queryKey: ["xp", userId] });
         queryClient.invalidateQueries({ queryKey: ["portfolio", userId] });
         queryClient.invalidateQueries({ queryKey: ["notifications", userId] });
+        // Save the bank account for next time if it was entered ad-hoc
+        if (!hasSavedBank && bankConfirmed && resolvedName) {
+          const bank = NG_BANKS.find(b => b.code === bankEntry.bankCode);
+          addPayoutAccount({
+            data: {
+              userId,
+              bankCode: bankEntry.bankCode,
+              bankName: bank?.name ?? bankEntry.bankCode,
+              accountNumber: bankEntry.accountNumber,
+              accountName: resolvedName,
+              makeDefault: true,
+            },
+          }).catch(() => {});
+          queryClient.invalidateQueries({ queryKey: ["payout-accounts", userId] });
+        }
         setState("paid");
       } else {
         setFailureReason((result as { reason?: string }).reason ?? "Payout failed");
@@ -1444,12 +1514,94 @@ function VerifyScreen({
       {/* CTA buttons */}
       <div className="px-5 mt-5 space-y-2">
         {state === "valid" && (
-          <button
-            onClick={handlePayout}
-            className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold"
-          >
-            Redeem & Credit Wallet <ChevronRight className="size-5" />
-          </button>
+          <>
+            {/* Bank capture — only shown when user has no saved payout account */}
+            {!bankConfirmed && (
+              <div className="bg-card rounded-3xl border border-border p-5 space-y-4">
+                <div>
+                  <p className="text-sm font-extrabold">Where should we send ₦{amountNgn.toLocaleString()}?</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Enter your bank account to receive funds instantly — no KYC required.</p>
+                </div>
+
+                {/* Bank selector */}
+                <select
+                  value={bankEntry.bankCode}
+                  onChange={(e) => {
+                    const b = NG_BANKS.find(x => x.code === e.target.value);
+                    setBankEntry(prev => ({ ...prev, bankCode: e.target.value, bankName: b?.name ?? "" }));
+                    setResolvedName(null);
+                    setLookupError(null);
+                  }}
+                  className="w-full bg-secondary rounded-xl px-4 py-3 text-sm outline-none"
+                >
+                  <option value="">Select your bank…</option>
+                  {NG_BANKS.map(b => <option key={b.code} value={b.code}>{b.name}</option>)}
+                </select>
+
+                {/* Account number */}
+                <div className="flex gap-2">
+                  <input
+                    type="tel"
+                    inputMode="numeric"
+                    maxLength={10}
+                    placeholder="10-digit account number"
+                    value={bankEntry.accountNumber}
+                    onChange={(e) => {
+                      setBankEntry(prev => ({ ...prev, accountNumber: e.target.value.replace(/\D/g, "") }));
+                      setResolvedName(null);
+                      setLookupError(null);
+                    }}
+                    className="flex-1 bg-secondary rounded-xl px-4 py-3 text-sm outline-none font-mono"
+                  />
+                  <button
+                    disabled={lookingUp || !bankEntry.bankCode || bankEntry.accountNumber.length < 10}
+                    onClick={handleBankLookup}
+                    className="px-4 py-3 rounded-xl bg-gold/15 text-gold text-sm font-bold disabled:opacity-40"
+                  >
+                    {lookingUp ? <Loader2 className="size-4 animate-spin" /> : "Verify"}
+                  </button>
+                </div>
+
+                {/* Resolved name */}
+                {resolvedName && (
+                  <div className="flex items-center justify-between bg-cyan/10 rounded-xl px-4 py-3">
+                    <div>
+                      <p className="text-[10px] text-muted-foreground font-bold uppercase">Account Name</p>
+                      <p className="text-sm font-extrabold text-cyan">{resolvedName}</p>
+                    </div>
+                    <button
+                      onClick={() => setBankConfirmed(true)}
+                      className="bg-cyan text-jungle-deep font-extrabold text-xs px-4 py-2 rounded-xl"
+                    >
+                      Confirm
+                    </button>
+                  </div>
+                )}
+
+                {lookupError && (
+                  <p className="text-xs text-red-400 font-semibold">{lookupError}</p>
+                )}
+              </div>
+            )}
+
+            {/* Payout CTA — only shown once bank is confirmed */}
+            {bankConfirmed && (
+              <>
+                <div className="text-center text-xs text-muted-foreground">
+                  Paying to <span className="font-bold text-foreground">{resolvedName ?? payoutAccountName}</span>
+                  <button onClick={() => { setBankConfirmed(false); setResolvedName(null); }} className="ml-2 text-cyan underline">
+                    Change
+                  </button>
+                </div>
+                <button
+                  onClick={handlePayout}
+                  className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold"
+                >
+                  Receive ₦{amountNgn.toLocaleString()} Now <ChevronRight className="size-5" />
+                </button>
+              </>
+            )}
+          </>
         )}
         {state === "invalid" && (
           <button
