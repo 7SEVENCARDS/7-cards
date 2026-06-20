@@ -35,17 +35,6 @@ export const createTrade = createServerFn({ method: "POST" })
     const userId = await requireUser();
     const db = getServerSupabase();
 
-    // KYC gate
-    const { data: profile } = await db
-      .from("profiles")
-      .select("kyc_status")
-      .eq("id", userId)
-      .single();
-
-    if (!profile || profile.kyc_status === "pending") {
-      throw new Error("KYC_REQUIRED: Please complete identity verification before trading.");
-    }
-
     const amountNgn = Math.round(data.amountUsd * data.exchangeRate);
 
     const { data: trade, error } = await db
