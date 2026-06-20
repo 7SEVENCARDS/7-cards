@@ -1075,3 +1075,102 @@ export const adminPromoteVendorTier = createServerFn({ method: "POST" })
 
     return { ok: true, vendor };
   });
+
+// ─── Get My Badges ─────────────────────────────────────────────────────────────
+// Computed entirely from existing data — no separate badges table needed.
+export const getMyBadges = createServerFn({ method: "GET" })
+  .handler(async () => {
+    const { userId } = await requireVendorAuth();
+    const db = getDb();
+    const vendor = await getVendorId(db, userId);
+    if (!vendor) throw new Error("Not a vendor");
+
+    const [{ data: v }, { data: assignments }] = await Promise.all([
+      db.from("vendors").select("total_redeemed, tier, created_at").eq("id", vendor.id).single(),
+      db.from("vendor_card_assignments")
+        .select("status, created_at, completed_at, failed_at")
+        .eq("vendor_id", vendor.id)
+        .limit(500),
+    ]);
+
+    const totalRedeemed  = (v?.total_redeemed as number) ?? 0;
+    const tier           = (v?.tier as string) ?? "standard";
+    const createdAt      = v?.created_at ? new Date(v.created_at as string) : new Date();
+    const ageMs          = Date.now() - createdAt.getTime();
+    const ageDays        = ageMs / 86_400_000;
+
+    const completed = (assignments ?? []).filter(a => a.status === "redeemed" && a.completed_at);
+    const failed    = (assignments ?? []).filter(a => a.status === "failed");
+
+    // Speed Demon — redeemed within 60 min of assignment
+    const speedRedemptions = completed.filter(a => {
+      const ms = new Date(a.completed_at!).getTime() - new Date(a.created_at).getTime();
+      return ms <= 60 * 60 * 1000;
+    });
+
+    // Night Owl — completed between midnight and 5am local
+    const nightCompletions = completed.filter(a => {
+      const hour = new Date(a.completed_at!).getUTCHours();
+      return hour >= 0 && hour < 5;
+    });
+
+    const badges: Array<{
+      id: string; emoji: string; name: string; description: string; earned: boolean; earnedAt?: string
+    }> = [
+      {
+        id: "rising_star",
+        emoji: "🌟", name: "Rising Star",
+        description: "Redeemed 10+ cards",
+        earned: totalRedeemed >= 10,
+      },
+      {
+        id: "half_century",
+        emoji: "🎯", name: "Half Century",
+        description: "Redeemed 50+ cards",
+        earned: totalRedeemed >= 50,
+      },
+      {
+        id: "century_club",
+        emoji: "💯", name: "Century Club",
+        description: "Redeemed 100+ cards",
+        earned: totalRedeemed >= 100,
+      },
+      {
+        id: "speed_demon",
+        emoji: "⚡", name: "Speed Demon",
+        description: "Redeemed 5+ cards within 1 hour of assignment",
+        earned: speedRedemptions.length >= 5,
+      },
+      {
+        id: "reliable",
+        emoji: "🛡️", name: "Reliable",
+        description: "Zero failed card redemptions",
+        earned: totalRedeemed >= 5 && failed.length === 0,
+      },
+      {
+        id: "night_owl",
+        emoji: "🦉", name: "Night Owl",
+        description: "Completed 3+ cards between midnight and 5am",
+        earned: nightCompletions.length >= 3,
+      },
+      {
+        id: "veteran",
+        emoji: "🏅", name: "Veteran",
+        description: "Active vendor for 90+ days",
+        earned: ageDays >= 90,
+      },
+      {
+        id: "top_tier",
+        emoji: "👑", name: "Top Tier",
+        description: "Promoted to Premium vendor",
+        earned: tier === "premium",
+      },
+    ];
+
+    return {
+      earned: badges.filter(b => b.earned),
+      locked: badges.filter(b => !b.earned),
+      totalRedeemed,
+      tier,
+    };
+  });

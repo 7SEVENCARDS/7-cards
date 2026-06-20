@@ -21,6 +21,7 @@ import {
   getActiveVirtualAccounts,
   requestWithdrawal,
   getMyWithdrawals,
+  getMyBadges,
 } from "../server-functions/vendors";
 
 export const Route = createFileRoute("/vendor")({
@@ -713,6 +714,8 @@ function WalletTab() {
 }
 
 // ─── Profile Tab ──────────────────────────────────────────────────────────────
+type BadgeItem = { id: string; emoji: string; name: string; description: string; earned: boolean };
+
 function ProfileTab({ vendor, onLogout }: { vendor: VendorSession; onLogout: () => void }) {
   const [form, setForm] = useState({
     businessName: vendor.business_name ?? "",
@@ -726,6 +729,13 @@ function ProfileTab({ vendor, onLogout }: { vendor: VendorSession; onLogout: () 
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [badges, setBadges] = useState<{ earned: BadgeItem[]; locked: BadgeItem[] } | null>(null);
+
+  useEffect(() => {
+    getMyBadges({ data: {} })
+      .then(r => setBadges(r as { earned: BadgeItem[]; locked: BadgeItem[] }))
+      .catch(() => {});
+  }, []);
 
   const handleSave = async () => {
     setSaving(true);
@@ -745,6 +755,69 @@ function ProfileTab({ vendor, onLogout }: { vendor: VendorSession; onLogout: () 
 
   return (
     <div className="p-6 space-y-6">
+
+      {/* ── Badges ── */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-base">🏆</span>
+          <h3 className="text-sm font-extrabold">Your Badges</h3>
+          {badges && (
+            <span className="ml-auto text-[10px] text-muted-foreground font-semibold">
+              {badges.earned.length}/{badges.earned.length + badges.locked.length} earned
+            </span>
+          )}
+        </div>
+
+        {!badges ? (
+          <div className="flex justify-center py-4">
+            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {badges.earned.length > 0 && (
+              <div className="grid grid-cols-2 gap-2">
+                {badges.earned.map(b => (
+                  <div key={b.id} className="flex items-start gap-2.5 rounded-2xl border border-gold/25 bg-gold/5 p-3">
+                    <span className="text-xl shrink-0 mt-0.5">{b.emoji}</span>
+                    <div className="min-w-0">
+                      <p className="text-xs font-extrabold text-gold leading-tight">{b.name}</p>
+                      <p className="text-[10px] text-muted-foreground leading-snug mt-0.5">{b.description}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {badges.earned.length === 0 && (
+              <div className="text-center py-5 rounded-2xl border border-border/40 bg-secondary/50">
+                <p className="text-2xl mb-1">🎖️</p>
+                <p className="text-xs font-bold text-muted-foreground">No badges yet</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Start redeeming cards to earn them</p>
+              </div>
+            )}
+
+            {badges.locked.length > 0 && (
+              <div>
+                <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-2">Locked</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {badges.locked.map(b => (
+                    <div key={b.id} className="flex items-start gap-2.5 rounded-2xl border border-border/40 bg-secondary/40 p-3 opacity-50">
+                      <span className="text-xl shrink-0 mt-0.5 grayscale">{b.emoji}</span>
+                      <div className="min-w-0">
+                        <p className="text-xs font-extrabold leading-tight">{b.name}</p>
+                        <p className="text-[10px] text-muted-foreground leading-snug mt-0.5">{b.description}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="h-px bg-border/60" />
+
       <div>
         <h3 className="text-base font-extrabold">Business Info</h3>
         <p className="text-xs text-muted-foreground mt-0.5">Update your vendor profile details</p>
