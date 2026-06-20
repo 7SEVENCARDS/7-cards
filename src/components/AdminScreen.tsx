@@ -18,6 +18,10 @@ import {
   Ban,
   Check,
   Wallet,
+  DollarSign,
+  Pencil,
+  Save,
+  X,
 } from "lucide-react";
 import {
   getAdminStats,
@@ -29,9 +33,11 @@ import {
   rejectManualTrade,
   getAdminTrades,
   adminCreditWallet,
+  getAdminRates,
+  updateExchangeRate,
 } from "../server-functions/admin";
 
-type AdminTab = "stats" | "kyc" | "review" | "trades" | "credit";
+type AdminTab = "stats" | "kyc" | "review" | "trades" | "rates" | "credit";
 
 type Props = {
   adminId: string;
@@ -476,6 +482,165 @@ function TradesTab({ adminId }: { adminId: string }) {
   );
 }
 
+// ─── Rates Tab ───────────────────────────────────────────────────────────────
+const BRAND_EMOJI: Record<string, string> = {
+  Apple: "🍎", Amazon: "📦", Steam: "🎮", "Google Play": "▶️",
+  Xbox: "🟢", PlayStation: "🎯", Netflix: "🎬", Spotify: "🎵",
+};
+
+function RatesTab({ adminId }: { adminId: string }) {
+  type Rate = { id: string; brand: string; region: string; rate_per_dollar: number; trend: string; updated_at: string };
+  const [rates, setRates] = useState<Rate[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState<{ brand: string; region: string; value: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState<{ brand: string; ok: boolean; msg: string } | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await getAdminRates({ data: { adminId } });
+      setRates(rows as Rate[]);
+    } catch { setRates([]); } finally { setLoading(false); }
+  }, [adminId]);
+
+  if (!rates && !loading) load();
+  if (loading) return <CenterLoader />;
+
+  const startEdit = (r: Rate) =>
+    setEditing({ brand: r.brand, region: r.region, value: String(r.rate_per_dollar) });
+
+  const save = async () => {
+    if (!editing) return;
+    const parsed = parseInt(editing.value.replace(/[^\d]/g, ""), 10);
+    if (!parsed || parsed < 100) {
+      setFeedback({ brand: editing.brand, ok: false, msg: "Enter a valid rate (min ₦100)" });
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await updateExchangeRate({
+        data: { adminId, brand: editing.brand, region: editing.region, ratePerDollar: parsed },
+      });
+      if (res.success) {
+        setRates((prev) =>
+          (prev ?? []).map((r) =>
+            r.brand === editing.brand && r.region === editing.region
+              ? { ...r, rate_per_dollar: parsed, trend: res.trend ?? r.trend, updated_at: new Date().toISOString() }
+              : r
+          )
+        );
+        setFeedback({ brand: editing.brand, ok: true, msg: `Saved ₦${parsed.toLocaleString()}/$ ${res.trend}` });
+        setEditing(null);
+      } else {
+        setFeedback({ brand: editing.brand, ok: false, msg: res.error ?? "Save failed" });
+      }
+    } catch (e: unknown) {
+      setFeedback({ brand: editing.brand, ok: false, msg: e instanceof Error ? e.message : "Error" });
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="px-5 pt-4 pb-10 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground font-semibold uppercase tracking-widest">
+          Gift Card Rates (₦ per $1)
+        </p>
+        <button onClick={load} className="text-xs text-cyan flex items-center gap-1">
+          <RefreshCw className="size-3" /> Refresh
+        </button>
+      </div>
+
+      <div className="bg-secondary/50 border border-white/5 rounded-2xl px-4 py-3 text-xs text-muted-foreground">
+        Tap the pencil icon to edit a rate. Changes take effect immediately for all users.
+      </div>
+
+      {(!rates || rates.length === 0) ? (
+        <EmptyState icon={DollarSign} message="No rates found — run migration 003 first" />
+      ) : (
+        rates.map((r) => {
+          const isEditing = editing?.brand === r.brand && editing?.region === r.region;
+          const thisFeedback = feedback?.brand === r.brand ? feedback : null;
+          const trendUp = r.trend?.startsWith("+") && r.trend !== "+0.0%";
+          const trendDown = r.trend?.startsWith("-");
+
+          return (
+            <div key={r.id} className="bg-gradient-card rounded-2xl border border-white/5 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="text-2xl shrink-0">{BRAND_EMOJI[r.brand] ?? "🎁"}</span>
+                  <div className="min-w-0">
+                    <p className="font-bold text-sm truncate">{r.brand}</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      Updated {new Date(r.updated_at).toLocaleDateString("en-NG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {!isEditing && (
+                    <>
+                      <div className="text-right">
+                        <p className="font-extrabold text-sm text-cyan">
+                          ₦{Number(r.rate_per_dollar).toLocaleString()}
+                        </p>
+                        <p className={`text-[10px] font-semibold ${trendUp ? "text-green-400" : trendDown ? "text-red-400" : "text-muted-foreground"}`}>
+                          {r.trend ?? "+0.0%"}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => startEdit(r)}
+                        className="size-8 rounded-xl bg-secondary flex items-center justify-center"
+                      >
+                        <Pencil className="size-3.5 text-muted-foreground" />
+                      </button>
+                    </>
+                  )}
+
+                  {isEditing && (
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center bg-secondary rounded-xl px-3 py-2 gap-1">
+                        <span className="text-xs text-muted-foreground">₦</span>
+                        <input
+                          autoFocus
+                          type="number"
+                          className="w-20 bg-transparent text-sm font-bold outline-none text-right"
+                          value={editing.value}
+                          onChange={(e) => setEditing({ ...editing, value: e.target.value })}
+                          onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(null); }}
+                        />
+                      </div>
+                      <button
+                        onClick={save}
+                        disabled={saving}
+                        className="size-8 rounded-xl bg-cyan/20 flex items-center justify-center"
+                      >
+                        {saving ? <Loader2 className="size-3.5 text-cyan animate-spin" /> : <Save className="size-3.5 text-cyan" />}
+                      </button>
+                      <button
+                        onClick={() => { setEditing(null); setFeedback(null); }}
+                        className="size-8 rounded-xl bg-secondary flex items-center justify-center"
+                      >
+                        <X className="size-3.5 text-muted-foreground" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {thisFeedback && (
+                <p className={`text-xs mt-2 font-semibold ${thisFeedback.ok ? "text-cyan" : "text-red-400"}`}>
+                  {thisFeedback.ok ? "✓ " : "✗ "}{thisFeedback.msg}
+                </p>
+              )}
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
 // ─── Credit Wallet Tab ────────────────────────────────────────────────────────
 function CreditTab({ adminId }: { adminId: string }) {
   const [userId, setUserId] = useState("");
@@ -574,6 +739,7 @@ export function AdminScreen({ adminId, onBack }: Props) {
     { key: "kyc",    label: "KYC",    icon: ShieldCheck },
     { key: "review", label: "Review", icon: Eye },
     { key: "trades", label: "Trades", icon: TrendingUp },
+    { key: "rates",  label: "Rates",  icon: DollarSign },
     { key: "credit", label: "Credit", icon: Wallet },
   ];
 
@@ -617,6 +783,7 @@ export function AdminScreen({ adminId, onBack }: Props) {
         {tab === "kyc"    && <KYCTab    adminId={adminId} />}
         {tab === "review" && <ReviewTab adminId={adminId} />}
         {tab === "trades" && <TradesTab adminId={adminId} />}
+        {tab === "rates"  && <RatesTab  adminId={adminId} />}
         {tab === "credit" && <CreditTab adminId={adminId} />}
       </div>
     </div>
