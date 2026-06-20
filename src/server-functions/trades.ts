@@ -168,7 +168,7 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
 // the trade ID. Amount, bank code, account number, and account name are never
 // accepted from the client; this prevents parameter-tampering attacks.
 export const processPayout = createServerFn({ method: "POST" })
-  .validator((d: { tradeId: string }) => d)
+  .validator((d: { tradeId: string; payoutMethod?: "bank" | "wallet" }) => d)
   .handler(async ({ data }) => {
     const userId = await requireUser();
     const db = getServerSupabase();
@@ -190,6 +190,39 @@ export const processPayout = createServerFn({ method: "POST" })
       return { success: false, reason: `Trade is not verified (status: ${trade.status}).` };
     }
 
+    const amountNgn = Number(trade.amount_ngn);
+    const payoutMethod = data.payoutMethod ?? "bank";
+
+    // ── wallet credit path (no Squad payout) ──────────────────────────────
+    if (payoutMethod === "wallet") {
+      await db.from("trades").update({ status: "processing", payout_method: "wallet" }).eq("id", data.tradeId);
+      const xp = 50 + (amountNgn > 100_000 ? 25 : 0);
+      await db.rpc("increment_wallet_balance", { p_user_id: userId, p_currency: "NGN", p_amount: amountNgn });
+      await db.rpc("award_trade_xp", { p_user_id: userId, p_xp: xp });
+      await db.from("trades").update({
+        status: "paid", xp_earned: xp,
+        settled_at: new Date().toISOString(), payout_method: "wallet",
+      }).eq("id", data.tradeId);
+      await db.from("notifications").insert({
+        user_id: userId, title: "Wallet Credited! 💰",
+        message: `₦${amountNgn.toLocaleString()} has been added to your 7SEVEN wallet.`,
+        type: "success",
+      });
+      try {
+        const { pushNotify } = await import("../lib/onesignal");
+        pushNotify(userId, "Wallet Credited! 💰",
+          `₦${amountNgn.toLocaleString()} is in your wallet — ready to swap to crypto.`,
+          { tradeId: data.tradeId, type: "wallet_credit" }
+        );
+      } catch { /* non-critical */ }
+      try {
+        const { creditReferrerCommissionFn } = await import("../lib/db-helpers");
+        await creditReferrerCommissionFn(db, userId, data.tradeId, amountNgn);
+      } catch { /* non-critical */ }
+      return { success: true, transactionRef: "WALLET-" + data.tradeId, walletCredit: true };
+    }
+
+    // ── Bank transfer path (Squad) ────────────────────────────────────────
     // Fetch the user's default payout account from DB — never from client
     const { data: payoutAccount } = await db
       .from("payout_accounts")
@@ -202,10 +235,8 @@ export const processPayout = createServerFn({ method: "POST" })
       return { success: false, reason: "No default payout account found. Please add a bank account first." };
     }
 
-    const amountNgn = Number(trade.amount_ngn);
-
     // Mark as processing
-    await db.from("trades").update({ status: "processing" }).eq("id", data.tradeId);
+    await db.from("trades").update({ status: "processing", payout_method: "bank" }).eq("id", data.tradeId);
 
     try {
       const { initiatePayout } = await import("../lib/squadco");

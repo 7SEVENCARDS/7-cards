@@ -381,3 +381,50 @@ export const bulkUpdateRates = createServerFn({ method: "POST" })
       results,
     };
   });
+
+// ─── Spread revenue aggregation (admin only) ──────────────────────────────────
+export const getSpreadRevenue = createServerFn({ method: "GET" })
+  .inputValidator((d: { days?: number }) => d)
+  .handler(async ({ data }) => {
+    const { requireAdmin } = await import("../lib/auth-server");
+    await requireAdmin();
+    const db = getServerSupabase();
+    const days = data.days ?? 7;
+    const since = new Date(Date.now() - days * 86_400_000).toISOString();
+
+    const { data: rows, error } = await db
+      .from("crypto_transactions")
+      .select("created_at, meta, from_currency, to_currency, from_amount, to_amount")
+      .eq("type", "swap")
+      .eq("status", "completed")
+      .gte("created_at", since)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    let totalFee = 0;
+    const dailyMap: Record<string, number> = {};
+    for (const row of rows ?? []) {
+      const fee = Number((row.meta as Record<string, unknown>)?.company_fee ?? 0);
+      totalFee += fee;
+      const day = row.created_at.slice(0, 10);
+      dailyMap[day] = (dailyMap[day] ?? 0) + fee;
+    }
+
+    const daily = Object.entries(dailyMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, fee]) => ({ date, fee }));
+
+    return {
+      totalFee,
+      daily,
+      recentSwaps: (rows ?? []).slice(0, 20).map((r) => ({
+        date: r.created_at,
+        from: r.from_currency,
+        to: r.to_currency,
+        fromAmount: r.from_amount,
+        toAmount: r.to_amount,
+        fee: Number((r.meta as Record<string, unknown>)?.company_fee ?? 0),
+      })),
+    };
+  });

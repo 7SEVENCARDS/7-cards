@@ -2,6 +2,7 @@ import React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertCircle,
   ArrowDownLeft,
   ArrowUpRight,
   Bell,
@@ -58,6 +59,7 @@ import {
 } from "../hooks/useAppData";
 import { supabase } from "../lib/supabase";
 import { createTrade, verifyGiftCard, processPayout } from "../server-functions/trades";
+import { getCryptoDepositAddress, initiateCryptoSwap, initiateCryptoSend } from "../server-functions/crypto";
 import { getKYCStatus } from "../server-functions/kyc";
 import { lookupAccount, addPayoutAccount } from "../server-functions/payout-accounts";
 
@@ -947,6 +949,7 @@ function WalletScreen({
   wallets: WalletData[]; portfolio?: PortfolioData; recentTrades: TradeRow[]; onViewHistory: () => void;
 }) {
   const [activeTab, setActiveTab] = useState(0);
+  const [walletModal, setWalletModal] = useState<null | "receive" | "send" | "swap">(null);
 
   const totalNgn = portfolio?.totalNgn ?? wallets.reduce((s, w) => s + (w.currency === "NGN" ? Number(w.balance) : 0), 0);
 
@@ -963,9 +966,9 @@ function WalletScreen({
           </h2>
 
           <div className="mt-5 grid grid-cols-3 gap-2">
-            <CircleBtn icon={Plus} label="Add" />
-            <CircleBtn icon={ArrowUpRight} label="Send" />
-            <CircleBtn icon={ArrowDownLeft} label="Swap" />
+            <CircleBtn icon={Plus} label="Add" onClick={() => setWalletModal("receive")} />
+            <CircleBtn icon={ArrowUpRight} label="Send" onClick={() => setWalletModal("send")} />
+            <CircleBtn icon={ArrowDownLeft} label="Swap" onClick={() => setWalletModal("swap")} />
           </div>
         </div>
       </header>
@@ -1045,13 +1048,17 @@ function WalletScreen({
           Rewards coming soon
         </div>
       )}
+
+      {walletModal === "receive" && <ReceiveModal wallets={wallets} onClose={() => setWalletModal(null)} />}
+      {walletModal === "send"    && <SendModal    wallets={wallets} onClose={() => setWalletModal(null)} />}
+      {walletModal === "swap"    && <SwapModal    wallets={wallets} onClose={() => setWalletModal(null)} />}
     </div>
   );
 }
 
-function CircleBtn({ icon: Icon, label }: { icon: React.ComponentType<{ className?: string }>; label: string }) {
+function CircleBtn({ icon: Icon, label, onClick }: { icon: React.ComponentType<{ className?: string }>; label: string; onClick?: () => void }) {
   return (
-    <button className="flex flex-col items-center gap-1.5">
+    <button onClick={onClick} className="flex flex-col items-center gap-1.5">
       <div className="size-11 rounded-full bg-white/10 backdrop-blur grid place-items-center border border-white/15">
         <Icon className="size-5 text-white" />
       </div>
@@ -1269,6 +1276,7 @@ function VerifyScreen({
   const [lookingUp, setLookingUp] = useState(false);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [bankConfirmed, setBankConfirmed] = useState(hasSavedBank);
+  const [payoutTo, setPayoutTo] = useState<"bank" | "wallet">("bank");
   const activeBankCode    = bankConfirmed ? bankEntry.bankCode    : (payoutBankCode    ?? "058");
   const activeBankAccount = bankConfirmed ? bankEntry.accountNumber : (payoutAccountNumber ?? "0000000000");
   const activeBankName    = bankConfirmed ? (resolvedName ?? bankEntry.bankName) : (payoutAccountName ?? "Account");
@@ -1357,7 +1365,7 @@ function VerifyScreen({
 
     try {
       const result = await processPayout({
-        data: { tradeId },
+        data: { tradeId, payoutMethod: payoutTo },
       });
 
       clearInterval(progressInterval);
@@ -1573,8 +1581,39 @@ function VerifyScreen({
       <div className="px-5 mt-5 space-y-2">
         {state === "valid" && (
           <>
-            {/* Bank capture — only shown when user has no saved payout account */}
-            {!bankConfirmed && (
+            {/* Payout method selector */}
+            <div className="flex gap-1 bg-secondary rounded-2xl p-1">
+              <button
+                onClick={() => setPayoutTo("bank")}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition ${payoutTo === "bank" ? "bg-gold text-jungle-deep" : "text-muted-foreground"}`}
+              >
+                🏦 Pay to Bank
+              </button>
+              <button
+                onClick={() => setPayoutTo("wallet")}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition ${payoutTo === "wallet" ? "bg-cyan/20 text-cyan border border-cyan/30" : "text-muted-foreground"}`}
+              >
+                💰 Keep in Wallet
+              </button>
+            </div>
+
+            {payoutTo === "wallet" && (
+              <div className="space-y-3">
+                <div className="bg-cyan/10 border border-cyan/20 rounded-2xl p-4 space-y-1">
+                  <p className="text-xs font-extrabold text-cyan">Credit to your 7SEVEN wallet</p>
+                  <p className="text-[11px] text-muted-foreground">₦{amountNgn.toLocaleString()} will be added instantly — no bank account needed. Use it to swap to crypto or withdraw later.</p>
+                </div>
+                <button
+                  onClick={handlePayout}
+                  className="w-full bg-gradient-to-r from-cyan to-teal-500 text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-jungle"
+                >
+                  Add ₦{amountNgn.toLocaleString()} to Wallet <Wallet className="size-5" />
+                </button>
+              </div>
+            )}
+
+            {/* Bank capture — only shown when bank method selected and no saved account */}
+            {payoutTo === "bank" && !bankConfirmed && (
               <div className="bg-card rounded-3xl border border-border p-5 space-y-4">
                 <div>
                   <p className="text-sm font-extrabold">Where should we send ₦{amountNgn.toLocaleString()}?</p>
@@ -1643,7 +1682,7 @@ function VerifyScreen({
             )}
 
             {/* Payout CTA — only shown once bank is confirmed */}
-            {bankConfirmed && (
+            {payoutTo === "bank" && bankConfirmed && (
               <>
                 <div className="text-center text-xs text-muted-foreground">
                   Paying to <span className="font-bold text-foreground">{resolvedName ?? payoutAccountName}</span>
@@ -1836,5 +1875,318 @@ function BottomNav({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
         })}
       </div>
     </nav>
+  );
+}
+
+/* ─────────────────────── CRYPTO WALLET MODALS ───────────────────────────── */
+
+const CRYPTO_LIST = [
+  { symbol: "BTC",  name: "Bitcoin",   color: "bg-orange-500 text-white", icon: "₿" },
+  { symbol: "ETH",  name: "Ethereum",  color: "bg-indigo-500 text-white", icon: "Ξ" },
+  { symbol: "USDT", name: "Tether",    color: "bg-emerald-500 text-white", icon: "₮" },
+  { symbol: "USDC", name: "USD Coin",  color: "bg-blue-500 text-white",   icon: "$" },
+] as const;
+
+function ReceiveModal({ wallets, onClose }: { wallets: WalletData[]; onClose: () => void }) {
+  const [selected, setSelected] = React.useState("BTC");
+  const [copied, setCopied] = React.useState(false);
+
+  const { data: addrData, isLoading } = useQuery({
+    queryKey: ["deposit-address", selected],
+    queryFn: () => getCryptoDepositAddress({ data: { currency: selected } }),
+    staleTime: 10 * 60 * 1000,
+  });
+
+  const address = addrData?.address ?? "";
+  const network = addrData?.network ?? selected;
+  const isDemo  = addrData?.demo;
+
+  const handleCopy = () => {
+    if (!address) return;
+    navigator.clipboard?.writeText(address).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-background flex flex-col max-w-[480px] mx-auto">
+      <header className="px-5 pt-12 pb-4 flex items-center gap-3">
+        <button onClick={onClose} className="size-10 rounded-full bg-card border border-border grid place-items-center">
+          <ChevronLeft className="size-5" />
+        </button>
+        <div>
+          <p className="text-lg font-extrabold">Receive Crypto</p>
+          <p className="text-xs text-muted-foreground">Send crypto to your 7SEVEN wallet</p>
+        </div>
+      </header>
+      <div className="px-5 space-y-4 overflow-y-auto pb-8">
+        <div>
+          <p className="text-xs font-bold text-muted-foreground mb-2 uppercase tracking-wide">Select currency</p>
+          <div className="grid grid-cols-4 gap-2">
+            {CRYPTO_LIST.map((cc) => (
+              <button key={cc.symbol} onClick={() => setSelected(cc.symbol)}
+                className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl border-2 transition ${selected === cc.symbol ? "border-gold bg-gold/10" : "border-border bg-card"}`}>
+                <div className={`size-9 rounded-xl grid place-items-center font-extrabold text-base ${cc.color}`}>{cc.icon}</div>
+                <span className="text-[10px] font-bold">{cc.symbol}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        {(() => {
+          const w = wallets.find(x => x.currency === selected);
+          if (!w) return null;
+          return (
+            <div className="bg-card rounded-2xl p-3 border border-border flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Current balance</span>
+              <span className="text-sm font-bold">{Number(w.balance).toFixed(6)} {selected}</span>
+            </div>
+          );
+        })()}
+        <div className="bg-card rounded-3xl border border-border p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-extrabold">Your {selected} Address</p>
+            <span className="text-[10px] bg-secondary px-2 py-0.5 rounded-full text-muted-foreground font-semibold">{network}</span>
+          </div>
+          {isLoading ? (
+            <div className="h-10 bg-secondary rounded-xl animate-pulse" />
+          ) : address ? (
+            <div className="bg-secondary rounded-2xl p-3 flex items-center gap-2">
+              <p className="text-xs font-mono flex-1 break-all text-foreground leading-relaxed">{address}</p>
+              <button onClick={handleCopy}
+                className={`size-9 rounded-xl grid place-items-center shrink-0 transition ${copied ? "bg-cyan/20 text-cyan" : "bg-card text-muted-foreground"}`}>
+                {copied ? <CheckCircle2 className="size-4" /> : <Copy className="size-4" />}
+              </button>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">Address unavailable</p>
+          )}
+          {isDemo && (
+            <div className="flex items-start gap-2 p-3 rounded-xl bg-gold/10 border border-gold/30">
+              <AlertCircle className="size-4 text-gold shrink-0 mt-0.5" />
+              <p className="text-[11px] text-muted-foreground">Demo address — connect your Busha API key for your real deposit address.</p>
+            </div>
+          )}
+          <p className="text-[11px] text-muted-foreground">Send only {selected} on the {network} network. Wrong network = permanent loss.</p>
+        </div>
+        <div className="bg-card rounded-2xl p-4 border border-border">
+          <p className="text-xs font-bold mb-1">Receive NGN</p>
+          <p className="text-[11px] text-muted-foreground">Sell a gift card to credit NGN instantly, or link a bank account for transfers.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SendModal({ wallets, onClose }: { wallets: WalletData[]; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [selected, setSelected] = React.useState("BTC");
+  const [amount, setAmount] = React.useState("");
+  const [address, setAddress] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [result, setResult] = React.useState<null | { ok: boolean; msg: string }>(null);
+
+  const wallet = wallets.find(w => w.currency === selected);
+  const balance = Number(wallet?.balance ?? 0);
+  const parsedAmount = parseFloat(amount) || 0;
+
+  const handleSend = async () => {
+    if (!parsedAmount || !address.trim() || parsedAmount > balance) return;
+    setLoading(true); setResult(null);
+    try {
+      const res = await initiateCryptoSend({ data: { currency: selected, amount: parsedAmount, address: address.trim() } });
+      if ((res as { success: boolean }).success) {
+        queryClient.invalidateQueries({ queryKey: ["wallets"] });
+        queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+        setResult({ ok: true, msg: `${parsedAmount} ${selected} sent!${(res as { demo?: boolean }).demo ? " (demo)" : ""}` });
+        setAmount(""); setAddress("");
+      } else {
+        const reason = (res as { reason?: string }).reason ?? "Send failed";
+        setResult({ ok: false, msg: reason === "INSUFFICIENT_BALANCE" ? "Insufficient balance" : reason === "KYC_REQUIRED" ? "Complete KYC to send crypto" : reason });
+      }
+    } catch { setResult({ ok: false, msg: "Send failed — try again" }); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-background flex flex-col max-w-[480px] mx-auto">
+      <header className="px-5 pt-12 pb-4 flex items-center gap-3">
+        <button onClick={onClose} className="size-10 rounded-full bg-card border border-border grid place-items-center">
+          <ChevronLeft className="size-5" />
+        </button>
+        <div>
+          <p className="text-lg font-extrabold">Send Crypto</p>
+          <p className="text-xs text-muted-foreground">Withdraw to an external wallet</p>
+        </div>
+      </header>
+      <div className="px-5 space-y-4 overflow-y-auto pb-8">
+        <div className="grid grid-cols-4 gap-2">
+          {CRYPTO_LIST.map((cc) => {
+            const w = wallets.find(x => x.currency === cc.symbol);
+            return (
+              <button key={cc.symbol} onClick={() => setSelected(cc.symbol)}
+                className={`flex flex-col items-center gap-1 p-2.5 rounded-2xl border-2 transition ${selected === cc.symbol ? "border-gold bg-gold/10" : "border-border bg-card"}`}>
+                <div className={`size-8 rounded-xl grid place-items-center font-extrabold text-sm ${cc.color}`}>{cc.icon}</div>
+                <span className="text-[9px] font-bold">{cc.symbol}</span>
+                <span className="text-[9px] text-muted-foreground">{Number(w?.balance ?? 0).toFixed(4)}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="bg-card rounded-2xl border border-border p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-bold text-muted-foreground">Amount</p>
+            <button onClick={() => setAmount(String(balance))} className="text-[11px] text-gold font-bold">Max: {balance.toFixed(6)} {selected}</button>
+          </div>
+          <div className="flex items-center gap-2 bg-secondary rounded-xl px-4 py-3">
+            <input type="number" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)}
+              className="flex-1 bg-transparent text-lg font-extrabold outline-none" />
+            <span className="text-sm font-bold text-muted-foreground">{selected}</span>
+          </div>
+          {parsedAmount > balance && <p className="text-[11px] text-pink font-semibold">Exceeds available balance</p>}
+        </div>
+        <div className="bg-card rounded-2xl border border-border p-4 space-y-2">
+          <p className="text-xs font-bold text-muted-foreground">Recipient Address</p>
+          <textarea placeholder="Paste wallet address here…" value={address} onChange={(e) => setAddress(e.target.value)} rows={2}
+            className="w-full bg-secondary rounded-xl px-4 py-3 text-sm font-mono outline-none resize-none" />
+        </div>
+        {result && (
+          <div className={`flex items-start gap-2 p-3 rounded-xl border ${result.ok ? "bg-cyan/10 border-cyan/30 text-cyan" : "bg-pink/10 border-pink/30 text-pink"}`}>
+            {result.ok ? <CheckCircle2 className="size-4 shrink-0 mt-0.5" /> : <XCircle className="size-4 shrink-0 mt-0.5" />}
+            <p className="text-xs font-semibold">{result.msg}</p>
+          </div>
+        )}
+        <button onClick={handleSend} disabled={loading || !parsedAmount || parsedAmount > balance || !address.trim()}
+          className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 disabled:opacity-40">
+          {loading ? <Loader2 className="size-5 animate-spin" /> : <><Send className="size-5" /> Send {selected}</>}
+        </button>
+        <p className="text-[11px] text-center text-muted-foreground">Always double-check the address. Crypto transactions are irreversible.</p>
+      </div>
+    </div>
+  );
+}
+
+function SwapModal({ wallets, onClose }: { wallets: WalletData[]; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [from, setFrom] = React.useState("BTC");
+  const [to, setTo] = React.useState("USDT");
+  const [amount, setAmount] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [result, setResult] = React.useState<null | { ok: boolean; msg: string }>(null);
+
+  const fromWallet = wallets.find(w => w.currency === from);
+  const balance = Number(fromWallet?.balance ?? 0);
+  const parsedAmount = parseFloat(amount) || 0;
+
+  const { data: cryptoRates = [] } = useQuery({
+    queryKey: ["crypto-rates-swap"],
+    queryFn: async () => {
+      const { getCryptoExchangeRates } = await import("../server-functions/rates");
+      return getCryptoExchangeRates();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const getPrice = (sym: string) => {
+    if (sym === "NGN") return 1;
+    const r = (cryptoRates as Array<{ symbol: string; price: string }>).find(x => x.symbol === `${sym}-NGN`);
+    return r ? parseFloat(r.price) : 0;
+  };
+
+  const previewAmount = (() => {
+    const fromP = getPrice(from); const toP = getPrice(to);
+    if (!parsedAmount || fromP === 0 || toP === 0) return null;
+    return (parsedAmount * fromP) / toP;
+  })();
+
+  const allCurrencies = ["BTC", "ETH", "USDT", "USDC", "NGN"];
+
+  const handleSwap = async () => {
+    if (!parsedAmount || parsedAmount > balance || from === to) return;
+    setLoading(true); setResult(null);
+    try {
+      const res = await initiateCryptoSwap({ data: { fromCurrency: from, toCurrency: to, amount: parsedAmount } });
+      if ((res as { success: boolean }).success) {
+        queryClient.invalidateQueries({ queryKey: ["wallets"] });
+        queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+        const got = ((res as { toAmount?: number }).toAmount ?? 0).toFixed(6);
+        setResult({ ok: true, msg: `Swapped ${parsedAmount} ${from} → ${got} ${to}${(res as { demo?: boolean }).demo ? " (demo)" : ""}` });
+        setAmount("");
+      } else {
+        const reason = (res as { reason?: string }).reason ?? "Swap failed";
+        setResult({ ok: false, msg: reason === "INSUFFICIENT_BALANCE" ? "Insufficient balance" : reason === "KYC_REQUIRED" ? "Complete KYC to swap" : reason });
+      }
+    } catch { setResult({ ok: false, msg: "Swap failed — try again" }); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-background flex flex-col max-w-[480px] mx-auto">
+      <header className="px-5 pt-12 pb-4 flex items-center gap-3">
+        <button onClick={onClose} className="size-10 rounded-full bg-card border border-border grid place-items-center">
+          <ChevronLeft className="size-5" />
+        </button>
+        <div>
+          <p className="text-lg font-extrabold">Swap</p>
+          <p className="text-xs text-muted-foreground">Exchange between currencies instantly</p>
+        </div>
+      </header>
+      <div className="px-5 space-y-4 overflow-y-auto pb-8">
+        <div>
+          <p className="text-xs font-bold text-muted-foreground mb-2 uppercase tracking-wide">From</p>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {allCurrencies.filter(s => s !== to).map((sym) => {
+              const w = wallets.find(x => x.currency === sym);
+              return (
+                <button key={sym} onClick={() => setFrom(sym)}
+                  className={`flex flex-col items-center gap-1 px-3 py-2 rounded-2xl border-2 shrink-0 transition ${from === sym ? "border-gold bg-gold/10" : "border-border bg-card"}`}>
+                  <span className="text-xs font-bold">{sym}</span>
+                  <span className="text-[9px] text-muted-foreground">{Number(w?.balance ?? 0).toFixed(4)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div>
+          <p className="text-xs font-bold text-muted-foreground mb-2 uppercase tracking-wide">To</p>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {allCurrencies.filter(s => s !== from).map((sym) => (
+              <button key={sym} onClick={() => setTo(sym)}
+                className={`flex flex-col items-center gap-1 px-3 py-2 rounded-2xl border-2 shrink-0 transition ${to === sym ? "border-cyan bg-cyan/10" : "border-border bg-card"}`}>
+                <span className="text-xs font-bold">{sym}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="bg-card rounded-2xl border border-border p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-bold text-muted-foreground">Amount ({from})</p>
+            <button onClick={() => setAmount(String(balance))} className="text-[11px] text-gold font-bold">Max: {balance.toFixed(6)}</button>
+          </div>
+          <div className="flex items-center gap-2 bg-secondary rounded-xl px-4 py-3">
+            <input type="number" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)}
+              className="flex-1 bg-transparent text-lg font-extrabold outline-none" />
+            <span className="text-sm font-bold text-muted-foreground">{from}</span>
+          </div>
+          {parsedAmount > balance && <p className="text-[11px] text-pink font-semibold">Exceeds available balance</p>}
+        </div>
+        {previewAmount !== null && (
+          <div className="bg-cyan/10 border border-cyan/20 rounded-2xl p-4 flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">You receive approx.</span>
+            <span className="text-sm font-extrabold text-cyan">{previewAmount.toFixed(6)} {to}</span>
+          </div>
+        )}
+        {result && (
+          <div className={`flex items-start gap-2 p-3 rounded-xl border ${result.ok ? "bg-cyan/10 border-cyan/30 text-cyan" : "bg-pink/10 border-pink/30 text-pink"}`}>
+            {result.ok ? <CheckCircle2 className="size-4 shrink-0 mt-0.5" /> : <XCircle className="size-4 shrink-0 mt-0.5" />}
+            <p className="text-xs font-semibold">{result.msg}</p>
+          </div>
+        )}
+        <button onClick={handleSwap} disabled={loading || !parsedAmount || parsedAmount > balance || from === to}
+          className="w-full bg-gradient-to-r from-gold to-amber-500 text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 disabled:opacity-40">
+          {loading ? <Loader2 className="size-5 animate-spin" /> : `Swap ${from} → ${to}`}
+        </button>
+        <p className="text-[11px] text-center text-muted-foreground">Rates include a 7% service margin. Swaps are final.</p>
+      </div>
+    </div>
   );
 }

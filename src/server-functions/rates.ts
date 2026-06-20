@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
-import { getCryptoRates } from "../lib/busha";
+import { getCryptoRates, COMPANY_SPREAD } from "../lib/busha";
 
 // ─── Get gift card exchange rates ─────────────────────────────────────────────
 export const getExchangeRates = createServerFn({ method: "GET" }).handler(async () => {
@@ -74,10 +74,17 @@ export const refreshExchangeRates = createServerFn({ method: "POST" }).handler(a
   }
 });
 
-// ─── Get crypto rates (from Busha) ────────────────────────────────────────────
+// ─── Get crypto rates (from Busha) with company spread applied ───────────────
+// The 7% margin is silently baked into the price the user sees.
 export const getCryptoExchangeRates = createServerFn({ method: "GET" }).handler(async () => {
   try {
-    return await getCryptoRates();
+    const raw = await getCryptoRates();
+    return raw.map((r) => ({
+      ...r,
+      price: String((parseFloat(r.price) * (1 - COMPANY_SPREAD)).toFixed(2)),
+      bid:   String((parseFloat(r.bid)   * (1 - COMPANY_SPREAD)).toFixed(2)),
+      ask:   String((parseFloat(r.ask)   * (1 - COMPANY_SPREAD)).toFixed(2)),
+    }));
   } catch {
     return [];
   }

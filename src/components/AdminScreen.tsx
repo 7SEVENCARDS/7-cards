@@ -1067,3 +1067,60 @@ function ActionRow({ icon: Icon, label, value, color, urgent }: {
     </div>
   );
 }
+
+
+/* ─── Revenue tab (spread income) — admin only ─────────────────────────────── */
+export function RevenueTab() {
+  const [days, setDays] = React.useState(7);
+  const { data, isLoading } = useQuery({
+    queryKey: ["spread-revenue", days],
+    queryFn: async () => {
+      const { getSpreadRevenue } = await import("../server-functions/admin");
+      return getSpreadRevenue({ data: { days } });
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const total = data?.totalFee ?? 0;
+  const daily = data?.daily ?? [];
+  const recent = data?.recentSwaps ?? [];
+
+  return (
+    <div className="space-y-4 px-5 py-4">
+      <div className="flex gap-2">
+        {[7, 30, 90].map(d => (
+          <button key={d} onClick={() => setDays(d)}
+            className={`px-4 py-1.5 rounded-full text-xs font-bold transition ${days === d ? "bg-gold text-jungle-deep" : "bg-secondary text-muted-foreground"}`}>
+            {d}d
+          </button>
+        ))}
+      </div>
+      <div className="bg-card rounded-2xl border border-border p-4">
+        <p className="text-xs text-muted-foreground">Total spread revenue ({days}d)</p>
+        <p className="text-2xl font-extrabold">{isLoading ? "…" : total.toFixed(6)}</p>
+      </div>
+      <div className="space-y-1">
+        {daily.map(({ date, fee }) => (
+          <div key={date} className="flex items-center justify-between bg-card rounded-xl px-4 py-2.5 border border-border">
+            <span className="text-xs text-muted-foreground">{date}</span>
+            <span className="text-xs font-bold">{fee.toFixed(6)}</span>
+          </div>
+        ))}
+      </div>
+      {recent.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">Recent swaps</p>
+          {recent.map((s, i) => (
+            <div key={i} className="bg-card rounded-xl border border-border px-4 py-2.5 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold">{s.from} → {s.to}</p>
+                <p className="text-[10px] text-muted-foreground">{s.fromAmount} {s.from}</p>
+              </div>
+              <p className="text-xs font-bold text-cyan">+{s.fee.toFixed(6)}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
