@@ -164,14 +164,7 @@ export function TradeStatusScreen({ tradeId, userId, onBack, payoutBankCode, pay
     setRetryResult(null);
     try {
       const result = await processPayout({
-        data: {
-          tradeId: trade.id,
-          userId,
-          amountNgn: trade.amount_ngn ?? 0,
-          bankCode: payoutBankCode ?? "058",
-          accountNumber: payoutAccountNumber ?? "0000000000",
-          accountName: payoutAccountName ?? "Account",
-        },
+        data: { tradeId: trade.id },
       });
       if ((result as { success: boolean }).success) {
         setRetryResult({ ok: true, msg: "Payout initiated — funds on the way!" });

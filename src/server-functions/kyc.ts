@@ -1,14 +1,38 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
+import { requireUser } from "../lib/auth-server";
+
+// ─── Name-match helper ────────────────────────────────────────────────────────
+// Returns true if the Dojah identity name loosely matches the registered name.
+// We normalise both sides and check for shared tokens to allow for ordering
+// differences (e.g. "John Doe" vs "Doe John").
+function namesMatch(registered: string | null, dojahFirst: string, dojahLast: string): boolean {
+  if (!registered) return true; // no registered name to compare — pass through
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z\s]/g, "")
+      .trim();
+
+  const regTokens = new Set(norm(registered).split(/\s+/).filter(Boolean));
+  const dojahFull = norm(`${dojahFirst} ${dojahLast}`);
+  const dojahTokens = dojahFull.split(/\s+/).filter(Boolean);
+
+  const shared = dojahTokens.filter((t) => regTokens.has(t)).length;
+  return shared >= 1; // at least one name token must match
+}
 
 // ─── BVN Verification ─────────────────────────────────────────────────────────
 export const verifyBVN = createServerFn({ method: "POST" })
-  .validator((d: { userId: string; bvn: string }) => d)
+  .validator((d: { bvn: string }) => d)
   .handler(async ({ data }) => {
-    // Validate BVN format (11 digits)
     if (!/^\d{11}$/.test(data.bvn)) {
       return { success: false, error: "BVN must be exactly 11 digits" };
     }
+
+    const userId = await requireUser();
 
     try {
       const { lookupBVN, maskBVN } = await import("../lib/dojah");
@@ -16,49 +40,52 @@ export const verifyBVN = createServerFn({ method: "POST" })
 
       const db = getServerSupabase();
 
-      // Store MASKED BVN only — raw BVN must never be stored unencrypted
+      // Fetch registered name for cross-check
+      const { data: profile } = await db
+        .from("profiles")
+        .select("full_name, kyc_nin")
+        .eq("id", userId)
+        .single();
+
+      // Name cross-check — reject if clearly different
+      if (!namesMatch(profile?.full_name ?? null, result.first_name ?? "", result.last_name ?? "")) {
+        return {
+          success: false,
+          error: "The name on your BVN does not match your registered name. Please use a BVN linked to the same name you signed up with.",
+        };
+      }
+
+      // Store MASKED BVN — raw value must never be stored
       await db.from("profiles").update({
         kyc_bvn: maskBVN(data.bvn),
         kyc_status: "submitted",
-      }).eq("id", data.userId);
-
-      // Auto-approve if NIN is already on file
-      const { data: profile } = await db
-        .from("profiles")
-        .select("kyc_nin")
-        .eq("id", data.userId)
-        .single();
+      }).eq("id", userId);
 
       let autoApproved = false;
       if (profile?.kyc_nin) {
-        await db.from("profiles")
-          .update({ kyc_status: "verified" })
-          .eq("id", data.userId);
+        await db.from("profiles").update({ kyc_status: "verified" }).eq("id", userId);
         autoApproved = true;
 
         await db.from("notifications").insert({
-          user_id: data.userId,
+          user_id: userId,
           title: "KYC Verified! ✅",
           message: "Your identity has been verified. You can now trade without limits.",
           type: "success",
         });
 
-        const { pushNotify } = await import("../lib/onesignal");
-        pushNotify(data.userId, "KYC Verified! ✅",
-          "Identity confirmed — start trading now.");
+        try {
+          const { pushNotify } = await import("../lib/onesignal");
+          pushNotify(userId, "KYC Verified! ✅", "Identity confirmed — start trading now.");
+        } catch { /* non-critical */ }
       }
 
+      // Return only the minimum necessary for the UI — no raw PII
       return {
         success: true,
         autoApproved,
         identity: {
           firstName: result.first_name,
-          middleName: result.middle_name ?? "",
           lastName: result.last_name,
-          dateOfBirth: result.date_of_birth,
-          phoneNumber: result.phone_number,
-          gender: result.gender,
-          photo: result.image ?? null,
         },
       };
     } catch (e: unknown) {
@@ -66,44 +93,34 @@ export const verifyBVN = createServerFn({ method: "POST" })
       const isConfig = msg.includes("not configured");
 
       if (isConfig) {
-        // Demo mode — return mock identity when Dojah isn't configured yet
-        const db = getServerSupabase();
+        // Demo mode — blocked in production
+        if (process.env.NODE_ENV === "production") {
+          return { success: false, error: "Verification service not available." };
+        }
 
+        const db = getServerSupabase();
         const { data: profile } = await db
           .from("profiles")
           .select("kyc_nin")
-          .eq("id", data.userId)
+          .eq("id", userId)
           .single();
 
         const autoApproved = !!profile?.kyc_nin;
         await db.from("profiles").update({
           kyc_bvn: "22*****123",
           kyc_status: autoApproved ? "verified" : "submitted",
-        }).eq("id", data.userId);
+        }).eq("id", userId);
 
         if (autoApproved) {
           await db.from("notifications").insert({
-            user_id: data.userId,
+            user_id: userId,
             title: "KYC Verified! ✅",
             message: "Your identity has been verified. You can now trade without limits.",
             type: "success",
           });
         }
 
-        return {
-          success: true,
-          demo: true,
-          autoApproved,
-          identity: {
-            firstName: "Demo",
-            middleName: "",
-            lastName: "User",
-            dateOfBirth: "01-01-1990",
-            phoneNumber: "080*****567",
-            gender: "Male",
-            photo: null,
-          },
-        };
+        return { success: true, demo: true, autoApproved, identity: { firstName: "Demo", lastName: "User" } };
       }
 
       const isInvalid =
@@ -122,45 +139,54 @@ export const verifyBVN = createServerFn({ method: "POST" })
 
 // ─── NIN Verification ─────────────────────────────────────────────────────────
 export const verifyNIN = createServerFn({ method: "POST" })
-  .validator((d: { userId: string; nin: string }) => d)
+  .validator((d: { nin: string }) => d)
   .handler(async ({ data }) => {
     if (!/^\d{11}$/.test(data.nin)) {
       return { success: false, error: "NIN must be exactly 11 digits" };
     }
+
+    const userId = await requireUser();
 
     try {
       const { lookupNIN, maskNIN } = await import("../lib/dojah");
       const result = await lookupNIN(data.nin);
 
       const db = getServerSupabase();
-      await db.from("profiles").update({
-        kyc_nin: maskNIN(data.nin),
-      }).eq("id", data.userId);
 
-      // Auto-approve if BVN is already on file
+      // Fetch registered name for cross-check
       const { data: profile } = await db
         .from("profiles")
-        .select("kyc_bvn")
-        .eq("id", data.userId)
+        .select("full_name, kyc_bvn")
+        .eq("id", userId)
         .single();
+
+      if (!namesMatch(profile?.full_name ?? null, result.first_name ?? "", result.last_name ?? "")) {
+        return {
+          success: false,
+          error: "The name on your NIN does not match your registered name. Please use a NIN linked to the same name you signed up with.",
+        };
+      }
+
+      await db.from("profiles").update({
+        kyc_nin: maskNIN(data.nin),
+      }).eq("id", userId);
 
       let autoApproved = false;
       if (profile?.kyc_bvn) {
-        await db.from("profiles")
-          .update({ kyc_status: "verified" })
-          .eq("id", data.userId);
+        await db.from("profiles").update({ kyc_status: "verified" }).eq("id", userId);
         autoApproved = true;
 
         await db.from("notifications").insert({
-          user_id: data.userId,
+          user_id: userId,
           title: "KYC Verified! ✅",
           message: "Your identity has been verified. You can now trade without limits.",
           type: "success",
         });
 
-        const { pushNotify } = await import("../lib/onesignal");
-        pushNotify(data.userId, "KYC Verified! ✅",
-          "Identity confirmed — start trading now.");
+        try {
+          const { pushNotify } = await import("../lib/onesignal");
+          pushNotify(userId, "KYC Verified! ✅", "Identity confirmed — start trading now.");
+        } catch { /* non-critical */ }
       }
 
       return {
@@ -168,12 +194,7 @@ export const verifyNIN = createServerFn({ method: "POST" })
         autoApproved,
         identity: {
           firstName: result.first_name,
-          middleName: result.middle_name ?? "",
           lastName: result.last_name,
-          dateOfBirth: result.date_of_birth,
-          phoneNumber: result.phone,
-          gender: result.gender,
-          photo: result.photo ?? null,
         },
       };
     } catch (e: unknown) {
@@ -181,34 +202,33 @@ export const verifyNIN = createServerFn({ method: "POST" })
       const isConfig = msg.includes("not configured");
 
       if (isConfig) {
-        // Demo mode — check if BVN already on file to auto-approve
-        try {
-          const db = getServerSupabase();
-          const { data: profile } = await db
-            .from("profiles")
-            .select("kyc_bvn")
-            .eq("id", data.userId)
-            .single();
-
-          const autoApproved = !!profile?.kyc_bvn;
-          await db.from("profiles").update({
-            kyc_nin: "122*****456",
-            ...(autoApproved ? { kyc_status: "verified" } : {}),
-          }).eq("id", data.userId);
-
-          if (autoApproved) {
-            await db.from("notifications").insert({
-              user_id: data.userId,
-              title: "KYC Verified! ✅",
-              message: "Your identity has been verified. You can now trade without limits.",
-              type: "success",
-            });
-          }
-
-          return { success: true, demo: true, autoApproved };
-        } catch {
-          return { success: true, demo: true, autoApproved: false };
+        if (process.env.NODE_ENV === "production") {
+          return { success: false, error: "Verification service not available." };
         }
+
+        const db = getServerSupabase();
+        const { data: profile } = await db
+          .from("profiles")
+          .select("kyc_bvn")
+          .eq("id", userId)
+          .single();
+
+        const autoApproved = !!profile?.kyc_bvn;
+        await db.from("profiles").update({
+          kyc_nin: "122*****456",
+          ...(autoApproved ? { kyc_status: "verified" } : {}),
+        }).eq("id", userId);
+
+        if (autoApproved) {
+          await db.from("notifications").insert({
+            user_id: userId,
+            title: "KYC Verified! ✅",
+            message: "Your identity has been verified. You can now trade without limits.",
+            type: "success",
+          });
+        }
+
+        return { success: true, demo: true, autoApproved };
       }
 
       return {
@@ -219,19 +239,16 @@ export const verifyNIN = createServerFn({ method: "POST" })
   });
 
 // ─── Submit KYC (finalize) ────────────────────────────────────────────────────
-// In production this would trigger a compliance review workflow.
-// For now it sets status to "submitted" and notifies the user.
 export const submitKYC = createServerFn({ method: "POST" })
-  .validator((d: { userId: string }) => d)
-  .handler(async ({ data }) => {
+  .validator((d: Record<string, never>) => d)
+  .handler(async () => {
+    const userId = await requireUser();
     const db = getServerSupabase();
 
-    await db.from("profiles").update({
-      kyc_status: "submitted",
-    }).eq("id", data.userId);
+    await db.from("profiles").update({ kyc_status: "submitted" }).eq("id", userId);
 
     await db.from("notifications").insert({
-      user_id: data.userId,
+      user_id: userId,
       title: "KYC Submitted ✅",
       message: "Your identity documents are under review. You'll be notified within 24 hours.",
       type: "info",
@@ -242,13 +259,14 @@ export const submitKYC = createServerFn({ method: "POST" })
 
 // ─── Get KYC status ───────────────────────────────────────────────────────────
 export const getKYCStatus = createServerFn({ method: "GET" })
-  .validator((d: { userId: string }) => d)
-  .handler(async ({ data }) => {
+  .validator((d: { userId?: string }) => d)
+  .handler(async () => {
+    const userId = await requireUser();
     const db = getServerSupabase();
     const { data: profile, error } = await db
       .from("profiles")
       .select("kyc_status, kyc_bvn, kyc_nin")
-      .eq("id", data.userId)
+      .eq("id", userId)
       .single();
 
     if (error) throw error;

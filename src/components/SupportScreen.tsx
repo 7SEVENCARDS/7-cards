@@ -134,7 +134,7 @@ export function SupportScreen({ userId, isPremium = false, userName = "User", on
     scrollToBottom();
 
     try {
-      await sendSupportMessage({ data: { userId, body: trimmed, isPremium } });
+      await sendSupportMessage({ data: { body: trimmed } });
       // Re-fetch to get real IDs + agent reply
       await new Promise((r) => setTimeout(r, 900));
       const fresh = await getSupportMessages({ data: { userId, limit: 50 } }) as Message[];

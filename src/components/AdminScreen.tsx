@@ -80,7 +80,7 @@ function StatsTab({ adminId }: { adminId: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const s = await getAdminStats({ data: { adminId } });
+      const s = await getAdminStats({ data: {} });
       setStats(s);
     } catch { /* handled below */ } finally {
       setLoading(false);
@@ -145,7 +145,7 @@ function KYCTab({ adminId }: { adminId: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const rows = await getKYCQueue({ data: { adminId } });
+      const rows = await getKYCQueue({ data: {} });
       setQueue(rows as KYCEntry[]);
     } catch { setQueue([]); } finally { setLoading(false); }
   }, [adminId]);
@@ -156,7 +156,7 @@ function KYCTab({ adminId }: { adminId: string }) {
   const handleApprove = async (userId: string) => {
     setActing(userId);
     try {
-      await approveKYC({ data: { adminId, userId } });
+      await approveKYC({ data: { userId } });
       setQueue((q) => (q ?? []).filter((r) => r.id !== userId));
     } finally { setActing(null); }
   };
@@ -165,7 +165,7 @@ function KYCTab({ adminId }: { adminId: string }) {
     if (!rejectReason) return;
     setActing(rejectReason.id);
     try {
-      await rejectKYC({ data: { adminId, userId: rejectReason.id, reason: rejectReason.text } });
+      await rejectKYC({ data: { userId: rejectReason.id, reason: rejectReason.text } });
       setQueue((q) => (q ?? []).filter((r) => r.id !== rejectReason.id));
       setRejectReason(null);
     } finally { setActing(null); }
@@ -271,7 +271,7 @@ function ReviewTab({ adminId }: { adminId: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const rows = await getManualReviewQueue({ data: { adminId } });
+      const rows = await getManualReviewQueue({ data: {} });
       setQueue(rows as ReviewEntry[]);
     } catch { setQueue([]); } finally { setLoading(false); }
   }, [adminId]);
@@ -282,7 +282,7 @@ function ReviewTab({ adminId }: { adminId: string }) {
   const handleApprove = async (tradeId: string) => {
     setActing(tradeId);
     try {
-      await approveManualTrade({ data: { adminId, tradeId } });
+      await approveManualTrade({ data: { tradeId } });
       setQueue((q) => (q ?? []).filter((r) => r.id !== tradeId));
     } finally { setActing(null); }
   };
@@ -291,7 +291,7 @@ function ReviewTab({ adminId }: { adminId: string }) {
     if (!rejectModal) return;
     setActing(rejectModal.id);
     try {
-      await rejectManualTrade({ data: { adminId, tradeId: rejectModal.id, reason: rejectModal.text } });
+      await rejectManualTrade({ data: { tradeId: rejectModal.id, reason: rejectModal.text } });
       setQueue((q) => (q ?? []).filter((r) => r.id !== rejectModal.id));
       setRejectModal(null);
     } finally { setActing(null); }
@@ -396,7 +396,7 @@ function TradesTab({ adminId }: { adminId: string }) {
   const load = useCallback(async (p = 0, s = status) => {
     setLoading(true);
     try {
-      const res = await getAdminTrades({ data: { adminId, page: p, pageSize: PAGE_SIZE, status: s } });
+      const res = await getAdminTrades({ data: { page: p, pageSize: PAGE_SIZE, status: s } });
       setTrades(res as { trades: unknown[]; total: number });
       setPage(p);
     } catch { /* ignore */ } finally { setLoading(false); }
@@ -546,7 +546,7 @@ function RatesTab({ adminId }: { adminId: string }) {
     if (!validRows.length) return;
     setImporting(true);
     try {
-      const res = await bulkUpdateRates({ data: { adminId, rows: validRows } });
+      const res = await bulkUpdateRates({ data: { rows: validRows } });
       setImportResult({ imported: res.imported, failed: res.failed });
       if (res.imported > 0) {
         await load();
@@ -562,7 +562,7 @@ function RatesTab({ adminId }: { adminId: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const rows = await getAdminRates({ data: { adminId } });
+      const rows = await getAdminRates({ data: {} });
       setRates(rows as Rate[]);
     } catch { setRates([]); } finally { setLoading(false); }
   }, [adminId]);
@@ -583,7 +583,7 @@ function RatesTab({ adminId }: { adminId: string }) {
     setSaving(true);
     try {
       const res = await updateExchangeRate({
-        data: { adminId, brand: editing.brand, region: editing.region, ratePerDollar: parsed },
+        data: { brand: editing.brand, region: editing.region, ratePerDollar: parsed },
       });
       if (res.success) {
         setRates((prev) =>
@@ -677,7 +677,7 @@ function RatesTab({ adminId }: { adminId: string }) {
                   setAddingNew(true);
                   try {
                     const res = await updateExchangeRate({
-                      data: { adminId, brand: newBrand.name.trim(), region: newBrand.region, ratePerDollar: parsed },
+                      data: { brand: newBrand.name.trim(), region: newBrand.region, ratePerDollar: parsed },
                     });
                     if (res.success) {
                       setRates((prev) => [
@@ -889,7 +889,7 @@ function CreditTab({ adminId }: { adminId: string }) {
     setLoading(true);
     setResult(null);
     try {
-      const res = await adminCreditWallet({ data: { adminId, userId: userId.trim(), amountNgn: amountNum, reason } });
+      const res = await adminCreditWallet({ data: { userId: userId.trim(), amountNgn: amountNum, reason } });
       if (res.success) {
         setResult({ ok: true, msg: `₦${amountNum.toLocaleString()} credited successfully.` });
         setUserId(""); setAmount(""); setReason("");

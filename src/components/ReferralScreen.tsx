@@ -67,7 +67,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
     setApplying(true);
     setApplyMsg(null);
     try {
-      const res = await applyReferralCode({ data: { userId, code: codeInput.trim() } });
+      const res = await applyReferralCode({ data: { code: codeInput.trim() } });
       if ((res as { success: boolean }).success) {
         setApplyMsg({ ok: true, text: "Code applied! You'll both earn when you complete your first trade." });
         qc.invalidateQueries({ queryKey: ["profile", userId] });

@@ -1,16 +1,18 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
+import { requireUser } from "../lib/auth-server";
 
-// ─── Get user's trade history ─────────────────────────────────────────────────
+// ─── Get own trade history (recent) ──────────────────────────────────────────
 export const getUserTrades = createServerFn({ method: "GET" })
-  .validator((d: { userId: string; limit?: number }) => d)
+  .validator((d: { userId?: string; limit?: number }) => d)
   .handler(async ({ data }) => {
     try {
+      const userId = await requireUser();
       const db = getServerSupabase();
       const { data: trades, error } = await db
         .from("trades")
         .select("*")
-        .eq("user_id", data.userId)
+        .eq("user_id", userId)
         .order("created_at", { ascending: false })
         .limit(data.limit ?? 10);
 
@@ -24,20 +26,20 @@ export const getUserTrades = createServerFn({ method: "GET" })
 // ─── Create a new trade ───────────────────────────────────────────────────────
 export const createTrade = createServerFn({ method: "POST" })
   .validator((d: {
-    userId: string;
     type: "gift_card" | "crypto";
     brand: string;
     amountUsd: number;
     exchangeRate: number;
   }) => d)
   .handler(async ({ data }) => {
+    const userId = await requireUser();
     const db = getServerSupabase();
 
-    // ── KYC gate: user must have submitted KYC before trading ────────────────
+    // KYC gate
     const { data: profile } = await db
       .from("profiles")
       .select("kyc_status")
-      .eq("id", data.userId)
+      .eq("id", userId)
       .single();
 
     if (!profile || profile.kyc_status === "pending") {
@@ -49,7 +51,7 @@ export const createTrade = createServerFn({ method: "POST" })
     const { data: trade, error } = await db
       .from("trades")
       .insert({
-        user_id: data.userId,
+        user_id: userId,
         type: data.type,
         brand: data.brand,
         amount_usd: data.amountUsd,
@@ -65,31 +67,33 @@ export const createTrade = createServerFn({ method: "POST" })
   });
 
 // ─── Verify gift card via Reloadly ────────────────────────────────────────────
-// Reloadly is used to verify the validity of the user's submitted gift card.
-// We check the card against Reloadly's redeem-codes endpoint; if that endpoint
-// isn't available on the current tier, we flag for manual operator review —
-// standard practice for Nigerian gift card trading platforms.
-//
-// Rate limiting (free users):
-//   - 3 verifications per day for free accounts (Reloadly API billing protection)
-//   - Unlimited for: premium subscribers, or users with $25+/week or $50+/month
-//     in successful paid trades.
 export const verifyGiftCard = createServerFn({ method: "POST" })
   .validator((d: {
     tradeId: string;
-    userId: string;
     cardCode: string;
     cardPin?: string;
     brand: string;
     amountUsd: number;
+    recipientEmail?: string;
   }) => d)
   .handler(async ({ data }) => {
+    const userId = await requireUser();
     const db = getServerSupabase();
 
-    // ── Verification allowance check ─────────────────────────────────────────
-    const { checkVerificationAllowance, addVerificationUsage } = await import("../lib/db-helpers");
+    // Verify the trade belongs to this user
+    const { data: trade } = await db
+      .from("trades")
+      .select("id, user_id, status")
+      .eq("id", data.tradeId)
+      .single();
 
-    const allowance = await checkVerificationAllowance(db, data.userId);
+    if (!trade || trade.user_id !== userId) {
+      return { success: false, reason: "Trade not found or access denied." };
+    }
+
+    // Verification allowance check
+    const { checkVerificationAllowance, addVerificationUsage } = await import("../lib/db-helpers");
+    const allowance = await checkVerificationAllowance(db, userId);
 
     if (!allowance.allowed) {
       await db.from("trades").update({
@@ -108,10 +112,10 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
     // Mark trade as scanning
     await db.from("trades").update({ status: "scanning" }).eq("id", data.tradeId);
 
-    // Record this verification attempt (for free-tier users; ignored for unlimited)
+    // Record usage for free-tier users
     if (!allowance.unlimited) {
       try {
-        await addVerificationUsage(db, data.userId, data.tradeId);
+        await addVerificationUsage(db, userId, data.tradeId);
       } catch { /* non-critical */ }
     }
 
@@ -160,17 +164,45 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
   });
 
 // ─── Process payout via Squadco ───────────────────────────────────────────────
+// SECURITY: All payout values come from the database — the client only supplies
+// the trade ID. Amount, bank code, account number, and account name are never
+// accepted from the client; this prevents parameter-tampering attacks.
 export const processPayout = createServerFn({ method: "POST" })
-  .validator((d: {
-    tradeId: string;
-    userId: string;
-    amountNgn: number;
-    bankCode: string;
-    accountNumber: string;
-    accountName: string;
-  }) => d)
+  .validator((d: { tradeId: string }) => d)
   .handler(async ({ data }) => {
+    const userId = await requireUser();
     const db = getServerSupabase();
+
+    // Fetch trade from DB — verify ownership and status
+    const { data: trade, error: tradeErr } = await db
+      .from("trades")
+      .select("id, user_id, amount_ngn, status")
+      .eq("id", data.tradeId)
+      .single();
+
+    if (tradeErr || !trade) {
+      return { success: false, reason: "Trade not found." };
+    }
+    if (trade.user_id !== userId) {
+      return { success: false, reason: "Access denied." };
+    }
+    if (trade.status !== "verified") {
+      return { success: false, reason: `Trade is not verified (status: ${trade.status}).` };
+    }
+
+    // Fetch the user's default payout account from DB — never from client
+    const { data: payoutAccount } = await db
+      .from("payout_accounts")
+      .select("bank_code, account_number, account_name")
+      .eq("user_id", userId)
+      .eq("is_default", true)
+      .single();
+
+    if (!payoutAccount) {
+      return { success: false, reason: "No default payout account found. Please add a bank account first." };
+    }
+
+    const amountNgn = Number(trade.amount_ngn);
 
     // Mark as processing
     await db.from("trades").update({ status: "processing" }).eq("id", data.tradeId);
@@ -180,26 +212,23 @@ export const processPayout = createServerFn({ method: "POST" })
 
       const result = await initiatePayout({
         tradeId: data.tradeId,
-        amountNgn: data.amountNgn,
-        bankCode: data.bankCode,
-        accountNumber: data.accountNumber,
-        accountName: data.accountName,
+        amountNgn,
+        bankCode: payoutAccount.bank_code,
+        accountNumber: payoutAccount.account_number,
+        accountName: payoutAccount.account_name,
         narration: "7SEVEN CARDS gift card payout",
       });
 
       if (result.success) {
-        // Credit NGN wallet using the increment_wallet_balance SQL function
         await db.rpc("increment_wallet_balance", {
-          p_user_id: data.userId,
+          p_user_id: userId,
           p_currency: "NGN",
-          p_amount: data.amountNgn,
+          p_amount: amountNgn,
         });
 
-        // Award XP (50 base + 25 bonus for trades over ₦100k)
-        const xp = 50 + (data.amountNgn > 100_000 ? 25 : 0);
-        await db.rpc("award_trade_xp", { p_user_id: data.userId, p_xp: xp });
+        const xp = 50 + (amountNgn > 100_000 ? 25 : 0);
+        await db.rpc("award_trade_xp", { p_user_id: userId, p_xp: xp });
 
-        // Mark trade paid
         await db.from("trades").update({
           status: "paid",
           squadco_transaction_ref: result.transactionRef,
@@ -209,26 +238,24 @@ export const processPayout = createServerFn({ method: "POST" })
         }).eq("id", data.tradeId);
 
         await db.from("notifications").insert({
-          user_id: data.userId,
+          user_id: userId,
           title: "Payment Sent! 🎉",
-          message: `₦${data.amountNgn.toLocaleString()} has been sent to your bank account.`,
+          message: `₦${amountNgn.toLocaleString()} has been sent to your bank account.`,
           type: "success",
         });
 
-        // Push notification
         try {
           const { pushNotify } = await import("../lib/onesignal");
-          pushNotify(data.userId, "Payment Sent! 🎉",
-            `₦${data.amountNgn.toLocaleString()} is on its way to your bank.`,
+          pushNotify(userId, "Payment Sent! 🎉",
+            `₦${amountNgn.toLocaleString()} is on its way to your bank.`,
             { tradeId: data.tradeId, type: "payout" }
           );
         } catch { /* non-critical */ }
 
-        // Pay 5% recurring commission to referrer on EVERY successful trade.
         try {
           const { creditReferrerCommissionFn } = await import("../lib/db-helpers");
-          await creditReferrerCommissionFn(db, data.userId, data.tradeId, data.amountNgn);
-        } catch { /* non-critical — don't fail the payout if commission errors */ }
+          await creditReferrerCommissionFn(db, userId, data.tradeId, amountNgn);
+        } catch { /* non-critical */ }
 
         return { success: true, transactionRef: result.transactionRef };
       } else {
@@ -244,13 +271,21 @@ export const processPayout = createServerFn({ method: "POST" })
       const isConfig = msg.includes("not configured");
 
       if (isConfig) {
-        // Squadco not configured — demo mode
+        // Demo mode — only allowed outside production
+        if (process.env.NODE_ENV === "production") {
+          await db.from("trades").update({
+            status: "failed",
+            failure_reason: "Payment provider not configured",
+          }).eq("id", data.tradeId);
+          return { success: false, reason: "Payment service is unavailable. Please contact support." };
+        }
+
         const xp = 50;
-        await db.rpc("award_trade_xp", { p_user_id: data.userId, p_xp: xp });
+        await db.rpc("award_trade_xp", { p_user_id: userId, p_xp: xp });
         await db.rpc("increment_wallet_balance", {
-          p_user_id: data.userId,
+          p_user_id: userId,
           p_currency: "NGN",
-          p_amount: data.amountNgn,
+          p_amount: amountNgn,
         });
 
         await db.from("trades").update({
@@ -260,25 +295,23 @@ export const processPayout = createServerFn({ method: "POST" })
         }).eq("id", data.tradeId);
 
         await db.from("notifications").insert({
-          user_id: data.userId,
+          user_id: userId,
           title: "Payment Sent! 🎉",
-          message: `₦${data.amountNgn.toLocaleString()} has been credited to your wallet (demo).`,
+          message: `₦${amountNgn.toLocaleString()} has been credited to your wallet (demo).`,
           type: "success",
         });
 
-        // Push notification (demo mode)
         try {
           const { pushNotify } = await import("../lib/onesignal");
-          pushNotify(data.userId, "Payment Sent! 🎉",
-            `₦${data.amountNgn.toLocaleString()} credited to your wallet.`,
+          pushNotify(userId, "Payment Sent! 🎉",
+            `₦${amountNgn.toLocaleString()} credited to your wallet.`,
             { tradeId: data.tradeId, type: "payout_demo" }
           );
         } catch { /* non-critical */ }
 
-        // Also pay referral commission in demo mode
         try {
           const { creditReferrerCommissionFn } = await import("../lib/db-helpers");
-          await creditReferrerCommissionFn(db, data.userId, data.tradeId, data.amountNgn);
+          await creditReferrerCommissionFn(db, userId, data.tradeId, amountNgn);
         } catch { /* non-critical */ }
 
         return { success: true, transactionRef: "DEMO-" + data.tradeId, demo: true };
@@ -292,7 +325,7 @@ export const processPayout = createServerFn({ method: "POST" })
 // ─── Get paginated + filtered trade history ────────────────────────────────────
 export const getTradeHistory = createServerFn({ method: "GET" })
   .validator((d: {
-    userId: string;
+    userId?: string;
     page?: number;
     pageSize?: number;
     status?: string;
@@ -300,6 +333,7 @@ export const getTradeHistory = createServerFn({ method: "GET" })
   }) => d)
   .handler(async ({ data }) => {
     try {
+      const userId = await requireUser();
       const db = getServerSupabase();
       const page = data.page ?? 0;
       const size = data.pageSize ?? 20;
@@ -308,13 +342,16 @@ export const getTradeHistory = createServerFn({ method: "GET" })
 
       let query = db
         .from("trades")
-        .select("id,type,brand,region,amount_usd,amount_ngn,exchange_rate,status,failure_reason,xp_earned,settled_at,created_at", { count: "exact" })
-        .eq("user_id", data.userId)
+        .select(
+          "id,type,brand,region,amount_usd,amount_ngn,exchange_rate,status,failure_reason,xp_earned,settled_at,created_at",
+          { count: "exact" }
+        )
+        .eq("user_id", userId)
         .order("created_at", { ascending: false })
         .range(from, to);
 
       if (data.status && data.status !== "all") query = query.eq("status", data.status);
-      if (data.type && data.type !== "all") query = query.eq("type", data.type);
+      if (data.type   && data.type   !== "all") query = query.eq("type",   data.type);
 
       const { data: trades, error, count } = await query;
       if (error) throw error;
@@ -325,14 +362,17 @@ export const getTradeHistory = createServerFn({ method: "GET" })
   });
 
 // ─── Get single trade status ───────────────────────────────────────────────────
+// Verifies the trade belongs to the session user before returning it.
 export const getTradeStatus = createServerFn({ method: "GET" })
   .validator((d: { tradeId: string }) => d)
   .handler(async ({ data }) => {
+    const userId = await requireUser();
     const db = getServerSupabase();
     const { data: trade, error } = await db
       .from("trades")
       .select("*")
       .eq("id", data.tradeId)
+      .eq("user_id", userId)
       .single();
 
     if (error) throw error;

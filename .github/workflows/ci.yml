@@ -49,6 +49,9 @@ jobs:
           SQUADCO_SECRET_KEY: ${{ secrets.SQUADCO_SECRET_KEY }}
           APP_SECRET: ${{ secrets.APP_SECRET }}
 
+      - name: Test
+        run: bun run test
+
       - name: Lint
         run: bun run lint
         continue-on-error: true

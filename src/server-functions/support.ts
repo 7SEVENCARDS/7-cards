@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
+import { requireUser } from "../lib/auth-server";
 
 type Message = {
   id: string;
@@ -10,26 +11,26 @@ type Message = {
   created_at: string;
 };
 
-// ─── Get conversation history ──────────────────────────────────────────────────
+// ─── Get own conversation history ─────────────────────────────────────────────
 export const getSupportMessages = createServerFn({ method: "GET" })
-  .validator((d: { userId: string; limit?: number }) => d)
+  .validator((d: { userId?: string; limit?: number }) => d)
   .handler(async ({ data }) => {
     try {
+      const userId = await requireUser();
       const db = getServerSupabase();
       const { data: messages, error } = await db
         .from("support_messages")
         .select("*")
-        .eq("user_id", data.userId)
+        .eq("user_id", userId)
         .order("created_at", { ascending: true })
         .limit(data.limit ?? 50);
 
       if (error) throw error;
 
-      // Mark agent messages as read
       await db
         .from("support_messages")
         .update({ read: true })
-        .eq("user_id", data.userId)
+        .eq("user_id", userId)
         .eq("sender", "agent")
         .eq("read", false);
 
@@ -40,20 +41,28 @@ export const getSupportMessages = createServerFn({ method: "GET" })
   });
 
 // ─── Send a user message + auto-reply ─────────────────────────────────────────
+// isPremium is derived server-side from the profile — never trusted from client.
 export const sendSupportMessage = createServerFn({ method: "POST" })
-  .validator((d: { userId: string; body: string; isPremium?: boolean }) => d)
+  .validator((d: { body: string }) => d)
   .handler(async ({ data }) => {
     try {
+      const userId = await requireUser();
       const db = getServerSupabase();
 
-      // Insert user message
+      // Derive premium status from profile — not from client
+      const { data: profile } = await db
+        .from("profiles")
+        .select("premium")
+        .eq("id", userId)
+        .single();
+      const isPremium = profile?.premium ?? false;
+
       await db.from("support_messages").insert({
-        user_id: data.userId,
+        user_id: userId,
         sender: "user",
         body: data.body,
       });
 
-      // Auto-reply logic based on keywords
       const lower = data.body.toLowerCase();
       let reply = "";
 
@@ -70,20 +79,19 @@ export const sendSupportMessage = createServerFn({ method: "POST" })
       } else if (lower.includes("premium") || lower.includes("subscription") || lower.includes("upgrade")) {
         reply = "7SEVEN Premium costs ₦2,000/month and gives you higher limits, +2% better rates, priority payouts, and 24/7 dedicated support. Upgrade from Profile → Get Premium.";
       } else if (lower.includes("referral") || lower.includes("friend") || lower.includes("bonus")) {
-        reply = "You earn ₦500 for every friend who signs up with your referral code and completes their first trade. Check Profile → Referral Program for your unique code and earnings.";
+        reply = "You earn 5% commission on every trade your referrals complete. Check Profile → Referral Program for your unique code and earnings.";
       } else if (lower.includes("hello") || lower.includes("hi") || lower.includes("hey")) {
-        reply = data.isPremium
+        reply = isPremium
           ? "Hello! 👋 Welcome back, PRO member. You have priority support — what can we help you with today?"
-          : "Hello! 👋 Welcome to 7SEVEN support. How can we help you today? You can also check our quick replies below for common questions.";
+          : "Hello! 👋 Welcome to 7SEVEN support. How can we help you today?";
       } else {
-        reply = data.isPremium
+        reply = isPremium
           ? "Thanks for reaching out. As a PRO member, your case is flagged as priority and a human agent will respond within 1 hour. Your message has been received."
           : "Thanks for reaching out! Our support team will review your message and respond within 24 hours. For faster resolution, PRO members get responses within 1 hour — upgrade under Profile → Get Premium.";
       }
 
-      // Insert auto-reply
       await db.from("support_messages").insert({
-        user_id: data.userId,
+        user_id: userId,
         sender: "agent",
         body: reply,
       });
@@ -96,14 +104,15 @@ export const sendSupportMessage = createServerFn({ method: "POST" })
 
 // ─── Get unread agent message count ───────────────────────────────────────────
 export const getUnreadSupportCount = createServerFn({ method: "GET" })
-  .validator((d: { userId: string }) => d)
-  .handler(async ({ data }) => {
+  .validator((d: { userId?: string }) => d)
+  .handler(async () => {
     try {
+      const userId = await requireUser();
       const db = getServerSupabase();
       const { count } = await db
         .from("support_messages")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", data.userId)
+        .eq("user_id", userId)
         .eq("sender", "agent")
         .eq("read", false);
       return { count: count ?? 0 };

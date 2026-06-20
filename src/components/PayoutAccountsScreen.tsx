@@ -143,7 +143,7 @@ export function PayoutAccountsScreen({ userId, onBack }: PayoutAccountsScreenPro
   const handleSetDefault = async (acc: Account) => {
     setSettingDefaultId(acc.id);
     try {
-      await setDefaultAccount({ data: { userId, accountId: acc.id } });
+      await setDefaultAccount({ data: { accountId: acc.id } });
       invalidate();
     } finally {
       setSettingDefaultId(null);
@@ -153,7 +153,7 @@ export function PayoutAccountsScreen({ userId, onBack }: PayoutAccountsScreenPro
   const handleDelete = async (acc: Account) => {
     setDeletingId(acc.id);
     try {
-      await deletePayoutAccount({ data: { userId, accountId: acc.id } });
+      await deletePayoutAccount({ data: { accountId: acc.id } });
       invalidate();
       setConfirmDelete(null);
     } finally {

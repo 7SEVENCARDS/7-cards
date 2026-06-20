@@ -166,7 +166,6 @@ function App() {
     try {
       const trade = await createTrade({
         data: {
-          userId: user.id,
           type: "gift_card",
           brand: activeSell.brand,
           amountUsd: Number(activeSell.amountUsd),
@@ -1295,7 +1294,6 @@ function VerifyScreen({
         const result = await verifyGiftCard({
           data: {
             tradeId,
-            userId,
             cardCode,
             cardPin,
             brand,
@@ -1343,14 +1341,7 @@ function VerifyScreen({
 
     try {
       const result = await processPayout({
-        data: {
-          tradeId,
-          userId,
-          amountNgn,
-          bankCode: activeBankCode,
-          accountNumber: activeBankAccount,
-          accountName: activeBankName,
-        },
+        data: { tradeId },
       });
 
       clearInterval(progressInterval);
@@ -1369,7 +1360,6 @@ function VerifyScreen({
           const bank = NG_BANKS.find(b => b.code === bankEntry.bankCode);
           addPayoutAccount({
             data: {
-              userId,
               bankCode: bankEntry.bankCode,
               bankName: bank?.name ?? bankEntry.bankCode,
               accountNumber: bankEntry.accountNumber,

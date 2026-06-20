@@ -1,7 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Admin Server Functions
-// These must only be called by authenticated admin users.
-// Protect them in the UI by checking profile.role === 'admin'.
+// All functions call requireAdmin() which verifies the SESSION cookie.
+// The caller never needs to (and must not) pass an adminId — the server
+// derives the admin identity from the session.
 //
 // To make a user admin, run in Supabase SQL Editor:
 //   UPDATE profiles SET role = 'admin' WHERE id = '<user-uuid>';
@@ -9,18 +10,17 @@
 
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
+import { requireAdmin, logAdminAction } from "../lib/auth-server";
 
 // ─── Platform Stats ───────────────────────────────────────────────────────────
 export const getAdminStats = createServerFn({ method: "GET" })
-  .validator((d: { adminId: string }) => d)
-  .handler(async ({ data }) => {
+  .validator((d: Record<string, never>) => d)
+  .handler(async () => {
+    await requireAdmin();
     const db = getServerSupabase();
-
-    await assertAdmin(db, data.adminId);
 
     const now = new Date();
     const dayStart   = new Date(now); dayStart.setHours(0, 0, 0, 0);
-    const weekStart  = new Date(now); weekStart.setDate(now.getDate() - now.getDay()); weekStart.setHours(0, 0, 0, 0);
     const monthStart = new Date(now); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
 
     const [
@@ -53,11 +53,10 @@ export const getAdminStats = createServerFn({ method: "GET" })
 
 // ─── Pending KYC Queue ────────────────────────────────────────────────────────
 export const getKYCQueue = createServerFn({ method: "GET" })
-  .validator((d: { adminId: string; limit?: number }) => d)
+  .validator((d: { limit?: number }) => d)
   .handler(async ({ data }) => {
+    await requireAdmin();
     const db = getServerSupabase();
-    await assertAdmin(db, data.adminId);
-
     const { data: profiles, error } = await db
       .from("profiles")
       .select("id, full_name, phone, kyc_status, kyc_bvn, kyc_nin, created_at")
@@ -71,14 +70,12 @@ export const getKYCQueue = createServerFn({ method: "GET" })
 
 // ─── Approve KYC ─────────────────────────────────────────────────────────────
 export const approveKYC = createServerFn({ method: "POST" })
-  .validator((d: { adminId: string; userId: string; note?: string }) => d)
+  .validator((d: { userId: string; note?: string }) => d)
   .handler(async ({ data }) => {
+    const adminId = await requireAdmin();
     const db = getServerSupabase();
-    await assertAdmin(db, data.adminId);
 
-    await db.from("profiles")
-      .update({ kyc_status: "verified" })
-      .eq("id", data.userId);
+    await db.from("profiles").update({ kyc_status: "verified" }).eq("id", data.userId);
 
     await db.from("notifications").insert({
       user_id: data.userId,
@@ -92,19 +89,18 @@ export const approveKYC = createServerFn({ method: "POST" })
       pushNotify(data.userId, "KYC Approved! ✅", "Identity confirmed — start trading now.");
     } catch { /* non-critical */ }
 
+    await logAdminAction(adminId, "kyc_approve", data.userId, { note: data.note });
     return { success: true };
   });
 
 // ─── Reject KYC ──────────────────────────────────────────────────────────────
 export const rejectKYC = createServerFn({ method: "POST" })
-  .validator((d: { adminId: string; userId: string; reason: string }) => d)
+  .validator((d: { userId: string; reason: string }) => d)
   .handler(async ({ data }) => {
+    const adminId = await requireAdmin();
     const db = getServerSupabase();
-    await assertAdmin(db, data.adminId);
 
-    await db.from("profiles")
-      .update({ kyc_status: "rejected" })
-      .eq("id", data.userId);
+    await db.from("profiles").update({ kyc_status: "rejected" }).eq("id", data.userId);
 
     await db.from("notifications").insert({
       user_id: data.userId,
@@ -118,15 +114,16 @@ export const rejectKYC = createServerFn({ method: "POST" })
       pushNotify(data.userId, "KYC Needs Attention", data.reason);
     } catch { /* non-critical */ }
 
+    await logAdminAction(adminId, "kyc_reject", data.userId, { reason: data.reason });
     return { success: true };
   });
 
-// ─── Manual Review Queue (gift cards flagged for human check) ─────────────────
+// ─── Manual Review Queue ──────────────────────────────────────────────────────
 export const getManualReviewQueue = createServerFn({ method: "GET" })
-  .validator((d: { adminId: string; limit?: number }) => d)
+  .validator((d: { limit?: number }) => d)
   .handler(async ({ data }) => {
+    await requireAdmin();
     const db = getServerSupabase();
-    await assertAdmin(db, data.adminId);
 
     const { data: trades, error } = await db
       .from("trades")
@@ -144,12 +141,12 @@ export const getManualReviewQueue = createServerFn({ method: "GET" })
     return trades ?? [];
   });
 
-// ─── Approve Manual Trade (mark as ready for payout) ─────────────────────────
+// ─── Approve Manual Trade ─────────────────────────────────────────────────────
 export const approveManualTrade = createServerFn({ method: "POST" })
-  .validator((d: { adminId: string; tradeId: string }) => d)
+  .validator((d: { tradeId: string }) => d)
   .handler(async ({ data }) => {
+    const adminId = await requireAdmin();
     const db = getServerSupabase();
-    await assertAdmin(db, data.adminId);
 
     const { data: trade } = await db
       .from("trades")
@@ -159,9 +156,7 @@ export const approveManualTrade = createServerFn({ method: "POST" })
 
     if (!trade) throw new Error("Trade not found");
 
-    await db.from("trades")
-      .update({ requires_manual_review: false })
-      .eq("id", data.tradeId);
+    await db.from("trades").update({ requires_manual_review: false }).eq("id", data.tradeId);
 
     await db.from("notifications").insert({
       user_id: trade.user_id,
@@ -175,15 +170,16 @@ export const approveManualTrade = createServerFn({ method: "POST" })
       pushNotify(trade.user_id, "Card Verified ✅", "Your card is verified. Proceed to payout.");
     } catch { /* non-critical */ }
 
+    await logAdminAction(adminId, "manual_trade_approve", data.tradeId);
     return { success: true };
   });
 
 // ─── Reject Manual Trade ──────────────────────────────────────────────────────
 export const rejectManualTrade = createServerFn({ method: "POST" })
-  .validator((d: { adminId: string; tradeId: string; reason: string }) => d)
+  .validator((d: { tradeId: string; reason: string }) => d)
   .handler(async ({ data }) => {
+    const adminId = await requireAdmin();
     const db = getServerSupabase();
-    await assertAdmin(db, data.adminId);
 
     const { data: trade } = await db
       .from("trades")
@@ -193,9 +189,11 @@ export const rejectManualTrade = createServerFn({ method: "POST" })
 
     if (!trade) throw new Error("Trade not found");
 
-    await db.from("trades")
-      .update({ status: "invalid", failure_reason: data.reason, requires_manual_review: false })
-      .eq("id", data.tradeId);
+    await db.from("trades").update({
+      status: "invalid",
+      failure_reason: data.reason,
+      requires_manual_review: false,
+    }).eq("id", data.tradeId);
 
     await db.from("notifications").insert({
       user_id: trade.user_id,
@@ -209,20 +207,16 @@ export const rejectManualTrade = createServerFn({ method: "POST" })
       pushNotify(trade.user_id, "Card Rejected", data.reason);
     } catch { /* non-critical */ }
 
+    await logAdminAction(adminId, "manual_trade_reject", data.tradeId, { reason: data.reason });
     return { success: true };
   });
 
 // ─── All Trades (paginated) ───────────────────────────────────────────────────
 export const getAdminTrades = createServerFn({ method: "GET" })
-  .validator((d: {
-    adminId: string;
-    page?: number;
-    pageSize?: number;
-    status?: string;
-  }) => d)
+  .validator((d: { page?: number; pageSize?: number; status?: string }) => d)
   .handler(async ({ data }) => {
+    await requireAdmin();
     const db = getServerSupabase();
-    await assertAdmin(db, data.adminId);
 
     const page = data.page ?? 0;
     const size = data.pageSize ?? 25;
@@ -246,17 +240,12 @@ export const getAdminTrades = createServerFn({ method: "GET" })
     return { trades: trades ?? [], total: count ?? 0, page, pageSize: size };
   });
 
-// ─── Manual NGN Credit (emergency/dispute resolution) ────────────────────────
+// ─── Manual NGN Credit (emergency / dispute resolution) ──────────────────────
 export const adminCreditWallet = createServerFn({ method: "POST" })
-  .validator((d: {
-    adminId: string;
-    userId: string;
-    amountNgn: number;
-    reason: string;
-  }) => d)
+  .validator((d: { userId: string; amountNgn: number; reason: string }) => d)
   .handler(async ({ data }) => {
+    const adminId = await requireAdmin();
     const db = getServerSupabase();
-    await assertAdmin(db, data.adminId);
 
     if (data.amountNgn <= 0 || data.amountNgn > 5_000_000) {
       return { success: false, error: "Amount must be between ₦1 and ₦5,000,000" };
@@ -275,15 +264,19 @@ export const adminCreditWallet = createServerFn({ method: "POST" })
       type: "success",
     });
 
+    await logAdminAction(adminId, "credit_wallet", data.userId, {
+      amount_ngn: data.amountNgn,
+      reason: data.reason,
+    });
     return { success: true };
   });
 
-// ─── Get all gift card exchange rates ────────────────────────────────────────
+// ─── Get all exchange rates ───────────────────────────────────────────────────
 export const getAdminRates = createServerFn({ method: "GET" })
-  .validator((d: { adminId: string }) => d)
-  .handler(async ({ data }) => {
+  .validator((d: Record<string, never>) => d)
+  .handler(async () => {
+    await requireAdmin();
     const db = getServerSupabase();
-    await assertAdmin(db, data.adminId);
 
     const { data: rates, error } = await db
       .from("exchange_rates")
@@ -295,23 +288,17 @@ export const getAdminRates = createServerFn({ method: "GET" })
     return rates ?? [];
   });
 
-// ─── Update a single gift card rate ──────────────────────────────────────────
+// ─── Update a single exchange rate ────────────────────────────────────────────
 export const updateExchangeRate = createServerFn({ method: "POST" })
-  .validator((d: {
-    adminId: string;
-    brand: string;
-    region: string;
-    ratePerDollar: number;
-  }) => d)
+  .validator((d: { brand: string; region: string; ratePerDollar: number }) => d)
   .handler(async ({ data }) => {
+    const adminId = await requireAdmin();
     const db = getServerSupabase();
-    await assertAdmin(db, data.adminId);
 
     if (data.ratePerDollar < 100 || data.ratePerDollar > 10_000) {
       return { success: false, error: "Rate must be between ₦100 and ₦10,000 per dollar." };
     }
 
-    // Compute trend vs previous rate
     const { data: prev } = await db
       .from("exchange_rates")
       .select("rate_per_dollar")
@@ -336,18 +323,23 @@ export const updateExchangeRate = createServerFn({ method: "POST" })
     );
 
     if (error) throw error;
+
+    await logAdminAction(adminId, "rate_update", null, {
+      brand: data.brand,
+      region: data.region,
+      from: prevRate,
+      to: data.ratePerDollar,
+      trend,
+    });
     return { success: true, trend };
   });
 
-// ─── Bulk update gift card rates (CSV import) ────────────────────────────────
+// ─── Bulk update rates (CSV import) ──────────────────────────────────────────
 export const bulkUpdateRates = createServerFn({ method: "POST" })
-  .validator((d: {
-    adminId: string;
-    rows: Array<{ brand: string; region: string; ratePerDollar: number }>;
-  }) => d)
+  .validator((d: { rows: Array<{ brand: string; region: string; ratePerDollar: number }> }) => d)
   .handler(async ({ data }) => {
+    const adminId = await requireAdmin();
     const db = getServerSupabase();
-    await assertAdmin(db, data.adminId);
 
     const results: Array<{ brand: string; ok: boolean; error?: string }> = [];
     const now = new Date().toISOString();
@@ -369,29 +361,23 @@ export const bulkUpdateRates = createServerFn({ method: "POST" })
         },
         { onConflict: "brand,region" }
       );
-      results.push(error
-        ? { brand: row.brand, ok: false, error: error.message }
-        : { brand: row.brand, ok: true }
+      results.push(
+        error
+          ? { brand: row.brand, ok: false, error: error.message }
+          : { brand: row.brand, ok: true }
       );
     }
 
+    await logAdminAction(adminId, "bulk_rate_update", null, {
+      total: data.rows.length,
+      imported: results.filter((r) => r.ok).length,
+      failed: results.filter((r) => !r.ok).length,
+    });
+
     return {
       success: true,
-      imported: results.filter(r => r.ok).length,
-      failed: results.filter(r => !r.ok).length,
+      imported: results.filter((r) => r.ok).length,
+      failed: results.filter((r) => !r.ok).length,
       results,
     };
   });
-
-// ─── Internal: assert admin role ─────────────────────────────────────────────
-async function assertAdmin(db: ReturnType<typeof import("../lib/supabase.server")["getServerSupabase"]>, userId: string) {
-  const { data } = await db
-    .from("profiles")
-    .select("role")
-    .eq("id", userId)
-    .single();
-
-  if (data?.role !== "admin") {
-    throw new Error("UNAUTHORIZED: Admin access required");
-  }
-}

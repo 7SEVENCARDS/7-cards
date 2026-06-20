@@ -53,7 +53,7 @@ export function KYCScreen({
     }
     setLoading(true);
     try {
-      const result = await verifyBVN({ data: { userId, bvn } });
+      const result = await verifyBVN({ data: { bvn } });
       if ((result as { success: boolean }).success) {
         setIdentity((result as { identity: IdentityData }).identity);
         setStep("bvn-confirm");
@@ -70,7 +70,7 @@ export function KYCScreen({
   const handleConfirmBVN = async () => {
     setLoading(true);
     try {
-      await submitKYC({ data: { userId } });
+      await submitKYC({ data: {} });
       qc.invalidateQueries({ queryKey: ["kyc-status", userId] });
       qc.invalidateQueries({ queryKey: ["profile", userId] });
       qc.invalidateQueries({ queryKey: ["notifications", userId] });
@@ -91,7 +91,7 @@ export function KYCScreen({
     setLoading(true);
     try {
       if (nin) {
-        await verifyNIN({ data: { userId, nin } });
+        await verifyNIN({ data: { nin } });
       }
       qc.invalidateQueries({ queryKey: ["profile", userId] });
       setStep("submitted");

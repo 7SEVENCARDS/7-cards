@@ -56,9 +56,7 @@ export function PremiumScreen({ userId, userEmail, userName, onBack }: PremiumSc
     setLoading(true);
     setError("");
     try {
-      const res = await createPremiumCheckout({
-        data: { userId, email: userEmail, name: userName },
-      });
+      const res = await createPremiumCheckout({ data: {} });
 
       if (!(res as { success: boolean }).success) {
         setError((res as { error?: string }).error ?? "Something went wrong");
@@ -71,7 +69,7 @@ export function PremiumScreen({ userId, userEmail, userName, onBack }: PremiumSc
       if (isDemo || !checkoutUrl) {
         // Demo mode — activate directly without payment
         await activatePremium({
-          data: { userId, transactionRef: (res as { transactionRef: string }).transactionRef },
+          data: { transactionRef: (res as { transactionRef: string }).transactionRef },
         });
         invalidate();
       } else {
@@ -88,7 +86,7 @@ export function PremiumScreen({ userId, userEmail, userName, onBack }: PremiumSc
   const handleCancel = async () => {
     setCancelling(true);
     try {
-      await cancelPremium({ data: { userId } });
+      await cancelPremium({ data: {} });
       invalidate();
       setShowCancel(false);
     } finally {
