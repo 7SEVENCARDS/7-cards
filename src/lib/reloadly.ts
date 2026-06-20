@@ -4,6 +4,8 @@
 // Credentials: https://developers.reloadly.com → API Keys
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { fetchWithTimeout } from "./fetch-with-timeout";
+
 const RELOADLY_ENV = process.env.RELOADLY_ENV || "sandbox";
 
 const BASE_URL =
@@ -33,7 +35,7 @@ async function getAccessToken(): Promise<string> {
       ? "https://giftcards.reloadly.com"
       : "https://giftcards-sandbox.reloadly.com";
 
-  const res = await fetch(AUTH_URL, {
+  const res = await fetchWithTimeout(AUTH_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -60,7 +62,7 @@ async function getAccessToken(): Promise<string> {
 
 async function reloadlyFetch(path: string, options: RequestInit = {}) {
   const token = await getAccessToken();
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetchWithTimeout(`${BASE_URL}${path}`, {
     ...options,
     headers: {
       Authorization: `Bearer ${token}`,
