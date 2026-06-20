@@ -495,6 +495,9 @@ function RatesTab({ adminId }: { adminId: string }) {
   const [editing, setEditing] = useState<{ brand: string; region: string; value: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ brand: string; ok: boolean; msg: string } | null>(null);
+  const [showNew, setShowNew] = useState(false);
+  const [newBrand, setNewBrand] = useState({ name: "", region: "USA", rate: "" });
+  const [addingNew, setAddingNew] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -542,17 +545,123 @@ function RatesTab({ adminId }: { adminId: string }) {
 
   return (
     <div className="px-5 pt-4 pb-10 space-y-3">
+      {/* New Brand modal */}
+      {showNew && (
+        <div className="fixed inset-0 bg-black/70 flex items-end z-50 p-4">
+          <div className="w-full bg-card rounded-3xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="font-bold text-sm">Add New Brand</p>
+              <button onClick={() => { setShowNew(false); setNewBrand({ name: "", region: "USA", rate: "" }); }}>
+                <X className="size-4 text-muted-foreground" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <label className="block">
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Brand Name</span>
+                <input
+                  autoFocus
+                  className="mt-1.5 w-full bg-secondary rounded-xl px-4 py-3 text-sm outline-none"
+                  placeholder="e.g. eBay, Razer Gold, iTunes"
+                  value={newBrand.name}
+                  onChange={(e) => setNewBrand((b) => ({ ...b, name: e.target.value }))}
+                />
+              </label>
+
+              <label className="block">
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Region</span>
+                <select
+                  className="mt-1.5 w-full bg-secondary rounded-xl px-4 py-3 text-sm outline-none"
+                  value={newBrand.region}
+                  onChange={(e) => setNewBrand((b) => ({ ...b, region: e.target.value }))}
+                >
+                  {["USA", "UK", "Canada", "Australia", "Europe"].map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Rate (₦ per $1)</span>
+                <input
+                  type="number"
+                  className="mt-1.5 w-full bg-secondary rounded-xl px-4 py-3 text-sm outline-none"
+                  placeholder="e.g. 1450"
+                  value={newBrand.rate}
+                  onChange={(e) => setNewBrand((b) => ({ ...b, rate: e.target.value }))}
+                />
+              </label>
+            </div>
+
+            {feedback?.brand === "__new__" && (
+              <p className={`text-xs font-semibold ${feedback.ok ? "text-cyan" : "text-red-400"}`}>
+                {feedback.ok ? "✓ " : "✗ "}{feedback.msg}
+              </p>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setShowNew(false); setNewBrand({ name: "", region: "USA", rate: "" }); }}
+                className="flex-1 py-3 rounded-xl bg-secondary text-sm font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={addingNew || !newBrand.name.trim() || !newBrand.rate}
+                onClick={async () => {
+                  const parsed = parseInt(newBrand.rate.replace(/[^\d]/g, ""), 10);
+                  if (!parsed || parsed < 100) {
+                    setFeedback({ brand: "__new__", ok: false, msg: "Rate must be at least ₦100" });
+                    return;
+                  }
+                  setAddingNew(true);
+                  try {
+                    const res = await updateExchangeRate({
+                      data: { adminId, brand: newBrand.name.trim(), region: newBrand.region, ratePerDollar: parsed },
+                    });
+                    if (res.success) {
+                      setRates((prev) => [
+                        ...(prev ?? []),
+                        { id: Date.now().toString(), brand: newBrand.name.trim(), region: newBrand.region, rate_per_dollar: parsed, trend: res.trend ?? "+0.0%", updated_at: new Date().toISOString() },
+                      ].sort((a, b) => a.brand.localeCompare(b.brand)));
+                      setShowNew(false);
+                      setNewBrand({ name: "", region: "USA", rate: "" });
+                      setFeedback({ brand: newBrand.name.trim(), ok: true, msg: `Added ₦${parsed.toLocaleString()}/$` });
+                    } else {
+                      setFeedback({ brand: "__new__", ok: false, msg: res.error ?? "Failed to add brand" });
+                    }
+                  } catch (e: unknown) {
+                    setFeedback({ brand: "__new__", ok: false, msg: e instanceof Error ? e.message : "Error" });
+                  } finally { setAddingNew(false); }
+                }}
+                className="flex-1 py-3 rounded-xl bg-cyan text-jungle-deep text-sm font-extrabold disabled:opacity-40"
+              >
+                {addingNew ? <Loader2 className="size-4 animate-spin mx-auto" /> : "Add Brand"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <p className="text-xs text-muted-foreground font-semibold uppercase tracking-widest">
           Gift Card Rates (₦ per $1)
         </p>
-        <button onClick={load} className="text-xs text-cyan flex items-center gap-1">
-          <RefreshCw className="size-3" /> Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={load} className="text-xs text-muted-foreground flex items-center gap-1">
+            <RefreshCw className="size-3" /> Refresh
+          </button>
+          <button
+            onClick={() => setShowNew(true)}
+            className="text-xs font-bold text-cyan flex items-center gap-1 bg-cyan/10 px-3 py-1.5 rounded-full"
+          >
+            + New Brand
+          </button>
+        </div>
       </div>
 
       <div className="bg-secondary/50 border border-white/5 rounded-2xl px-4 py-3 text-xs text-muted-foreground">
-        Tap the pencil icon to edit a rate. Changes take effect immediately for all users.
+        Tap ✏️ to edit a rate. Use <span className="font-bold text-foreground">+ New Brand</span> to add brands not in the list.
       </div>
 
       {(!rates || rates.length === 0) ? (
