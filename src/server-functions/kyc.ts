@@ -22,9 +22,35 @@ export const verifyBVN = createServerFn({ method: "POST" })
         kyc_status: "submitted",
       }).eq("id", data.userId);
 
-      // Return identity details for user to confirm (no raw BVN echoed back)
+      // Auto-approve if NIN is already on file
+      const { data: profile } = await db
+        .from("profiles")
+        .select("kyc_nin")
+        .eq("id", data.userId)
+        .single();
+
+      let autoApproved = false;
+      if (profile?.kyc_nin) {
+        await db.from("profiles")
+          .update({ kyc_status: "verified" })
+          .eq("id", data.userId);
+        autoApproved = true;
+
+        await db.from("notifications").insert({
+          user_id: data.userId,
+          title: "KYC Verified! ✅",
+          message: "Your identity has been verified. You can now trade without limits.",
+          type: "success",
+        });
+
+        const { pushNotify } = await import("../lib/onesignal");
+        pushNotify(data.userId, "KYC Verified! ✅",
+          "Identity confirmed — start trading now.");
+      }
+
       return {
         success: true,
+        autoApproved,
         identity: {
           firstName: result.first_name,
           middleName: result.middle_name ?? "",
@@ -42,14 +68,32 @@ export const verifyBVN = createServerFn({ method: "POST" })
       if (isConfig) {
         // Demo mode — return mock identity when Dojah isn't configured yet
         const db = getServerSupabase();
+
+        const { data: profile } = await db
+          .from("profiles")
+          .select("kyc_nin")
+          .eq("id", data.userId)
+          .single();
+
+        const autoApproved = !!profile?.kyc_nin;
         await db.from("profiles").update({
           kyc_bvn: "22*****123",
-          kyc_status: "submitted",
+          kyc_status: autoApproved ? "verified" : "submitted",
         }).eq("id", data.userId);
+
+        if (autoApproved) {
+          await db.from("notifications").insert({
+            user_id: data.userId,
+            title: "KYC Verified! ✅",
+            message: "Your identity has been verified. You can now trade without limits.",
+            type: "success",
+          });
+        }
 
         return {
           success: true,
           demo: true,
+          autoApproved,
           identity: {
             firstName: "Demo",
             middleName: "",
@@ -93,8 +137,35 @@ export const verifyNIN = createServerFn({ method: "POST" })
         kyc_nin: maskNIN(data.nin),
       }).eq("id", data.userId);
 
+      // Auto-approve if BVN is already on file
+      const { data: profile } = await db
+        .from("profiles")
+        .select("kyc_bvn")
+        .eq("id", data.userId)
+        .single();
+
+      let autoApproved = false;
+      if (profile?.kyc_bvn) {
+        await db.from("profiles")
+          .update({ kyc_status: "verified" })
+          .eq("id", data.userId);
+        autoApproved = true;
+
+        await db.from("notifications").insert({
+          user_id: data.userId,
+          title: "KYC Verified! ✅",
+          message: "Your identity has been verified. You can now trade without limits.",
+          type: "success",
+        });
+
+        const { pushNotify } = await import("../lib/onesignal");
+        pushNotify(data.userId, "KYC Verified! ✅",
+          "Identity confirmed — start trading now.");
+      }
+
       return {
         success: true,
+        autoApproved,
         identity: {
           firstName: result.first_name,
           middleName: result.middle_name ?? "",
@@ -110,7 +181,34 @@ export const verifyNIN = createServerFn({ method: "POST" })
       const isConfig = msg.includes("not configured");
 
       if (isConfig) {
-        return { success: true, demo: true };
+        // Demo mode — check if BVN already on file to auto-approve
+        try {
+          const db = getServerSupabase();
+          const { data: profile } = await db
+            .from("profiles")
+            .select("kyc_bvn")
+            .eq("id", data.userId)
+            .single();
+
+          const autoApproved = !!profile?.kyc_bvn;
+          await db.from("profiles").update({
+            kyc_nin: "122*****456",
+            ...(autoApproved ? { kyc_status: "verified" } : {}),
+          }).eq("id", data.userId);
+
+          if (autoApproved) {
+            await db.from("notifications").insert({
+              user_id: data.userId,
+              title: "KYC Verified! ✅",
+              message: "Your identity has been verified. You can now trade without limits.",
+              type: "success",
+            });
+          }
+
+          return { success: true, demo: true, autoApproved };
+        } catch {
+          return { success: true, demo: true, autoApproved: false };
+        }
       }
 
       return {
