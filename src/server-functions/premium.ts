@@ -45,14 +45,14 @@ export const createPremiumCheckout = createServerFn({ method: "POST" })
       const expiresAt = new Date();
       expiresAt.setMonth(expiresAt.getMonth() + 1);
 
-      await db.from("subscriptions").insert({
+      await db.from("subscriptions").upsert({
         user_id: data.userId,
         plan: "premium",
         status: "pending",
         amount_ngn: PREMIUM_PRICE_NGN,
         transaction_ref: transactionRef,
         expires_at: expiresAt.toISOString(),
-      }).onConflict("transaction_ref").ignore();
+      }, { onConflict: "transaction_ref", ignoreDuplicates: true });
 
       const result = await createPaymentLink({
         amountKobo: PREMIUM_PRICE_KOBO,
