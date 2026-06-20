@@ -1109,7 +1109,7 @@ function ProfileScreen({
         <MenuItem icon={ShieldCheck} label="Security & KYC"     sub={profile?.kyc_status === "verified" ? "✅ Verified" : profile?.kyc_status === "submitted" ? "⏳ Under Review" : "Tap to verify"} tint="text-cyan" onClick={onNavigateKYC} />
         <MenuItem icon={Wallet}      label="Payout Accounts"    sub="Manage bank accounts"           tint="text-orange" onClick={onNavigatePayout} />
         <MenuItem icon={MessageCircleIcon} label="Support & Help" sub={profile?.premium ? "Priority · replies in 1 hour" : "24/7 AI · 1-day human reply"} tint="text-gold" onClick={onNavigateSupport} />
-        <MenuItem icon={Gamepad2}    label="Low Data Mode"      sub="Save bandwidth"                 tint="text-cyan" toggle />
+        <MenuItem icon={Gamepad2}    label="Low Data Mode"      sub="Save bandwidth"                 tint="text-cyan" toggle storageKey="7sc_low_data_mode" />
         {onNavigateAdmin && (
           <MenuItem icon={ShieldCheck} label="Admin Panel" sub="Operator access" tint="text-red-400" onClick={onNavigateAdmin} />
         )}
@@ -1162,14 +1162,30 @@ function ProfStat({ n, label }: { n: string; label: string }) {
 }
 
 function MenuItem({
-  icon: Icon, label, sub, tint, toggle, onClick,
+  icon: Icon, label, sub, tint, toggle, onClick, storageKey,
 }: {
-  icon: React.ComponentType<{ className?: string }>; label: string; sub: string; tint: string; toggle?: boolean; onClick?: () => void;
+  icon: React.ComponentType<{ className?: string }>; label: string; sub: string; tint: string; toggle?: boolean; onClick?: () => void; storageKey?: string;
 }) {
-  const [on, setOn] = useState(true);
+  const [on, setOn] = useState<boolean>(() => {
+    if (storageKey) {
+      try {
+        const stored = localStorage.getItem(storageKey);
+        return stored !== null ? stored === "true" : true;
+      } catch { return true; }
+    }
+    return true;
+  });
   return (
     <button
-      onClick={() => { if (toggle) setOn((v) => !v); else onClick?.(); }}
+      onClick={() => {
+        if (toggle) {
+          setOn((v) => {
+            const next = !v;
+            if (storageKey) { try { localStorage.setItem(storageKey, String(next)); } catch { /* ignore */ } }
+            return next;
+          });
+        } else { onClick?.(); }
+      }}
       className="w-full bg-card rounded-2xl p-4 border border-border/60 flex items-center gap-3"
     >
       <div className={`size-10 rounded-xl bg-secondary grid place-items-center ${tint}`}>
