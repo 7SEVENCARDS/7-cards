@@ -87,9 +87,9 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
     const db = getServerSupabase();
 
     // ── Verification allowance check ─────────────────────────────────────────
-    const { getVerificationAllowance, recordVerificationUsage } = await import("./referrals");
+    const { checkVerificationAllowance, addVerificationUsage } = await import("../lib/db-helpers");
 
-    const allowance = await getVerificationAllowance({ data: { userId: data.userId } });
+    const allowance = await checkVerificationAllowance(db, data.userId);
 
     if (!allowance.allowed) {
       await db.from("trades").update({
@@ -111,7 +111,7 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
     // Record this verification attempt (for free-tier users; ignored for unlimited)
     if (!allowance.unlimited) {
       try {
-        await recordVerificationUsage({ data: { userId: data.userId, tradeId: data.tradeId } });
+        await addVerificationUsage(db, data.userId, data.tradeId);
       } catch { /* non-critical */ }
     }
 
@@ -225,17 +225,9 @@ export const processPayout = createServerFn({ method: "POST" })
         } catch { /* non-critical */ }
 
         // Pay 5% recurring commission to referrer on EVERY successful trade.
-        // This runs regardless of whether it's the user's first trade, creating
-        // a continuous loyalty incentive for referrers.
         try {
-          const { creditReferrerCommission } = await import("./referrals");
-          await creditReferrerCommission({
-            data: {
-              traderId: data.userId,
-              tradeId: data.tradeId,
-              tradeAmountNgn: data.amountNgn,
-            },
-          });
+          const { creditReferrerCommissionFn } = await import("../lib/db-helpers");
+          await creditReferrerCommissionFn(db, data.userId, data.tradeId, data.amountNgn);
         } catch { /* non-critical — don't fail the payout if commission errors */ }
 
         return { success: true, transactionRef: result.transactionRef };
@@ -285,14 +277,8 @@ export const processPayout = createServerFn({ method: "POST" })
 
         // Also pay referral commission in demo mode
         try {
-          const { creditReferrerCommission } = await import("./referrals");
-          await creditReferrerCommission({
-            data: {
-              traderId: data.userId,
-              tradeId: data.tradeId,
-              tradeAmountNgn: data.amountNgn,
-            },
-          });
+          const { creditReferrerCommissionFn } = await import("../lib/db-helpers");
+          await creditReferrerCommissionFn(db, data.userId, data.tradeId, data.amountNgn);
         } catch { /* non-critical */ }
 
         return { success: true, transactionRef: "DEMO-" + data.tradeId, demo: true };
