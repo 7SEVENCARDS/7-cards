@@ -69,6 +69,11 @@ export const createTrade = createServerFn({ method: "POST" })
 // We check the card against Reloadly's redeem-codes endpoint; if that endpoint
 // isn't available on the current tier, we flag for manual operator review —
 // standard practice for Nigerian gift card trading platforms.
+//
+// Rate limiting (free users):
+//   - 3 verifications per day for free accounts (Reloadly API billing protection)
+//   - Unlimited for: premium subscribers, or users with $25+/week or $50+/month
+//     in successful paid trades.
 export const verifyGiftCard = createServerFn({ method: "POST" })
   .validator((d: {
     tradeId: string;
@@ -81,8 +86,34 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const db = getServerSupabase();
 
+    // ── Verification allowance check ─────────────────────────────────────────
+    const { getVerificationAllowance, recordVerificationUsage } = await import("./referrals");
+
+    const allowance = await getVerificationAllowance({ data: { userId: data.userId } });
+
+    if (!allowance.allowed) {
+      await db.from("trades").update({
+        status: "failed",
+        failure_reason: "DAILY_LIMIT_REACHED",
+      }).eq("id", data.tradeId);
+
+      return {
+        success: false,
+        limitReached: true,
+        reason: `You've used your 3 free daily verifications. Trade $25+ this week or $50+ this month for unlimited access, or upgrade to Premium.`,
+        allowance,
+      };
+    }
+
     // Mark trade as scanning
     await db.from("trades").update({ status: "scanning" }).eq("id", data.tradeId);
+
+    // Record this verification attempt (for free-tier users; ignored for unlimited)
+    if (!allowance.unlimited) {
+      try {
+        await recordVerificationUsage({ data: { userId: data.userId, tradeId: data.tradeId } });
+      } catch { /* non-critical */ }
+    }
 
     try {
       const { verifyUserGiftCard } = await import("../lib/reloadly");
@@ -106,6 +137,7 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
           success: true,
           tradeId: data.tradeId,
           requiresManualReview: result.requiresManualReview,
+          allowance,
         };
       } else {
         await db.from("trades").update({
@@ -183,11 +215,19 @@ export const processPayout = createServerFn({ method: "POST" })
           type: "success",
         });
 
-        // Credit referral bonus if this is user's first completed trade
+        // Pay 5% recurring commission to referrer on EVERY successful trade.
+        // This runs regardless of whether it's the user's first trade, creating
+        // a continuous loyalty incentive for referrers.
         try {
-          const { creditReferrerBonus } = await import("./referrals");
-          await creditReferrerBonus({ data: { traderId: data.userId } });
-        } catch { /* non-critical */ }
+          const { creditReferrerCommission } = await import("./referrals");
+          await creditReferrerCommission({
+            data: {
+              traderId: data.userId,
+              tradeId: data.tradeId,
+              tradeAmountNgn: data.amountNgn,
+            },
+          });
+        } catch { /* non-critical — don't fail the payout if commission errors */ }
 
         return { success: true, transactionRef: result.transactionRef };
       } else {
@@ -224,6 +264,18 @@ export const processPayout = createServerFn({ method: "POST" })
           message: `₦${data.amountNgn.toLocaleString()} has been credited to your wallet (demo).`,
           type: "success",
         });
+
+        // Also pay referral commission in demo mode
+        try {
+          const { creditReferrerCommission } = await import("./referrals");
+          await creditReferrerCommission({
+            data: {
+              traderId: data.userId,
+              tradeId: data.tradeId,
+              tradeAmountNgn: data.amountNgn,
+            },
+          });
+        } catch { /* non-critical */ }
 
         return { success: true, transactionRef: "DEMO-" + data.tradeId, demo: true };
       }
