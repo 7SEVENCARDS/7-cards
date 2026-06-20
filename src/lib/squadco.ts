@@ -13,10 +13,11 @@ const BASE_URL =
     : "https://sandbox-api-d.squadco.com";
 
 function getHeaders() {
-  const apiKey = process.env.SQUADCO_API_KEY;
+  // SQUADCO_SECRET_KEY is the bearer token used for all Squad API requests
+  const apiKey = process.env.SQUADCO_SECRET_KEY || process.env.SQUADCO_API_KEY;
 
   if (!apiKey || apiKey.includes("YOUR_")) {
-    throw new Error("[Squadco] SQUADCO_API_KEY not configured");
+    throw new Error("[Squadco] SQUADCO_SECRET_KEY not configured");
   }
 
   return {
