@@ -44,6 +44,7 @@ import { PremiumScreen } from "../components/PremiumScreen";
 import { TradeHistoryScreen } from "../components/TradeHistoryScreen";
 import { TradeStatusScreen } from "../components/TradeStatusScreen";
 import { SupportScreen } from "../components/SupportScreen";
+import { AdminScreen } from "../components/AdminScreen";
 import { useSession } from "../hooks/useSession";
 import {
   useExchangeRates,
@@ -63,7 +64,7 @@ export const Route = createFileRoute("/")({
   component: App,
 });
 
-type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications" | "referral" | "premium" | "history" | "status" | "support";
+type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications" | "referral" | "premium" | "history" | "status" | "support" | "admin";
 
 type ActiveSell = {
   brand: string;
@@ -270,6 +271,7 @@ function App() {
             onNavigateReferral={() => setTab("referral")}
             onNavigatePremium={() => setTab("premium")}
             onNavigateSupport={() => setTab("support")}
+            onNavigateAdmin={profile?.role === "admin" ? () => setTab("admin") : undefined}
           />
         )}
         {tab === "kyc" && user && (
@@ -330,8 +332,14 @@ function App() {
             onBack={() => setTab("profile")}
           />
         )}
+        {tab === "admin" && user && (
+          <AdminScreen
+            adminId={user.id}
+            onBack={() => setTab("profile")}
+          />
+        )}
 
-        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && tab !== "premium" && tab !== "history" && tab !== "status" && tab !== "support" && (
+        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && tab !== "premium" && tab !== "history" && tab !== "status" && tab !== "support" && tab !== "admin" && (
           <BottomNav tab={tab} setTab={(t) => setTab(t as Tab)} />
         )}
       </div>
@@ -356,7 +364,7 @@ type LeaderEntry = {
 type WalletData = { currency: string; balance: number; locked_balance: number };
 type PortfolioData = { totalNgn: number; changePercent: string };
 type ProfileData = {
-  id: string; full_name: string; phone: string | null; kyc_status: string; premium: boolean;
+  id: string; full_name: string; phone: string | null; kyc_status: string; premium: boolean; role?: string;
 };
 
 /* ─────────────────────────────────── HOME ─────────────────────────────────── */
@@ -999,9 +1007,9 @@ function CircleBtn({ icon: Icon, label }: { icon: React.ComponentType<{ classNam
 /* ─────────────────────────────────── PROFILE ─────────────────────────────────── */
 
 function ProfileScreen({
-  profile, xp, onSignOut, onNavigateKYC, onNavigatePayout, onNavigateReferral, onNavigatePremium, onNavigateSupport,
+  profile, xp, onSignOut, onNavigateKYC, onNavigatePayout, onNavigateReferral, onNavigatePremium, onNavigateSupport, onNavigateAdmin,
 }: {
-  profile?: ProfileData | null; xp?: XPData; onSignOut: () => void; onNavigateKYC: () => void; onNavigatePayout: () => void; onNavigateReferral: () => void; onNavigatePremium: () => void; onNavigateSupport: () => void;
+  profile?: ProfileData | null; xp?: XPData; onSignOut: () => void; onNavigateKYC: () => void; onNavigatePayout: () => void; onNavigateReferral: () => void; onNavigatePremium: () => void; onNavigateSupport: () => void; onNavigateAdmin?: () => void;
 }) {
   const firstName = (profile?.full_name ?? "User").split(" ")[0];
   const initial = firstName[0]?.toUpperCase() ?? "?";
@@ -1046,6 +1054,9 @@ function ProfileScreen({
         <MenuItem icon={Wallet}      label="Payout Accounts"    sub="Manage bank accounts"           tint="text-orange" onClick={onNavigatePayout} />
         <MenuItem icon={MessageCircleIcon} label="Support & Help" sub={profile?.premium ? "Priority · replies in 1 hour" : "24/7 AI · 1-day human reply"} tint="text-gold" onClick={onNavigateSupport} />
         <MenuItem icon={Gamepad2}    label="Low Data Mode"      sub="Save bandwidth"                 tint="text-cyan" toggle />
+        {onNavigateAdmin && (
+          <MenuItem icon={ShieldCheck} label="Admin Panel" sub="Operator access" tint="text-red-400" onClick={onNavigateAdmin} />
+        )}
       </div>
 
       <div className="px-5 mt-6">
