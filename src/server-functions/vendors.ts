@@ -893,6 +893,27 @@ export const adminApproveWithdrawal = createServerFn({ method: "POST" })
       throw new Error(payoutData?.message ?? "Payout failed — balance restored");
     }
 
+    // Notify vendor via Telegram (fire-and-forget — don't fail the response if this fails)
+    try {
+      const { data: vendor } = await db
+        .from("vendors")
+        .select("contact_name, business_name, telegram_chat_id, telegram_username")
+        .eq("id", req.vendor_id)
+        .single() as { data: { contact_name?: string | null; business_name?: string | null; telegram_chat_id?: number | null; telegram_username?: string | null } | null };
+      const chatId = vendor?.telegram_chat_id ?? vendor?.telegram_username;
+      if (chatId) {
+        const { sendWithdrawalApprovedNotification } = await import("../lib/telegram");
+        await sendWithdrawalApprovedNotification({
+          telegramChatId: chatId,
+          vendorName: vendor?.contact_name ?? vendor?.business_name ?? "Vendor",
+          amountNgn: Number(req.amount),
+          bankName: req.bank_name,
+          accountNumber: req.account_number,
+          squadcoRef,
+        });
+      }
+    } catch { /* non-fatal */ }
+
     return { ok: true, squadcoRef };
   });
 
@@ -949,6 +970,25 @@ export const adminRejectWithdrawal = createServerFn({ method: "POST" })
         updated_at: new Date().toISOString(),
       })
       .eq("id", data.requestId);
+
+    // Notify vendor via Telegram (fire-and-forget)
+    try {
+      const { data: vendor } = await db
+        .from("vendors")
+        .select("contact_name, business_name, telegram_chat_id, telegram_username")
+        .eq("id", req.vendor_id)
+        .single() as { data: { contact_name?: string | null; business_name?: string | null; telegram_chat_id?: number | null; telegram_username?: string | null } | null };
+      const chatId = vendor?.telegram_chat_id ?? vendor?.telegram_username;
+      if (chatId) {
+        const { sendWithdrawalRejectedNotification } = await import("../lib/telegram");
+        await sendWithdrawalRejectedNotification({
+          telegramChatId: chatId,
+          vendorName: vendor?.contact_name ?? vendor?.business_name ?? "Vendor",
+          amountNgn: Number(req.amount),
+          reason: data.reason,
+        });
+      }
+    } catch { /* non-fatal */ }
 
     return { ok: true };
   });

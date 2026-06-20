@@ -87,3 +87,50 @@ export async function sendVendorCardNotification(opts: {
   });
   return sendTelegramMessage(opts.telegramChatId, text, "HTML");
 }
+
+export async function sendWithdrawalApprovedNotification(opts: {
+  telegramChatId: string | number;
+  vendorName: string;
+  amountNgn: number;
+  bankName: string;
+  accountNumber: string;
+  squadcoRef: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  const text = [
+    `✅ <b>Withdrawal Approved — 7SEVEN CARDS</b>`,
+    ``,
+    `Hi ${opts.vendorName}! Your withdrawal has been processed.`,
+    ``,
+    `💸 <b>Amount:</b> ₦${opts.amountNgn.toLocaleString()}`,
+    `🏦 <b>Bank:</b> ${opts.bankName}`,
+    `💳 <b>Account:</b> ${opts.accountNumber}`,
+    ``,
+    `Your funds are on their way. Please allow up to 10 minutes for the credit to reflect.`,
+    ``,
+    `📋 Ref: <code>${opts.squadcoRef.slice(0, 16)}</code>`,
+  ].join("\n");
+  return sendTelegramMessage(opts.telegramChatId, text, "HTML");
+}
+
+export async function sendWithdrawalRejectedNotification(opts: {
+  telegramChatId: string | number;
+  vendorName: string;
+  amountNgn: number;
+  reason?: string | null;
+}): Promise<{ ok: boolean; error?: string }> {
+  const reasonLine = opts.reason
+    ? `\n📝 <b>Reason:</b> ${opts.reason}`
+    : "";
+  const text = [
+    `❌ <b>Withdrawal Rejected — 7SEVEN CARDS</b>`,
+    ``,
+    `Hi ${opts.vendorName}, your withdrawal request has been rejected.`,
+    ``,
+    `💰 <b>Amount:</b> ₦${opts.amountNgn.toLocaleString()} has been <b>returned to your wallet</b>.${reasonLine}`,
+    ``,
+    `If you think this is a mistake, please contact support or submit a new request with correct bank details.`,
+    ``,
+    `🔗 Vendor portal: https://7sevencards.com/vendor`,
+  ].join("\n");
+  return sendTelegramMessage(opts.telegramChatId, text, "HTML");
+}
