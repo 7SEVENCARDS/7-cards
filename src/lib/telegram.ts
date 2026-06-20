@@ -112,6 +112,32 @@ export async function sendWithdrawalApprovedNotification(opts: {
   return sendTelegramMessage(opts.telegramChatId, text, "HTML");
 }
 
+export async function sendTierPromotionNotification(opts: {
+  telegramChatId: string | number;
+  vendorName: string;
+  totalRedeemed: number;
+}): Promise<{ ok: boolean; error?: string }> {
+  const text = [
+    `⭐ <b>Congratulations — You're Now a Premium Vendor!</b>`,
+    ``,
+    `Hi ${opts.vendorName}! Your hard work has paid off. 🎉`,
+    ``,
+    `You've been <b>promoted to Premium tier</b> on 7SEVEN CARDS.`,
+    ``,
+    `📊 Cards redeemed so far: <b>${opts.totalRedeemed}</b>`,
+    ``,
+    `<b>Premium perks:</b>`,
+    `• Priority card assignments`,
+    `• Higher daily limits`,
+    `• Dedicated support`,
+    `• Early access to high-value cards`,
+    ``,
+    `Keep up the great work! 🚀`,
+    `🔗 https://7sevencards.com/vendor`,
+  ].join("\n");
+  return sendTelegramMessage(opts.telegramChatId, text, "HTML");
+}
+
 export async function sendWithdrawalRejectedNotification(opts: {
   telegramChatId: string | number;
   vendorName: string;

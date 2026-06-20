@@ -58,6 +58,7 @@ import {
   adminApproveWithdrawal,
   adminRejectWithdrawal,
   adminGetVendorLeaderboard,
+  adminPromoteVendorTier,
 } from "../server-functions/vendors";
 
 type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors";
@@ -1336,6 +1337,7 @@ function VendorsTab({ adminId }: { adminId: string }) {
   type LeaderRow = { rank: number; id: string; businessName: string; contactName: string | null; telegramUsername: string | null; tier: string; totalRedeemed: number; lastActiveAt: string | null; totalFunded: number; balance: number };
   const [leaderboard, setLeaderboard] = useState<LeaderRow[]>([]);
   const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
+  const [promoting, setPromoting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1373,6 +1375,18 @@ function VendorsTab({ adminId }: { adminId: string }) {
     } catch (e) {
       alert(e instanceof Error ? e.message : "Rejection failed");
     } finally { setActingWithdrawal(null); }
+  };
+
+  const handlePromote = async (vendorId: string, toTier: "standard" | "premium") => {
+    setPromoting(vendorId);
+    try {
+      const res = await adminPromoteVendorTier({ data: { vendorId, tier: toTier } }) as { ok: boolean };
+      if (res.ok) {
+        setVendors(prev => prev.map(v => v.id === vendorId ? { ...v, tier: toTier } : v));
+        setLeaderboard(prev => prev.map(v => v.id === vendorId ? { ...v, tier: toTier } : v));
+      }
+    } catch (e) { alert(e instanceof Error ? e.message : "Promotion failed"); }
+    finally { setPromoting(null); }
   };
 
   const loadLeaderboard = useCallback(async () => {
@@ -1535,12 +1549,26 @@ function VendorsTab({ adminId }: { adminId: string }) {
                   )}
                 </div>
 
-                {/* Stats */}
-                <div className="text-right shrink-0">
+                {/* Stats + promote */}
+                <div className="text-right shrink-0 space-y-1.5">
                   <p className={`text-sm font-extrabold ${isTop3 ? "text-gold" : ""}`}>{v.totalRedeemed}</p>
                   <p className="text-[10px] text-muted-foreground">redeemed</p>
-                  <p className="text-xs font-semibold mt-0.5">{"₦" + (v.totalFunded / 1000).toFixed(0) + "k"}</p>
+                  <p className="text-xs font-semibold">{"₦" + (v.totalFunded / 1000).toFixed(0) + "k"}</p>
                   <p className="text-[10px] text-muted-foreground">volume</p>
+                  {v.tier !== "premium" ? (
+                    <button
+                      onClick={() => handlePromote(v.id, "premium")}
+                      disabled={promoting === v.id}
+                      className="flex items-center gap-1 px-2 py-1 text-[10px] font-bold rounded-lg bg-gold/20 border border-gold/30 text-gold disabled:opacity-50"
+                    >
+                      {promoting === v.id ? <Loader2 className="size-2.5 animate-spin" /> : <Star className="size-2.5" />}
+                      Promote
+                    </button>
+                  ) : (
+                    <span className="flex items-center gap-1 px-2 py-1 text-[10px] font-bold rounded-lg bg-gold/10 text-gold/60">
+                      <Star className="size-2.5" /> Premium
+                    </span>
+                  )}
                 </div>
               </div>
             );
@@ -1647,13 +1675,33 @@ function VendorsTab({ adminId }: { adminId: string }) {
                 </div>
 
                 {/* Actions */}
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   <button
                     onClick={() => setAssignModal({ vendorId: v.id, vendorName: v.business_name })}
                     className="flex-1 flex items-center justify-center gap-1.5 bg-gold/15 border border-gold/20 text-gold text-xs font-bold rounded-xl py-2.5"
                   >
                     <Gift className="size-3.5" /> Assign Card
                   </button>
+
+                  {v.tier !== "premium" && v.status === "active" && (
+                    <button
+                      onClick={() => handlePromote(v.id, "premium")}
+                      disabled={promoting === v.id}
+                      className="flex items-center justify-center gap-1 px-3 bg-gold/10 border border-gold/20 text-gold text-xs font-bold rounded-xl py-2.5 disabled:opacity-50"
+                    >
+                      {promoting === v.id ? <Loader2 className="size-3 animate-spin" /> : <Star className="size-3" />}
+                    </button>
+                  )}
+                  {v.tier === "premium" && v.status === "active" && (
+                    <button
+                      onClick={() => handlePromote(v.id, "standard")}
+                      disabled={promoting === v.id}
+                      title="Demote to standard"
+                      className="flex items-center justify-center gap-1 px-3 bg-secondary border border-border/60 text-muted-foreground text-xs font-bold rounded-xl py-2.5 disabled:opacity-50"
+                    >
+                      {promoting === v.id ? <Loader2 className="size-3 animate-spin" /> : <Star className="size-3 text-gold/40" />}
+                    </button>
+                  )}
 
                   {v.status === "pending" && (
                     <button

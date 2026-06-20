@@ -1029,3 +1029,49 @@ export const adminGetVendorLeaderboard = createServerFn({ method: "GET" })
       balance: (v.vendor_wallets as Array<{ total_funded: number; balance: number }> | null)?.[0]?.balance ?? 0,
     }));
   });
+
+// ─── Admin: Promote Vendor Tier ────────────────────────────────────────────────
+export const adminPromoteVendorTier = createServerFn({ method: "POST" })
+  .validator((d: unknown) => d as { vendorId: string; tier: "standard" | "premium" })
+  .handler(async ({ data }) => {
+    const { userId } = await requireAuth();
+    const db = getDb();
+    const { data: profile } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", userId)
+      .single();
+    if (profile?.role !== "admin") throw new Error("Forbidden");
+
+    const { data: vendor, error } = await db
+      .from("vendors")
+      .update({ tier: data.tier, updated_at: new Date().toISOString() })
+      .eq("id", data.vendorId)
+      .select("id, business_name, contact_name, telegram_chat_id, telegram_username, tier, total_redeemed")
+      .single() as {
+        data: {
+          id: string; business_name: string; contact_name: string | null;
+          telegram_chat_id: number | null; telegram_username: string | null;
+          tier: string; total_redeemed: number;
+        } | null;
+        error: unknown;
+      };
+    if (error || !vendor) throw new Error("Vendor not found");
+
+    // Send Telegram congratulations if promoting to premium
+    if (data.tier === "premium") {
+      try {
+        const chatId = vendor.telegram_chat_id ?? vendor.telegram_username;
+        if (chatId) {
+          const { sendTierPromotionNotification } = await import("../lib/telegram");
+          await sendTierPromotionNotification({
+            telegramChatId: chatId,
+            vendorName: vendor.contact_name ?? vendor.business_name,
+            totalRedeemed: vendor.total_redeemed,
+          });
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    return { ok: true, vendor };
+  });
