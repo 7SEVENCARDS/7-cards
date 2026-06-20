@@ -57,6 +57,7 @@ import {
   adminGetWithdrawalRequests,
   adminApproveWithdrawal,
   adminRejectWithdrawal,
+  adminGetVendorLeaderboard,
 } from "../server-functions/vendors";
 
 type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors";
@@ -1326,12 +1327,15 @@ function VendorsTab({ adminId }: { adminId: string }) {
   const [assignForm, setAssignForm] = useState({ brand: "Apple", amountUsd: "", amountNgn: "", cardCode: "", cardPin: "", tradeId: "", notifyTelegram: true });
   const [assigning, setAssigning] = useState(false);
   const [filterStatus, setFilterStatus] = useState<"all" | "pending" | "active" | "suspended">("all");
-  const [vendorSubTab, setVendorSubTab] = useState<"vendors" | "withdrawals">("vendors");
+  const [vendorSubTab, setVendorSubTab] = useState<"vendors" | "withdrawals" | "leaderboard">("vendors");
   const [withdrawals, setWithdrawals] = useState<WithdrawalReq[]>([]);
   const [loadingWithdrawals, setLoadingWithdrawals] = useState(false);
   const [actingWithdrawal, setActingWithdrawal] = useState<string | null>(null);
   const [rejectModal, setRejectModal] = useState<{ id: string; name: string } | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+  type LeaderRow = { rank: number; id: string; businessName: string; contactName: string | null; telegramUsername: string | null; tier: string; totalRedeemed: number; lastActiveAt: string | null; totalFunded: number; balance: number };
+  const [leaderboard, setLeaderboard] = useState<LeaderRow[]>([]);
+  const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1371,8 +1375,17 @@ function VendorsTab({ adminId }: { adminId: string }) {
     } finally { setActingWithdrawal(null); }
   };
 
+  const loadLeaderboard = useCallback(async () => {
+    setLoadingLeaderboard(true);
+    try {
+      const rows = await adminGetVendorLeaderboard({ data: {} });
+      setLeaderboard(rows as LeaderRow[]);
+    } catch { setLeaderboard([]); } finally { setLoadingLeaderboard(false); }
+  }, [adminId]);
+
   if (!vendors.length && !loading) load();
   if (vendorSubTab === "withdrawals" && !withdrawals.length && !loadingWithdrawals) loadWithdrawals();
+  if (vendorSubTab === "leaderboard" && !leaderboard.length && !loadingLeaderboard) loadLeaderboard();
   if (loading) return <CenterLoader />;
 
   const filtered = vendors.filter(v => filterStatus === "all" || v.status === filterStatus);
@@ -1441,6 +1454,9 @@ function VendorsTab({ adminId }: { adminId: string }) {
         <button onClick={() => { setVendorSubTab("withdrawals"); if (!withdrawals.length) loadWithdrawals(); }} className={`flex-1 text-xs font-bold py-2 rounded-xl transition-colors ${vendorSubTab === "withdrawals" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}>
           Withdrawals {withdrawals.filter(w => w.status === "pending").length > 0 ? `(${withdrawals.filter(w => w.status === "pending").length})` : ""}
         </button>
+        <button onClick={() => { setVendorSubTab("leaderboard"); if (!leaderboard.length) loadLeaderboard(); }} className={`flex-1 text-xs font-bold py-2 rounded-xl transition-colors ${vendorSubTab === "leaderboard" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}>
+          🏆 Leaders
+        </button>
       </div>
 
       {vendorSubTab === "withdrawals" && (
@@ -1477,6 +1493,76 @@ function VendorsTab({ adminId }: { adminId: string }) {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {vendorSubTab === "leaderboard" && (
+        <div className="p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Top Vendors by Redemptions</p>
+            <button onClick={loadLeaderboard} className="text-muted-foreground"><RefreshCw className="size-3.5" /></button>
+          </div>
+          {loadingLeaderboard && <CenterLoader />}
+          {!loadingLeaderboard && leaderboard.length === 0 && (
+            <EmptyState icon={TrendingUp} message="No active vendors yet" />
+          )}
+          {leaderboard.map((v, idx) => {
+            const medal = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : null;
+            const isTop3 = idx < 3;
+            return (
+              <div key={v.id} className={`flex items-center gap-3 rounded-2xl p-4 border ${
+                idx === 0 ? "bg-gold/10 border-gold/30" :
+                idx === 1 ? "bg-white/5 border-white/10" :
+                idx === 2 ? "bg-amber-700/10 border-amber-700/20" :
+                "bg-card border-border/60"
+              }`}>
+                {/* Rank */}
+                <div className={`w-8 text-center shrink-0 ${isTop3 ? "text-xl" : "text-xs font-extrabold text-muted-foreground"}`}>
+                  {medal ?? `#${v.rank}`}
+                </div>
+
+                {/* Info */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-sm font-extrabold truncate">{v.businessName}</p>
+                    {v.tier === "premium" && <Star className="size-3 text-gold shrink-0" />}
+                  </div>
+                  <p className="text-xs text-muted-foreground truncate">{v.contactName ?? "—"}</p>
+                  {v.telegramUsername && (
+                    <p className="text-[10px] text-blue-400 flex items-center gap-1 mt-0.5">
+                      <MessageCircle className="size-2.5" /> @{v.telegramUsername}
+                    </p>
+                  )}
+                </div>
+
+                {/* Stats */}
+                <div className="text-right shrink-0">
+                  <p className={`text-sm font-extrabold ${isTop3 ? "text-gold" : ""}`}>{v.totalRedeemed}</p>
+                  <p className="text-[10px] text-muted-foreground">redeemed</p>
+                  <p className="text-xs font-semibold mt-0.5">{"₦" + (v.totalFunded / 1000).toFixed(0) + "k"}</p>
+                  <p className="text-[10px] text-muted-foreground">volume</p>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Summary stats */}
+          {leaderboard.length > 0 && (
+            <div className="grid grid-cols-3 gap-2 pt-2">
+              <div className="bg-card border border-border/60 rounded-xl p-3 text-center">
+                <p className="text-sm font-extrabold text-gold">{leaderboard.reduce((s, v) => s + v.totalRedeemed, 0)}</p>
+                <p className="text-[10px] text-muted-foreground">Total Redeemed</p>
+              </div>
+              <div className="bg-card border border-border/60 rounded-xl p-3 text-center">
+                <p className="text-sm font-extrabold">{"₦" + (leaderboard.reduce((s, v) => s + v.totalFunded, 0) / 1000000).toFixed(1) + "M"}</p>
+                <p className="text-[10px] text-muted-foreground">Total Volume</p>
+              </div>
+              <div className="bg-card border border-border/60 rounded-xl p-3 text-center">
+                <p className="text-sm font-extrabold">{leaderboard.length}</p>
+                <p className="text-[10px] text-muted-foreground">Active Vendors</p>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

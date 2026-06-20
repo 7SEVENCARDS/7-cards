@@ -992,3 +992,40 @@ export const adminRejectWithdrawal = createServerFn({ method: "POST" })
 
     return { ok: true };
   });
+
+// ─── Admin: Vendor Leaderboard ─────────────────────────────────────────────────
+export const adminGetVendorLeaderboard = createServerFn({ method: "GET" })
+  .handler(async () => {
+    const { userId } = await requireAuth();
+    const db = getDb();
+    const { data: profile } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", userId)
+      .single();
+    if (profile?.role !== "admin") throw new Error("Forbidden");
+
+    const { data } = await db
+      .from("vendors")
+      .select(`
+        id, business_name, contact_name, telegram_username,
+        status, tier, total_redeemed, last_active_at,
+        vendor_wallets (total_funded, balance)
+      `)
+      .eq("status", "active")
+      .order("total_redeemed", { ascending: false })
+      .limit(20);
+
+    return (data ?? []).map((v, i) => ({
+      rank: i + 1,
+      id: v.id,
+      businessName: v.business_name,
+      contactName: v.contact_name,
+      telegramUsername: v.telegram_username,
+      tier: v.tier,
+      totalRedeemed: v.total_redeemed ?? 0,
+      lastActiveAt: v.last_active_at,
+      totalFunded: (v.vendor_wallets as Array<{ total_funded: number; balance: number }> | null)?.[0]?.total_funded ?? 0,
+      balance: (v.vendor_wallets as Array<{ total_funded: number; balance: number }> | null)?.[0]?.balance ?? 0,
+    }));
+  });
