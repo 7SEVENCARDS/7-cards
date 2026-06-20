@@ -215,6 +215,15 @@ export const processPayout = createServerFn({ method: "POST" })
           type: "success",
         });
 
+        // Push notification
+        try {
+          const { pushNotify } = await import("../lib/onesignal");
+          pushNotify(data.userId, "Payment Sent! 🎉",
+            `₦${data.amountNgn.toLocaleString()} is on its way to your bank.`,
+            { tradeId: data.tradeId, type: "payout" }
+          );
+        } catch { /* non-critical */ }
+
         // Pay 5% recurring commission to referrer on EVERY successful trade.
         // This runs regardless of whether it's the user's first trade, creating
         // a continuous loyalty incentive for referrers.
@@ -264,6 +273,15 @@ export const processPayout = createServerFn({ method: "POST" })
           message: `₦${data.amountNgn.toLocaleString()} has been credited to your wallet (demo).`,
           type: "success",
         });
+
+        // Push notification (demo mode)
+        try {
+          const { pushNotify } = await import("../lib/onesignal");
+          pushNotify(data.userId, "Payment Sent! 🎉",
+            `₦${data.amountNgn.toLocaleString()} credited to your wallet.`,
+            { tradeId: data.tradeId, type: "payout_demo" }
+          );
+        } catch { /* non-critical */ }
 
         // Also pay referral commission in demo mode
         try {
