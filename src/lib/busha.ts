@@ -4,6 +4,8 @@
 // Dashboard: https://busha.co → Developer → API Keys
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { fetchWithTimeout } from "./fetch-with-timeout";
+
 const BUSHA_BASE = "https://api.busha.co/v1";
 
 // ─── Company profit margin on all crypto trades ───────────────────────────────
@@ -24,7 +26,7 @@ function getBushaHeaders() {
 }
 
 async function bushaFetch(path: string, options: RequestInit = {}) {
-  const res = await fetch(`${BUSHA_BASE}${path}`, {
+  const res = await fetchWithTimeout(`${BUSHA_BASE}${path}`, {
     ...options,
     headers: {
       ...getBushaHeaders(),
