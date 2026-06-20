@@ -50,15 +50,6 @@ export const initiateCryptoSwap = createServerFn({ method: "POST" })
     const userId = await requireUser();
     const db = getServerSupabase();
 
-    const { data: profile } = await db
-      .from("profiles")
-      .select("kyc_status")
-      .eq("id", userId)
-      .single();
-    if (!profile || profile.kyc_status === "pending") {
-      return { success: false as const, reason: "KYC_REQUIRED" };
-    }
-
     const sufficient = await db.rpc("deduct_wallet_balance", {
       p_user_id: userId,
       p_currency: data.fromCurrency,
@@ -204,15 +195,6 @@ export const initiateCryptoSend = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const userId = await requireUser();
     const db = getServerSupabase();
-
-    const { data: profile } = await db
-      .from("profiles")
-      .select("kyc_status")
-      .eq("id", userId)
-      .single();
-    if (!profile || profile.kyc_status === "pending") {
-      return { success: false as const, reason: "KYC_REQUIRED" };
-    }
 
     const MINIMUMS: Record<string, number> = {
       BTC: 0.00001, ETH: 0.001, USDT: 1, USDC: 1, BNB: 0.001, SOL: 0.01,
