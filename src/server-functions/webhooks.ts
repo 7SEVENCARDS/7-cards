@@ -144,10 +144,8 @@ export async function handleSquadPayoutWebhook(request: Request): Promise<Respon
 
     // Referral commission (5% to referrer)
     try {
-      const { creditReferrerCommission } = await import("./referrals");
-      await creditReferrerCommission({
-        data: { traderId: trade.user_id, tradeId: trade.id, tradeAmountNgn: Number(trade.amount_ngn) },
-      });
+      const { creditReferrerCommissionFn } = await import("../lib/db-helpers");
+      await creditReferrerCommissionFn(db, trade.user_id, trade.id, Number(trade.amount_ngn));
     } catch { /* non-critical */ }
 
   } else if (Event === "transfer.failed") {
