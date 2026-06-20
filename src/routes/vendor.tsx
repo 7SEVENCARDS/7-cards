@@ -19,6 +19,8 @@ import {
   updateVendorProfile,
   provisionVirtualAccount,
   getActiveVirtualAccounts,
+  requestWithdrawal,
+  getMyWithdrawals,
 } from "../server-functions/vendors";
 
 export const Route = createFileRoute("/vendor")({
@@ -470,6 +472,12 @@ function CardsTab() {
 }
 
 // ─── Wallet Tab ────────────────────────────────────────────────────────────────
+type WithdrawalRow = {
+  id: string; amount: number; bank_name: string; account_number: string;
+  account_name: string; status: string; admin_note: string | null;
+  created_at: string; processed_at: string | null;
+};
+
 function WalletTab() {
   const [data, setData] = useState<WalletData | null>(null);
   const [vans, setVans] = useState<Array<{ id: string; account_number: string; bank_name: string; account_name: string | null; amount_expected: number | null; expires_at: string; reference: string }>>([]);
@@ -477,15 +485,20 @@ function WalletTab() {
   const [provisioning, setProvisioning] = useState(false);
   const [amount, setAmount] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
+  const [withdrawals, setWithdrawals] = useState<WithdrawalRow[]>([]);
+  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
+  const [withdrawForm, setWithdrawForm] = useState({ amount: "", bankName: "", bankCode: "", accountNumber: "", accountName: "" });
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [w, v] = await Promise.all([
+      const [w, v, wd] = await Promise.all([
         getVendorWallet({ data: {} }) as Promise<WalletData>,
         getActiveVirtualAccounts({ data: {} }) as Promise<typeof vans>,
+        getMyWithdrawals({ data: {} }) as Promise<WithdrawalRow[]>,
       ]);
-      setData(w); setVans(v);
+      setData(w); setVans(v); setWithdrawals(wd);
     } finally { setLoading(false); }
   }, []);
 
@@ -507,6 +520,28 @@ function WalletTab() {
     setTimeout(() => setCopied(null), 2000);
   };
 
+  const handleWithdraw = async () => {
+    setWithdrawing(true);
+    try {
+      await requestWithdrawal({
+        data: {
+          amount: parseFloat(withdrawForm.amount),
+          bankName: withdrawForm.bankName,
+          bankCode: withdrawForm.bankCode,
+          accountNumber: withdrawForm.accountNumber,
+          accountName: withdrawForm.accountName,
+        },
+      });
+      setShowWithdrawModal(false);
+      setWithdrawForm({ amount: "", bankName: "", bankCode: "", accountNumber: "", accountName: "" });
+      await load();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Withdrawal failed");
+    } finally {
+      setWithdrawing(false);
+    }
+  };
+
   if (loading) return <div className="flex-1 flex items-center justify-center"><Loader2 className="size-6 animate-spin text-gold" /></div>;
 
   return (
@@ -516,6 +551,13 @@ function WalletTab() {
         <p className="text-xs text-gold/70 font-bold uppercase tracking-widest">Vendor Balance</p>
         <p className="text-4xl font-extrabold text-gold mt-1">{fmtNgn(data?.wallet?.balance ?? 0)}</p>
         <p className="text-xs text-muted-foreground mt-2">Total funded: {fmtNgn(data?.wallet?.total_funded ?? 0)}</p>
+        <button
+          onClick={() => setShowWithdrawModal(true)}
+          disabled={(data?.wallet?.balance ?? 0) < 1000}
+          className="mt-4 w-full flex items-center justify-center gap-2 bg-gold text-black font-extrabold text-sm rounded-xl py-2.5 disabled:opacity-40"
+        >
+          <Banknote className="size-4" /> Withdraw Funds
+        </button>
       </div>
 
       {/* Fund wallet */}
@@ -583,6 +625,87 @@ function WalletTab() {
               </p>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Withdrawal History */}
+      {withdrawals.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Withdrawals</p>
+          {withdrawals.map(w => {
+            const statusColor =
+              w.status === "paid" ? "text-green-400 bg-green-400/10 border-green-400/20"
+              : w.status === "pending" ? "text-gold bg-gold/10 border-gold/20"
+              : w.status === "rejected" ? "text-red-400 bg-red-400/10 border-red-400/20"
+              : "text-muted-foreground bg-secondary border-border/40";
+            return (
+              <div key={w.id} className="flex items-center gap-3 bg-card border border-border/60 rounded-xl p-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-extrabold">{fmtNgn(w.amount)}</p>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${statusColor}`}>{w.status}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground truncate">{w.bank_name} · {w.account_number}</p>
+                  {w.admin_note && <p className="text-xs text-red-400 mt-0.5">{w.admin_note}</p>}
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{timeAgo(w.created_at)}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Withdraw Modal */}
+      {showWithdrawModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center z-50 px-4 pb-6">
+          <div className="bg-card border border-border/60 rounded-3xl p-6 w-full max-w-sm space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Banknote className="size-5 text-gold" />
+                <h3 className="text-base font-extrabold">Withdraw Funds</h3>
+              </div>
+              <button onClick={() => setShowWithdrawModal(false)} className="text-muted-foreground hover:text-foreground"><XCircle className="size-5" /></button>
+            </div>
+            <p className="text-xs text-muted-foreground">Available: <span className="text-gold font-bold">{fmtNgn(data?.wallet?.balance ?? 0)}</span> · Min ₦1,000</p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-muted-foreground mb-1 block">Amount (₦)</label>
+                <input type="number" value={withdrawForm.amount} onChange={e => setWithdrawForm(f => ({ ...f, amount: e.target.value }))}
+                  placeholder="e.g. 50000" className="w-full bg-secondary border border-border/60 rounded-xl px-3 py-2.5 text-sm outline-none" />
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="text-xs font-bold text-muted-foreground mb-1 block">Bank Name</label>
+                  <input value={withdrawForm.bankName} onChange={e => setWithdrawForm(f => ({ ...f, bankName: e.target.value }))}
+                    placeholder="e.g. GTBank" className="w-full bg-secondary border border-border/60 rounded-xl px-3 py-2.5 text-sm outline-none" />
+                </div>
+                <div className="w-24">
+                  <label className="text-xs font-bold text-muted-foreground mb-1 block">Bank Code</label>
+                  <input value={withdrawForm.bankCode} onChange={e => setWithdrawForm(f => ({ ...f, bankCode: e.target.value }))}
+                    placeholder="058" className="w-full bg-secondary border border-border/60 rounded-xl px-3 py-2.5 text-sm outline-none" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-muted-foreground mb-1 block">Account Number</label>
+                <input value={withdrawForm.accountNumber} onChange={e => setWithdrawForm(f => ({ ...f, accountNumber: e.target.value }))}
+                  placeholder="0123456789" maxLength={10} className="w-full bg-secondary border border-border/60 rounded-xl px-3 py-2.5 text-sm font-mono outline-none" />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-muted-foreground mb-1 block">Account Name</label>
+                <input value={withdrawForm.accountName} onChange={e => setWithdrawForm(f => ({ ...f, accountName: e.target.value }))}
+                  placeholder="Full name as on account" className="w-full bg-secondary border border-border/60 rounded-xl px-3 py-2.5 text-sm outline-none" />
+              </div>
+            </div>
+            <button
+              onClick={handleWithdraw}
+              disabled={withdrawing || !withdrawForm.amount || !withdrawForm.bankCode || !withdrawForm.accountNumber || !withdrawForm.accountName}
+              className="w-full flex items-center justify-center gap-2 bg-gold text-black font-extrabold text-sm rounded-xl py-3 disabled:opacity-50"
+            >
+              {withdrawing ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+              {withdrawing ? "Submitting…" : "Submit Withdrawal Request"}
+            </button>
+            <p className="text-[10px] text-center text-muted-foreground">Funds are locked until approved by admin. Processing is typically same-day.</p>
+          </div>
         </div>
       )}
     </div>

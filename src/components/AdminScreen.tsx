@@ -54,6 +54,9 @@ import {
   adminUpdateVendorStatus,
   adminAssignCard,
   adminSendTelegramNotification,
+  adminGetWithdrawalRequests,
+  adminApproveWithdrawal,
+  adminRejectWithdrawal,
 } from "../server-functions/vendors";
 
 type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors";
@@ -1307,6 +1310,14 @@ type VendorRow = {
   vendor_wallets?: Array<{ balance: number; total_funded: number }>;
 };
 
+type WithdrawalReq = {
+  id: string; amount: number; bank_name: string; bank_code: string;
+  account_number: string; account_name: string; status: string;
+  admin_note: string | null; squadco_ref: string | null;
+  created_at: string; processed_at: string | null;
+  vendors: { id: string; business_name: string; contact_name: string | null; telegram_username: string | null } | null;
+};
+
 function VendorsTab({ adminId }: { adminId: string }) {
   const [vendors, setVendors] = useState<VendorRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1315,6 +1326,12 @@ function VendorsTab({ adminId }: { adminId: string }) {
   const [assignForm, setAssignForm] = useState({ brand: "Apple", amountUsd: "", amountNgn: "", cardCode: "", cardPin: "", tradeId: "", notifyTelegram: true });
   const [assigning, setAssigning] = useState(false);
   const [filterStatus, setFilterStatus] = useState<"all" | "pending" | "active" | "suspended">("all");
+  const [vendorSubTab, setVendorSubTab] = useState<"vendors" | "withdrawals">("vendors");
+  const [withdrawals, setWithdrawals] = useState<WithdrawalReq[]>([]);
+  const [loadingWithdrawals, setLoadingWithdrawals] = useState(false);
+  const [actingWithdrawal, setActingWithdrawal] = useState<string | null>(null);
+  const [rejectModal, setRejectModal] = useState<{ id: string; name: string } | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1324,7 +1341,38 @@ function VendorsTab({ adminId }: { adminId: string }) {
     } catch { setVendors([]); } finally { setLoading(false); }
   }, [adminId]);
 
+  const loadWithdrawals = useCallback(async () => {
+    setLoadingWithdrawals(true);
+    try {
+      const rows = await adminGetWithdrawalRequests({ data: { status: "pending" } });
+      setWithdrawals(rows as WithdrawalReq[]);
+    } catch { setWithdrawals([]); } finally { setLoadingWithdrawals(false); }
+  }, [adminId]);
+
+  const handlePayWithdrawal = async (id: string) => {
+    setActingWithdrawal(id);
+    try {
+      await adminApproveWithdrawal({ data: { requestId: id } });
+      await loadWithdrawals();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Payout failed");
+    } finally { setActingWithdrawal(null); }
+  };
+
+  const handleRejectWithdrawal = async () => {
+    if (!rejectModal) return;
+    setActingWithdrawal(rejectModal.id);
+    try {
+      await adminRejectWithdrawal({ data: { requestId: rejectModal.id, reason: rejectReason } });
+      setRejectModal(null); setRejectReason("");
+      await loadWithdrawals();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Rejection failed");
+    } finally { setActingWithdrawal(null); }
+  };
+
   if (!vendors.length && !loading) load();
+  if (vendorSubTab === "withdrawals" && !withdrawals.length && !loadingWithdrawals) loadWithdrawals();
   if (loading) return <CenterLoader />;
 
   const filtered = vendors.filter(v => filterStatus === "all" || v.status === filterStatus);
@@ -1384,7 +1432,56 @@ function VendorsTab({ adminId }: { adminId: string }) {
   const BRANDS = ["Apple", "Amazon", "Steam", "Google Play", "Xbox", "PlayStation", "Netflix", "Spotify"];
 
   return (
-    <div className="px-5 pt-4 pb-10 space-y-4">
+    <>
+      {/* Sub-tab toggle */}
+      <div className="flex gap-1 p-1 bg-secondary rounded-2xl mx-4 mt-4 mb-2">
+        <button onClick={() => setVendorSubTab("vendors")} className={`flex-1 text-xs font-bold py-2 rounded-xl transition-colors ${vendorSubTab === "vendors" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}>
+          Vendors ({vendors.length})
+        </button>
+        <button onClick={() => { setVendorSubTab("withdrawals"); if (!withdrawals.length) loadWithdrawals(); }} className={`flex-1 text-xs font-bold py-2 rounded-xl transition-colors ${vendorSubTab === "withdrawals" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}>
+          Withdrawals {withdrawals.filter(w => w.status === "pending").length > 0 ? `(${withdrawals.filter(w => w.status === "pending").length})` : ""}
+        </button>
+      </div>
+
+      {vendorSubTab === "withdrawals" && (
+        <div className="p-4 space-y-3">
+          {loadingWithdrawals && <CenterLoader />}
+          {!loadingWithdrawals && withdrawals.length === 0 && (
+            <EmptyState icon={Wallet} message="No pending withdrawal requests" />
+          )}
+          {withdrawals.map(wd => (
+            <div key={wd.id} className="bg-card border border-border/60 rounded-2xl p-4 space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-extrabold">{wd.vendors?.business_name ?? "Unknown Vendor"}</p>
+                  <p className="text-xs text-muted-foreground">{wd.vendors?.contact_name}</p>
+                </div>
+                <p className="text-lg font-extrabold text-gold shrink-0">{new Intl.NumberFormat("en-NG", { style: "currency", currency: "NGN", minimumFractionDigits: 0 }).format(wd.amount)}</p>
+              </div>
+              <div className="bg-secondary rounded-xl p-3 space-y-1">
+                <p className="text-xs font-semibold">{wd.bank_name} · {wd.account_number}</p>
+                <p className="text-xs text-muted-foreground">{wd.account_name}</p>
+              </div>
+              <p className="text-[10px] text-muted-foreground">Requested {new Date(wd.created_at).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</p>
+              <div className="flex gap-2">
+                <button onClick={() => handlePayWithdrawal(wd.id)} disabled={actingWithdrawal === wd.id}
+                  className="flex-1 flex items-center justify-center gap-1.5 bg-green-500/15 border border-green-500/25 text-green-400 text-xs font-bold rounded-xl py-2.5 disabled:opacity-50">
+                  {actingWithdrawal === wd.id ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3.5" />}
+                  Pay Now via Squadco
+                </button>
+                <button onClick={() => { setRejectModal({ id: wd.id, name: wd.vendors?.business_name ?? "Vendor" }); setRejectReason(""); }}
+                  disabled={actingWithdrawal === wd.id}
+                  className="px-3 flex items-center justify-center bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold rounded-xl py-2.5 disabled:opacity-50">
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {vendorSubTab === "vendors" && (
+      <div className="px-5 pt-4 pb-10 space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -1574,6 +1671,35 @@ function VendorsTab({ adminId }: { adminId: string }) {
         </div>
       )}
     </div>
+      )}
+
+      {/* Reject withdrawal modal */}
+      {rejectModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center z-50 px-4 pb-6">
+          <div className="bg-card border border-border/60 rounded-3xl p-6 w-full max-w-sm space-y-4">
+            <div className="flex items-center gap-2">
+              <X className="size-5 text-red-400" />
+              <h3 className="text-base font-extrabold">Reject Withdrawal</h3>
+            </div>
+            <p className="text-sm text-muted-foreground">Reject <span className="font-bold">{rejectModal.name}</span>'s withdrawal? Funds return to their wallet immediately.</p>
+            <div>
+              <label className="text-xs font-bold text-muted-foreground mb-1 block">Reason (optional)</label>
+              <input value={rejectReason} onChange={e => setRejectReason(e.target.value)}
+                placeholder="e.g. Incorrect bank details"
+                className="w-full bg-secondary border border-border/60 rounded-xl px-3 py-2.5 text-sm outline-none" />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setRejectModal(null)} className="flex-1 py-3 rounded-xl bg-secondary text-sm font-bold">Cancel</button>
+              <button onClick={handleRejectWithdrawal} disabled={!!actingWithdrawal}
+                className="flex-1 flex items-center justify-center gap-1.5 py-3 rounded-xl bg-red-500/20 border border-red-500/30 text-red-400 text-sm font-extrabold disabled:opacity-50">
+                {actingWithdrawal ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
+                Reject & Refund
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

@@ -696,3 +696,259 @@ export const adminSendTelegramNotification = createServerFn({ method: "POST" })
 
     return result;
   });
+
+// ─── Request Withdrawal ────────────────────────────────────────────────────────
+export const requestWithdrawal = createServerFn({ method: "POST" })
+  .validator(
+    (d: unknown) => d as {
+      amount: number;
+      bankName: string;
+      bankCode: string;
+      accountNumber: string;
+      accountName: string;
+    }
+  )
+  .handler(async ({ data }) => {
+    const { userId } = await requireVendorAuth();
+    const db = getDb();
+    const vendor = await getVendorId(db, userId);
+    if (!vendor) throw new Error("Not a vendor");
+
+    // Check available balance
+    const { data: wallet } = await db
+      .from("vendor_wallets")
+      .select("balance")
+      .eq("vendor_id", vendor.id)
+      .single();
+    const balance = Number(wallet?.balance ?? 0);
+    if (data.amount <= 0) throw new Error("Amount must be greater than zero");
+    if (data.amount > balance) throw new Error(`Insufficient balance. Available: ₦${balance.toLocaleString()}`);
+    if (data.amount < 1000) throw new Error("Minimum withdrawal is ₦1,000");
+
+    // Create withdrawal request & lock the funds
+    const { data: req, error } = await db
+      .from("vendor_withdrawal_requests")
+      .insert({
+        vendor_id: vendor.id,
+        amount: data.amount,
+        bank_name: data.bankName,
+        bank_code: data.bankCode,
+        account_number: data.accountNumber,
+        account_name: data.accountName,
+        status: "pending",
+      })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+
+    // Lock the balance (deduct from available, add to locked)
+    await db
+      .from("vendor_wallets")
+      .update({
+        balance: balance - data.amount,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("vendor_id", vendor.id);
+
+    // Log the locked transaction
+    await db.from("vendor_transactions").insert({
+      vendor_id: vendor.id,
+      type: "withdrawal_pending",
+      amount: -data.amount,
+      balance_after: balance - data.amount,
+      description: `Withdrawal request — ${data.bankName} ${data.accountNumber}`,
+      reference: req.id,
+    });
+
+    return { ok: true, requestId: req.id };
+  });
+
+// ─── Get My Withdrawals ────────────────────────────────────────────────────────
+export const getMyWithdrawals = createServerFn({ method: "GET" })
+  .handler(async () => {
+    const { userId } = await requireVendorAuth();
+    const db = getDb();
+    const vendor = await getVendorId(db, userId);
+    if (!vendor) throw new Error("Not a vendor");
+
+    const { data } = await db
+      .from("vendor_withdrawal_requests")
+      .select("id,amount,bank_name,account_number,account_name,status,admin_note,created_at,processed_at")
+      .eq("vendor_id", vendor.id)
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    return data ?? [];
+  });
+
+// ─── Admin: Get All Withdrawal Requests ────────────────────────────────────────
+export const adminGetWithdrawalRequests = createServerFn({ method: "GET" })
+  .validator((d: unknown) => d as { status?: string })
+  .handler(async ({ data }) => {
+    const { userId } = await requireAuth();
+    const db = getDb();
+    const { data: profile } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", userId)
+      .single();
+    if (profile?.role !== "admin") throw new Error("Forbidden");
+
+    let q = db
+      .from("vendor_withdrawal_requests")
+      .select(`
+        id, amount, bank_name, bank_code, account_number, account_name,
+        status, admin_note, squadco_ref, created_at, processed_at,
+        vendors!vendor_id (id, business_name, contact_name, telegram_username)
+      `)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (data.status) q = q.eq("status", data.status);
+
+    const { data: rows } = await q;
+    return rows ?? [];
+  });
+
+// ─── Admin: Approve & Pay Withdrawal ──────────────────────────────────────────
+export const adminApproveWithdrawal = createServerFn({ method: "POST" })
+  .validator((d: unknown) => d as { requestId: string })
+  .handler(async ({ data }) => {
+    const { userId } = await requireAuth();
+    const db = getDb();
+    const { data: profile } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", userId)
+      .single();
+    if (profile?.role !== "admin") throw new Error("Forbidden");
+
+    const { data: req } = await db
+      .from("vendor_withdrawal_requests")
+      .select("*")
+      .eq("id", data.requestId)
+      .eq("status", "pending")
+      .single();
+    if (!req) throw new Error("Request not found or already processed");
+
+    const squadcoKey = process.env.SQUADCO_SECRET_KEY ?? "";
+    const env = process.env.SQUADCO_ENV === "production" ? "api" : "sandbox";
+    const uniqueId = `7S-WD-${req.id.slice(0, 8)}-${Date.now()}`;
+
+    // Trigger Squadco payout
+    const payoutRes = await fetch(`https://${env}.squadco.com/payout/initiate`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${squadcoKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        currency_id: "NGN",
+        transactions: [{
+          amount: Math.round(Number(req.amount) * 100), // Squadco expects kobo
+          bank_code: req.bank_code,
+          account_number: req.account_number,
+          account_name: req.account_name,
+          narration: `7SEVEN Vendor Withdrawal`,
+          unique_id: uniqueId,
+        }],
+      }),
+    });
+
+    const payoutData = await payoutRes.json() as {
+      success?: boolean;
+      message?: string;
+      data?: { transaction_reference?: string };
+    };
+
+    const squadcoRef = payoutData?.data?.transaction_reference ?? uniqueId;
+    const paidSuccessfully = payoutData?.success === true || payoutRes.status === 200;
+
+    await db
+      .from("vendor_withdrawal_requests")
+      .update({
+        status: paidSuccessfully ? "paid" : "failed",
+        squadco_ref: squadcoRef,
+        processed_by: userId,
+        processed_at: new Date().toISOString(),
+        admin_note: paidSuccessfully ? null : `Payout failed: ${payoutData?.message ?? "unknown"}`,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", data.requestId);
+
+    if (!paidSuccessfully) {
+      // Restore the balance on failure
+      const { data: wallet } = await db
+        .from("vendor_wallets")
+        .select("balance")
+        .eq("vendor_id", req.vendor_id)
+        .single();
+      await db
+        .from("vendor_wallets")
+        .update({
+          balance: Number(wallet?.balance ?? 0) + Number(req.amount),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("vendor_id", req.vendor_id);
+      throw new Error(payoutData?.message ?? "Payout failed — balance restored");
+    }
+
+    return { ok: true, squadcoRef };
+  });
+
+// ─── Admin: Reject Withdrawal ──────────────────────────────────────────────────
+export const adminRejectWithdrawal = createServerFn({ method: "POST" })
+  .validator((d: unknown) => d as { requestId: string; reason?: string })
+  .handler(async ({ data }) => {
+    const { userId } = await requireAuth();
+    const db = getDb();
+    const { data: profile } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", userId)
+      .single();
+    if (profile?.role !== "admin") throw new Error("Forbidden");
+
+    const { data: req } = await db
+      .from("vendor_withdrawal_requests")
+      .select("*")
+      .eq("id", data.requestId)
+      .eq("status", "pending")
+      .single();
+    if (!req) throw new Error("Request not found or already processed");
+
+    // Restore the locked balance
+    const { data: wallet } = await db
+      .from("vendor_wallets")
+      .select("balance")
+      .eq("vendor_id", req.vendor_id)
+      .single();
+    const restoredBalance = Number(wallet?.balance ?? 0) + Number(req.amount);
+
+    await db
+      .from("vendor_wallets")
+      .update({ balance: restoredBalance, updated_at: new Date().toISOString() })
+      .eq("vendor_id", req.vendor_id);
+
+    await db.from("vendor_transactions").insert({
+      vendor_id: req.vendor_id,
+      type: "withdrawal_reversed",
+      amount: Number(req.amount),
+      balance_after: restoredBalance,
+      description: `Withdrawal rejected: ${data.reason ?? "Admin decision"}`,
+      reference: req.id,
+    });
+
+    await db
+      .from("vendor_withdrawal_requests")
+      .update({
+        status: "rejected",
+        admin_note: data.reason ?? "Rejected by admin",
+        processed_by: userId,
+        processed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", data.requestId);
+
+    return { ok: true };
+  });
