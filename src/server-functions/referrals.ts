@@ -55,7 +55,7 @@ export const getReferralStats = createServerFn({ method: "GET" })
       .from("trades")
       .select("user_id")
       .in("user_id", referredIds)
-      .eq("status", "completed");
+      .eq("status", "paid");
 
     const tradersSet = new Set((traders ?? []).map((t) => t.user_id));
 
@@ -155,7 +155,7 @@ export const creditReferrerBonus = createServerFn({ method: "POST" })
       .from("trades")
       .select("id", { count: "exact", head: true })
       .eq("user_id", data.traderId)
-      .eq("status", "completed");
+      .eq("status", "paid");
 
     if ((count ?? 0) > 1) return { success: false, reason: "not_first_trade" };
 
