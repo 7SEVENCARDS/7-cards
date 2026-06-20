@@ -5,6 +5,8 @@
 // Supports: BVN, NIN, CAC, Address, Liveness
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { fetchWithTimeout } from "./fetch-with-timeout";
+
 const DOJAH_BASE = "https://api.dojah.io";
 
 function getDojahHeaders() {
@@ -23,7 +25,7 @@ function getDojahHeaders() {
 }
 
 async function dojahFetch(path: string, options: RequestInit = {}) {
-  const res = await fetch(`${DOJAH_BASE}${path}`, {
+  const res = await fetchWithTimeout(`${DOJAH_BASE}${path}`, {
     ...options,
     headers: {
       ...getDojahHeaders(),
