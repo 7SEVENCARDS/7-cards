@@ -61,6 +61,7 @@ export const registerVendor = createServerFn({ method: "POST" })
       businessName: string;
       contactName: string;
       phone: string;
+      referralCode?: string;
     }) => d
   )
   .handler(async ({ data }) => {
@@ -105,6 +106,25 @@ export const registerVendor = createServerFn({ method: "POST" })
 
     // Create vendor wallet
     await db.from("vendor_wallets").insert({ vendor_id: vendor.id });
+
+    // Hook up referral if a referral code was provided
+    if (data.referralCode) {
+      try {
+        const { data: referrer } = await db
+          .from("vendors")
+          .select("id")
+          .eq("referral_code", data.referralCode.toUpperCase().trim())
+          .single() as { data: { id: string } | null };
+        if (referrer && referrer.id !== vendor.id) {
+          await db.from("vendors").update({ referred_by: referrer.id }).eq("id", vendor.id);
+          await db.from("vendor_referrals").insert({
+            referrer_id: referrer.id,
+            referred_id: vendor.id,
+            bonus_amount_ngn: 2500,
+          });
+        }
+      } catch { /* non-fatal — registration still succeeds */ }
+    }
 
     return { success: true, vendorId: vendor.id };
   });
@@ -326,15 +346,19 @@ export const markAssignmentRedeemed = createServerFn({ method: "POST" })
     }
 
     // Update vendor stats
+    const newTotalRedeemed = Number(assignment.total_redeemed ?? 0) + 1;
     await db
       .from("vendors")
       .update({
-        total_redeemed: Number(assignment.total_redeemed ?? 0) + 1,
+        total_redeemed: newTotalRedeemed,
         total_volume_ngn: (assignment.total_volume_ngn ?? 0) + Number(amountNgn),
         last_active_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
       .eq("user_id", userId);
+
+    // Check and pay referral bonus (non-fatal, fire-and-forget)
+    checkReferralBonus(db, vendor.id, newTotalRedeemed).catch(() => {});
 
     return { success: true };
   });
@@ -1172,5 +1196,111 @@ export const getMyBadges = createServerFn({ method: "GET" })
       locked: badges.filter(b => !b.earned),
       totalRedeemed,
       tier,
+    };
+  });
+
+// ─── Internal: Check & Pay Referral Bonus ──────────────────────────────────────
+// Called after each redemption. Pays ₦2,500 to referrer when referred vendor
+// hits their 10th redemption. Fire-and-forget (non-fatal).
+export async function checkReferralBonus(db: ReturnType<typeof getDb>, vendorId: string, newTotalRedeemed: number) {
+  if (newTotalRedeemed !== 10) return; // only triggers at exactly the 10th
+  try {
+    const { data: referral } = await db
+      .from("vendor_referrals")
+      .select("id, referrer_id, bonus_amount_ngn, bonus_paid")
+      .eq("referred_id", vendorId)
+      .eq("bonus_paid", false)
+      .single() as { data: { id: string; referrer_id: string; bonus_amount_ngn: number; bonus_paid: boolean } | null };
+    if (!referral) return;
+
+    const bonusNgn = Number(referral.bonus_amount_ngn) || 2500;
+
+    // Credit referrer's wallet
+    const { data: wallet } = await db
+      .from("vendor_wallets")
+      .select("balance, total_funded")
+      .eq("vendor_id", referral.referrer_id)
+      .single() as { data: { balance: number; total_funded: number } | null };
+
+    const newBalance = Number(wallet?.balance ?? 0) + bonusNgn;
+    await db.from("vendor_wallets").update({
+      balance: newBalance,
+      total_funded: Number(wallet?.total_funded ?? 0) + bonusNgn,
+      updated_at: new Date().toISOString(),
+    }).eq("vendor_id", referral.referrer_id);
+
+    await db.from("vendor_transactions").insert({
+      vendor_id: referral.referrer_id,
+      type: "referral_bonus",
+      amount: bonusNgn,
+      balance_after: newBalance,
+      description: `Referral bonus: your recruit completed 10 redemptions`,
+    });
+
+    // Mark bonus paid
+    await db.from("vendor_referrals").update({
+      bonus_paid: true,
+      bonus_paid_at: new Date().toISOString(),
+    }).eq("id", referral.id);
+
+    // Notify referrer via Telegram (fire-and-forget)
+    try {
+      const { data: referrer } = await db
+        .from("vendors")
+        .select("contact_name, business_name, telegram_chat_id, telegram_username")
+        .eq("id", referral.referrer_id)
+        .single() as { data: { contact_name: string | null; business_name: string; telegram_chat_id: number | null; telegram_username: string | null } | null };
+      const chatId = referrer?.telegram_chat_id ?? referrer?.telegram_username;
+      if (chatId) {
+        const { sendTelegramMessage } = await import("../lib/telegram");
+        await sendTelegramMessage(chatId, [
+          `🎉 <b>Referral Bonus Paid!</b>`,
+          ``,
+          `Hi ${referrer?.contact_name ?? referrer?.business_name}!`,
+          ``,
+          `Your recruit just completed their <b>10th card redemption</b>.`,
+          ``,
+          `<b>+₦${bonusNgn.toLocaleString()}</b> has been credited to your vendor wallet! 💰`,
+          ``,
+          `Keep referring vendors to earn more bonuses.`,
+          `🔗 https://7sevencards.com/vendor`,
+        ].join("\n"), "HTML");
+      }
+    } catch { /* non-fatal */ }
+  } catch { /* non-fatal */ }
+}
+
+// ─── Get My Referral Info ──────────────────────────────────────────────────────
+export const getMyReferralInfo = createServerFn({ method: "GET" })
+  .handler(async () => {
+    const { userId } = await requireVendorAuth();
+    const db = getDb();
+    const vendor = await getVendorId(db, userId);
+    if (!vendor) throw new Error("Not a vendor");
+
+    const { data: v } = await db
+      .from("vendors")
+      .select("referral_code")
+      .eq("id", vendor.id)
+      .single() as { data: { referral_code: string | null } | null };
+
+    const { data: referrals } = await db
+      .from("vendor_referrals")
+      .select("id, bonus_paid, bonus_amount_ngn, created_at")
+      .eq("referrer_id", vendor.id) as {
+        data: Array<{ id: string; bonus_paid: boolean; bonus_amount_ngn: number; created_at: string }> | null
+      };
+
+    const rows = referrals ?? [];
+    const totalReferred   = rows.length;
+    const bonusesPaid     = rows.filter(r => r.bonus_paid).length;
+    const totalEarnedNgn  = rows.filter(r => r.bonus_paid).reduce((s, r) => s + Number(r.bonus_amount_ngn), 0);
+
+    return {
+      referralCode: v?.referral_code ?? null,
+      referralLink: `https://7sevencards.com/vendor?ref=${v?.referral_code ?? ""}`,
+      totalReferred,
+      bonusesPaid,
+      totalEarnedNgn,
     };
   });

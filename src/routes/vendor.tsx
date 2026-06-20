@@ -22,6 +22,7 @@ import {
   requestWithdrawal,
   getMyWithdrawals,
   getMyBadges,
+  getMyReferralInfo,
 } from "../server-functions/vendors";
 
 export const Route = createFileRoute("/vendor")({
@@ -78,6 +79,12 @@ function AuthScreen({ onAuth }: { onAuth: (v: VendorSession) => void }) {
   const [businessName, setBusinessName] = useState("");
   const [contactName, setContactName] = useState("");
   const [phone, setPhone] = useState("");
+  const [referralCode, setReferralCode] = useState(() => {
+    if (typeof window !== "undefined") {
+      return new URLSearchParams(window.location.search).get("ref") ?? "";
+    }
+    return "";
+  });
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -101,7 +108,7 @@ function AuthScreen({ onAuth }: { onAuth: (v: VendorSession) => void }) {
     if (password.length < 8) return setError("Password must be at least 8 characters");
     setLoading(true); setError("");
     try {
-      const res = await registerVendor({ data: { email, password, businessName, contactName, phone } }) as { success: boolean; error?: string };
+      const res = await registerVendor({ data: { email, password, businessName, contactName, phone, referralCode: referralCode.trim() || undefined } }) as { success: boolean; error?: string };
       if (!res.success) return setError(res.error ?? "Registration failed");
       setError("");
       setView("login");
@@ -138,6 +145,11 @@ function AuthScreen({ onAuth }: { onAuth: (v: VendorSession) => void }) {
               <div>
                 <label className="text-xs font-bold text-muted-foreground mb-1.5 block">Phone Number</label>
                 <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="+234..." className="w-full bg-secondary border border-border/60 rounded-xl px-4 py-3 text-sm outline-none focus:border-gold/40" />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-muted-foreground mb-1.5 block">Referral Code <span className="font-normal text-muted-foreground">(optional)</span></label>
+                <input value={referralCode} onChange={e => setReferralCode(e.target.value.toUpperCase())} placeholder="e.g. AB12CD34" className="w-full bg-secondary border border-border/60 rounded-xl px-4 py-3 text-sm font-mono outline-none focus:border-gold/40" />
+                {referralCode && <p className="text-[10px] text-gold mt-1">✓ Referred by a vendor — you're set!</p>}
               </div>
             </>
           )}
@@ -479,6 +491,8 @@ type WithdrawalRow = {
   created_at: string; processed_at: string | null;
 };
 
+type ReferralInfo = { referralCode: string | null; referralLink: string; totalReferred: number; bonusesPaid: number; totalEarnedNgn: number };
+
 function WalletTab() {
   const [data, setData] = useState<WalletData | null>(null);
   const [vans, setVans] = useState<Array<{ id: string; account_number: string; bank_name: string; account_name: string | null; amount_expected: number | null; expires_at: string; reference: string }>>([]);
@@ -490,16 +504,18 @@ function WalletTab() {
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
   const [withdrawForm, setWithdrawForm] = useState({ amount: "", bankName: "", bankCode: "", accountNumber: "", accountName: "" });
+  const [referral, setReferral] = useState<ReferralInfo | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [w, v, wd] = await Promise.all([
+      const [w, v, wd, ref] = await Promise.all([
         getVendorWallet({ data: {} }) as Promise<WalletData>,
         getActiveVirtualAccounts({ data: {} }) as Promise<typeof vans>,
         getMyWithdrawals({ data: {} }) as Promise<WithdrawalRow[]>,
+        getMyReferralInfo({ data: {} }) as Promise<ReferralInfo>,
       ]);
-      setData(w); setVans(v); setWithdrawals(wd);
+      setData(w); setVans(v); setWithdrawals(wd); setReferral(ref);
     } finally { setLoading(false); }
   }, []);
 
@@ -560,6 +576,9 @@ function WalletTab() {
           <Banknote className="size-4" /> Withdraw Funds
         </button>
       </div>
+
+      {/* Refer & Earn */}
+      <ReferSection referral={referral} />
 
       {/* Fund wallet */}
       <div className="bg-card border border-border/60 rounded-2xl p-5 space-y-4">
@@ -709,6 +728,61 @@ function WalletTab() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Refer & Earn Section (used inside WalletTab JSX) ─────────────────────────
+function ReferSection({ referral }: { referral: ReferralInfo | null }) {
+  const [copied, setCopied] = useState(false);
+  if (!referral) return null;
+  const link = referral.referralLink;
+  const handleCopy = () => {
+    copyToClipboard(link); setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div className="rounded-3xl border border-gold/20 bg-gold/5 p-5 space-y-4">
+      <div className="flex items-center gap-2">
+        <span className="text-lg">🤝</span>
+        <div>
+          <p className="text-sm font-extrabold">Refer &amp; Earn</p>
+          <p className="text-[11px] text-muted-foreground">Earn <span className="text-gold font-bold">₦2,500</span> when your recruit completes 10 redemptions</p>
+        </div>
+      </div>
+
+      {/* Referral link */}
+      <div>
+        <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-1.5">Your invite link</p>
+        <div className="flex items-center gap-2 bg-secondary rounded-xl px-3 py-2.5">
+          <code className="flex-1 text-xs font-mono text-gold truncate">{link}</code>
+          <button onClick={handleCopy} className="shrink-0 text-muted-foreground hover:text-white transition-colors">
+            {copied ? <CheckCircle2 className="size-4 text-green-400" /> : <Copy className="size-4" />}
+          </button>
+        </div>
+        {referral.referralCode && (
+          <p className="text-[10px] text-muted-foreground mt-1.5">Code: <span className="font-mono font-bold text-white">{referral.referralCode}</span></p>
+        )}
+      </div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { label: "Referred", value: String(referral.totalReferred), emoji: "👥" },
+          { label: "Bonuses Paid", value: String(referral.bonusesPaid), emoji: "✅" },
+          { label: "Total Earned", value: `₦${(referral.totalEarnedNgn / 1000).toFixed(1)}k`, emoji: "💰" },
+        ].map(s => (
+          <div key={s.label} className="bg-secondary rounded-2xl p-3 text-center">
+            <p className="text-base">{s.emoji}</p>
+            <p className="text-sm font-extrabold mt-0.5">{s.value}</p>
+            <p className="text-[9px] text-muted-foreground uppercase tracking-wide">{s.label}</p>
+          </div>
+        ))}
+      </div>
+
+      <p className="text-[10px] text-muted-foreground text-center">
+        Share your link. When your recruit reaches 10 redeemed cards, ₦2,500 lands in your wallet automatically.
+      </p>
     </div>
   );
 }
