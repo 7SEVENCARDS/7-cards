@@ -32,6 +32,18 @@ export const createTrade = createServerFn({ method: "POST" })
   }) => d)
   .handler(async ({ data }) => {
     const db = getServerSupabase();
+
+    // ── KYC gate: user must have submitted KYC before trading ────────────────
+    const { data: profile } = await db
+      .from("profiles")
+      .select("kyc_status")
+      .eq("id", data.userId)
+      .single();
+
+    if (!profile || profile.kyc_status === "pending") {
+      throw new Error("KYC_REQUIRED: Please complete identity verification before trading.");
+    }
+
     const amountNgn = Math.round(data.amountUsd * data.exchangeRate);
 
     const { data: trade, error } = await db
@@ -52,7 +64,11 @@ export const createTrade = createServerFn({ method: "POST" })
     return trade;
   });
 
-// ─── Verify gift card (calls Reloadly) ───────────────────────────────────────
+// ─── Verify gift card via Reloadly ────────────────────────────────────────────
+// Reloadly is used to verify the validity of the user's submitted gift card.
+// We check the card against Reloadly's redeem-codes endpoint; if that endpoint
+// isn't available on the current tier, we flag for manual operator review —
+// standard practice for Nigerian gift card trading platforms.
 export const verifyGiftCard = createServerFn({ method: "POST" })
   .validator((d: {
     tradeId: string;
@@ -61,7 +77,6 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
     cardPin?: string;
     brand: string;
     amountUsd: number;
-    recipientEmail: string;
   }) => d)
   .handler(async ({ data }) => {
     const db = getServerSupabase();
@@ -70,36 +85,28 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
     await db.from("trades").update({ status: "scanning" }).eq("id", data.tradeId);
 
     try {
-      const { redeemGiftCard, getGiftCardProducts } = await import("../lib/reloadly");
+      const { verifyUserGiftCard } = await import("../lib/reloadly");
 
-      // Find the Reloadly product ID for this brand
-      const products = await getGiftCardProducts("US");
-      const product = products.find((p) =>
-        p.productName.toLowerCase().includes(data.brand.toLowerCase())
-      );
-
-      if (!product) {
-        // Brand not found in Reloadly — still proceed but log warning
-        console.warn(`[Reloadly] Product not found for brand: ${data.brand}`);
-      }
-
-      const result = await redeemGiftCard({
-        productId: product?.productId ?? 1,
+      const result = await verifyUserGiftCard({
+        brand: data.brand,
         cardCode: data.cardCode,
         cardPin: data.cardPin,
         amountUsd: data.amountUsd,
-        tradeId: data.tradeId,
-        recipientEmail: data.recipientEmail,
       });
 
       if (result.success) {
         await db.from("trades").update({
           status: "verified",
-          reloadly_transaction_id: result.transactionId,
-          reloadly_order_id: result.orderId,
+          card_code: result.cardCode,
+          requires_manual_review: result.requiresManualReview ?? false,
+          reloadly_transaction_id: result.productId ? String(result.productId) : null,
         }).eq("id", data.tradeId);
 
-        return { success: true, tradeId: data.tradeId };
+        return {
+          success: true,
+          tradeId: data.tradeId,
+          requiresManualReview: result.requiresManualReview,
+        };
       } else {
         await db.from("trades").update({
           status: "invalid",
@@ -110,24 +117,17 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      const isConfig = msg.includes("not configured");
-
-      if (isConfig) {
-        // Reloadly not configured — set to verified for demo
-        await db.from("trades").update({ status: "verified" }).eq("id", data.tradeId);
-        return { success: true, tradeId: data.tradeId, demo: true };
-      }
 
       await db.from("trades").update({
         status: "invalid",
         failure_reason: "Verification service error",
       }).eq("id", data.tradeId);
 
-      return { success: false, reason: "Verification service unavailable" };
+      return { success: false, reason: msg };
     }
   });
 
-// ─── Process payout (calls Squadco) ──────────────────────────────────────────
+// ─── Process payout via Squadco ───────────────────────────────────────────────
 export const processPayout = createServerFn({ method: "POST" })
   .validator((d: {
     tradeId: string;
@@ -156,23 +156,14 @@ export const processPayout = createServerFn({ method: "POST" })
       });
 
       if (result.success) {
-        // Credit NGN wallet
-        const { error: walletError } = await db.rpc("increment_wallet_balance", {
+        // Credit NGN wallet using the increment_wallet_balance SQL function
+        await db.rpc("increment_wallet_balance", {
           p_user_id: data.userId,
           p_currency: "NGN",
           p_amount: data.amountNgn,
         });
 
-        if (walletError) {
-          // Fallback: direct update
-          await db
-            .from("wallets")
-            .update({ balance: db.rpc("balance + $1" as never, [data.amountNgn]) as never })
-            .eq("user_id", data.userId)
-            .eq("currency", "NGN");
-        }
-
-        // Award XP (50 base + bonus for large trades)
+        // Award XP (50 base + 25 bonus for trades over ₦100k)
         const xp = 50 + (data.amountNgn > 100_000 ? 25 : 0);
         await db.rpc("award_trade_xp", { p_user_id: data.userId, p_xp: xp });
 
@@ -185,13 +176,18 @@ export const processPayout = createServerFn({ method: "POST" })
           settled_at: new Date().toISOString(),
         }).eq("id", data.tradeId);
 
-        // Send notification
         await db.from("notifications").insert({
           user_id: data.userId,
           title: "Payment Sent! 🎉",
           message: `₦${data.amountNgn.toLocaleString()} has been sent to your bank account.`,
           type: "success",
         });
+
+        // Credit referral bonus if this is user's first completed trade
+        try {
+          const { creditReferrerBonus } = await import("./referrals");
+          await creditReferrerBonus({ data: { traderId: data.userId } });
+        } catch { /* non-critical */ }
 
         return { success: true, transactionRef: result.transactionRef };
       } else {
@@ -207,22 +203,14 @@ export const processPayout = createServerFn({ method: "POST" })
       const isConfig = msg.includes("not configured");
 
       if (isConfig) {
-        // Squadco not configured — simulate for demo
+        // Squadco not configured — demo mode
         const xp = 50;
         await db.rpc("award_trade_xp", { p_user_id: data.userId, p_xp: xp });
-
-        // Directly credit NGN wallet
-        const { data: wallet } = await db
-          .from("wallets")
-          .select("balance")
-          .eq("user_id", data.userId)
-          .eq("currency", "NGN")
-          .single();
-
-        await db.from("wallets")
-          .update({ balance: (Number(wallet?.balance ?? 0) + data.amountNgn) })
-          .eq("user_id", data.userId)
-          .eq("currency", "NGN");
+        await db.rpc("increment_wallet_balance", {
+          p_user_id: data.userId,
+          p_currency: "NGN",
+          p_amount: data.amountNgn,
+        });
 
         await db.from("trades").update({
           status: "paid",
@@ -233,7 +221,7 @@ export const processPayout = createServerFn({ method: "POST" })
         await db.from("notifications").insert({
           user_id: data.userId,
           title: "Payment Sent! 🎉",
-          message: `₦${data.amountNgn.toLocaleString()} has been credited to your wallet.`,
+          message: `₦${data.amountNgn.toLocaleString()} has been credited to your wallet (demo).`,
           type: "success",
         });
 
