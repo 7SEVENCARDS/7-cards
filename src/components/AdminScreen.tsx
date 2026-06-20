@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -22,6 +22,7 @@ import {
   Pencil,
   Save,
   X,
+  Upload,
 } from "lucide-react";
 import {
   getAdminStats,
@@ -35,6 +36,7 @@ import {
   adminCreditWallet,
   getAdminRates,
   updateExchangeRate,
+  bulkUpdateRates,
 } from "../server-functions/admin";
 
 type AdminTab = "stats" | "kyc" | "review" | "trades" | "rates" | "credit";
@@ -499,6 +501,64 @@ function RatesTab({ adminId }: { adminId: string }) {
   const [newBrand, setNewBrand] = useState({ name: "", region: "USA", rate: "" });
   const [addingNew, setAddingNew] = useState(false);
 
+  // CSV import state
+  type CsvRow = { brand: string; region: string; ratePerDollar: number; error?: string };
+  const [csvRows, setCsvRows] = useState<CsvRow[] | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ imported: number; failed: number } | null>(null);
+  const csvInputRef = useRef<HTMLInputElement>(null);
+
+  const parseCsv = (text: string): CsvRow[] => {
+    const lines = text.trim().split(/\r?\n/);
+    const rows: CsvRow[] = [];
+    for (const line of lines) {
+      if (!line.trim() || /^brand\s*,/i.test(line)) continue; // skip header
+      const parts = line.split(",").map(p => p.trim());
+      const brand = parts[0] ?? "";
+      const region = parts[1] ?? "USA";
+      const rate = parseFloat(parts[2] ?? "");
+      if (!brand) continue;
+      if (isNaN(rate) || rate < 100 || rate > 10_000) {
+        rows.push({ brand, region, ratePerDollar: rate, error: "Rate out of range (₦100–₦10,000)" });
+      } else {
+        rows.push({ brand, region, ratePerDollar: rate });
+      }
+    }
+    return rows;
+  };
+
+  const handleCsvFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportResult(null);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      setCsvRows(parseCsv(text));
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  const handleCsvImport = async () => {
+    if (!csvRows) return;
+    const validRows = csvRows.filter(r => !r.error);
+    if (!validRows.length) return;
+    setImporting(true);
+    try {
+      const res = await bulkUpdateRates({ data: { adminId, rows: validRows } });
+      setImportResult({ imported: res.imported, failed: res.failed });
+      if (res.imported > 0) {
+        await load();
+        setCsvRows(null);
+      }
+    } catch {
+      setImportResult({ imported: 0, failed: validRows.length });
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -647,9 +707,15 @@ function RatesTab({ adminId }: { adminId: string }) {
         <p className="text-xs text-muted-foreground font-semibold uppercase tracking-widest">
           Gift Card Rates (₦ per $1)
         </p>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <button onClick={load} className="text-xs text-muted-foreground flex items-center gap-1">
             <RefreshCw className="size-3" /> Refresh
+          </button>
+          <button
+            onClick={() => csvInputRef.current?.click()}
+            className="text-xs font-bold text-muted-foreground flex items-center gap-1 bg-secondary px-3 py-1.5 rounded-full"
+          >
+            <Upload className="size-3" /> CSV
           </button>
           <button
             onClick={() => setShowNew(true)}
@@ -660,8 +726,66 @@ function RatesTab({ adminId }: { adminId: string }) {
         </div>
       </div>
 
+      {/* Hidden CSV file input */}
+      <input
+        ref={csvInputRef}
+        type="file"
+        accept=".csv,text/csv"
+        className="hidden"
+        onChange={handleCsvFile}
+      />
+
+      {/* CSV preview panel */}
+      {csvRows && (
+        <div className="bg-card rounded-2xl border border-white/10 overflow-hidden">
+          <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
+            <p className="text-xs font-bold">
+              CSV Preview — {csvRows.filter(r => !r.error).length} valid
+              {csvRows.some(r => r.error) && <span className="text-red-400"> · {csvRows.filter(r => r.error).length} errors</span>}
+            </p>
+            <button onClick={() => { setCsvRows(null); setImportResult(null); }} className="text-xs text-muted-foreground">
+              Dismiss
+            </button>
+          </div>
+          <div className="divide-y divide-white/5 max-h-52 overflow-y-auto">
+            {csvRows.map((r, i) => (
+              <div key={i} className={`flex items-center justify-between px-4 py-2.5 text-xs ${r.error ? "opacity-50" : ""}`}>
+                <div className="flex items-center gap-2">
+                  <span>{BRAND_EMOJI[r.brand] ?? "🎁"}</span>
+                  <span className="font-semibold">{r.brand}</span>
+                  <span className="text-muted-foreground">{r.region}</span>
+                </div>
+                {r.error
+                  ? <span className="text-red-400 text-[10px]">{r.error}</span>
+                  : <span className="text-cyan font-bold">₦{r.ratePerDollar.toLocaleString()}/$</span>
+                }
+              </div>
+            ))}
+          </div>
+          <div className="px-4 py-3 border-t border-white/5">
+            {importResult ? (
+              <p className={`text-xs font-bold text-center ${importResult.failed > 0 ? "text-yellow-400" : "text-cyan"}`}>
+                ✓ {importResult.imported} imported{importResult.failed > 0 ? ` · ${importResult.failed} failed` : ""}
+              </p>
+            ) : (
+              <button
+                disabled={importing || !csvRows.some(r => !r.error)}
+                onClick={handleCsvImport}
+                className="w-full py-2.5 rounded-xl bg-cyan text-jungle-deep font-extrabold text-xs disabled:opacity-40"
+              >
+                {importing
+                  ? <Loader2 className="size-3.5 animate-spin mx-auto" />
+                  : `Import ${csvRows.filter(r => !r.error).length} Rates`
+                }
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="bg-secondary/50 border border-white/5 rounded-2xl px-4 py-3 text-xs text-muted-foreground">
-        Tap ✏️ to edit a rate. Use <span className="font-bold text-foreground">+ New Brand</span> to add brands not in the list.
+        Tap ✏️ to edit. Use <span className="font-bold text-foreground">+ New Brand</span> to add one, or <span className="font-bold text-foreground">CSV</span> to bulk import.
+        <br /><span className="opacity-70">CSV format: <code>brand,region,rate</code> — e.g. <code>Amazon,USA,1500</code></span>
       </div>
 
       {(!rates || rates.length === 0) ? (
