@@ -5,6 +5,8 @@
 // Sandbox:   https://sandbox-api-d.squadco.com
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { fetchWithTimeout } from "./fetch-with-timeout";
+
 const SQUADCO_ENV = process.env.SQUADCO_ENV || "sandbox";
 
 const BASE_URL =
@@ -27,7 +29,7 @@ function getHeaders() {
 }
 
 async function squadFetch(path: string, options: RequestInit = {}) {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetchWithTimeout(`${BASE_URL}${path}`, {
     ...options,
     headers: {
       ...getHeaders(),
@@ -153,7 +155,7 @@ export async function createPaymentLink(params: {
   redirectUrl: string;
 }): Promise<{ checkoutUrl: string | null; error?: string }> {
   try {
-    const res = await fetch(`${BASE_URL}/merchant/create-payment-link`, {
+    const res = await fetchWithTimeout(`${BASE_URL}/merchant/create-payment-link`, {
       method: "POST",
       headers: getHeaders(),
       body: JSON.stringify({
