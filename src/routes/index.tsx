@@ -46,6 +46,7 @@ import { TradeHistoryScreen } from "../components/TradeHistoryScreen";
 import { TradeStatusScreen } from "../components/TradeStatusScreen";
 import { SupportScreen } from "../components/SupportScreen";
 import { AdminScreen } from "../components/AdminScreen";
+import { EscrowScreen } from "../components/EscrowScreen";
 import { useSession } from "../hooks/useSession";
 import {
   useExchangeRates,
@@ -197,6 +198,7 @@ function App() {
         {tab === "home" && (
           <HomeScreen
             onSell={() => setTab("sell")}
+            onNotifications={() => setTab("notifications")}
             userName={userName}
             ngnBalance={ngnBalance}
             recentTrades={recentTrades as TradeRow[]}
@@ -391,9 +393,9 @@ function timeAgo(iso: string): string {
 }
 
 function HomeScreen({
-  onSell, userName, ngnBalance, recentTrades, bestRate, xp, unreadCount,
+  onSell, onNotifications, userName, ngnBalance, recentTrades, bestRate, xp, unreadCount,
 }: {
-  onSell: () => void; userName: string; ngnBalance: number;
+  onSell: () => void; onNotifications: () => void; userName: string; ngnBalance: number;
   recentTrades: TradeRow[]; bestRate: number; xp?: XPData; unreadCount: number;
 }) {
   const [hideBalance, setHideBalance] = useState(false);
@@ -420,7 +422,7 @@ function HomeScreen({
             </div>
           </div>
           <button
-            onClick={() => setTab("notifications")}
+            onClick={onNotifications}
             className="size-10 rounded-full bg-white/10 grid place-items-center backdrop-blur relative"
           >
             <Bell className="size-5 text-white" />
@@ -1215,7 +1217,7 @@ function MenuItem({
 
 /* ─────────────────────────────────── VERIFY ─────────────────────────────────── */
 
-type VState = "scanning" | "valid" | "invalid" | "processing" | "paid";
+type VState = "scanning" | "escrow" | "valid" | "invalid" | "processing" | "paid";
 
 const NG_BANKS = [
   { code: "058", name: "GTBank" },
@@ -1269,6 +1271,8 @@ function VerifyScreen({
   const [progress, setProgress] = useState(0);
   const [transactionRef, setTransactionRef] = useState<string | null>(null);
   const [failureReason, setFailureReason] = useState<string>("");
+  const [escrowEndsAt, setEscrowEndsAt] = useState<number>(0);
+  const [extended, setExtended] = useState(false);
   const queryClient = useQueryClient();
   const hasSavedBank = !!payoutAccountNumber && payoutAccountNumber !== "0000000000";
   const [bankEntry, setBankEntry] = useState({ bankCode: payoutBankCode ?? "", bankName: "", accountNumber: payoutAccountNumber ?? "" });
@@ -1331,7 +1335,8 @@ function VerifyScreen({
         setProgress(100);
 
         if ((result as { success: boolean }).success) {
-          setState("valid");
+          setState("escrow");
+          setEscrowEndsAt(Date.now() + 5 * 60_000);
           setProgress(0);
         } else {
           setFailureReason((result as { reason?: string }).reason ?? "Verification failed");
@@ -1352,6 +1357,12 @@ function VerifyScreen({
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tradeId]);
+
+  // ── Escrow extension ──────────────────────────────────────────────────────
+  const handleExtend = () => {
+    setExtended(true);
+    setEscrowEndsAt(Date.now() + 3 * 60_000);
+  };
 
   // ── Real payout when user clicks "Redeem & Credit Wallet" ────────────────
   const handlePayout = async () => {
@@ -1404,6 +1415,21 @@ function VerifyScreen({
       setState("invalid");
     }
   };
+
+  if (state === "escrow") {
+    return (
+      <EscrowScreen
+        tradeId={tradeId}
+        brand={brand}
+        amountUsd={amountUsd}
+        amountNgn={amountNgn}
+        escrowEndsAt={escrowEndsAt}
+        extended={extended}
+        onExtend={handleExtend}
+        onProceed={onDone}
+      />
+    );
+  }
 
   const cfg = STATE_CONFIG[state];
 
