@@ -12,8 +12,9 @@ import {
   Zap,
   AlertCircle,
   Timer,
+  RotateCcw,
 } from "lucide-react";
-import { getTradeStatus } from "../server-functions/trades";
+import { getTradeStatus, processPayout } from "../server-functions/trades";
 
 type TradeDetail = {
   id: string;
@@ -34,7 +35,11 @@ type TradeDetail = {
 
 type Props = {
   tradeId: string;
+  userId: string;
   onBack: () => void;
+  payoutBankCode?: string;
+  payoutAccountNumber?: string;
+  payoutAccountName?: string;
 };
 
 const STEPS = [
@@ -105,12 +110,14 @@ function DEMO_TRADE(tradeId: string): TradeDetail {
   };
 }
 
-export function TradeStatusScreen({ tradeId, onBack }: Props) {
+export function TradeStatusScreen({ tradeId, userId, onBack, payoutBankCode, payoutAccountNumber, payoutAccountName }: Props) {
   const [trade, setTrade] = useState<TradeDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastPoll, setLastPoll] = useState<Date | null>(null);
   const [pollError, setPollError] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [retryResult, setRetryResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const isDone = (status: string) => status === "paid" || FAILED_STEPS.includes(status);
 
@@ -150,6 +157,34 @@ export function TradeStatusScreen({ tradeId, onBack }: Props) {
     ? new Date(trade.created_at).getTime() + 10 * 60_000
     : 0;
   const countdown = useCountdown(estimatedPayoutMs);
+
+  const handleRetryPayout = async () => {
+    if (!trade) return;
+    setRetrying(true);
+    setRetryResult(null);
+    try {
+      const result = await processPayout({
+        data: {
+          tradeId: trade.id,
+          userId,
+          amountNgn: trade.amount_ngn ?? 0,
+          bankCode: payoutBankCode ?? "058",
+          accountNumber: payoutAccountNumber ?? "0000000000",
+          accountName: payoutAccountName ?? "Account",
+        },
+      });
+      if ((result as { success: boolean }).success) {
+        setRetryResult({ ok: true, msg: "Payout initiated — funds on the way!" });
+        poll();
+      } else {
+        setRetryResult({ ok: false, msg: (result as { reason?: string }).reason ?? "Payout failed. Contact support." });
+      }
+    } catch (e: unknown) {
+      setRetryResult({ ok: false, msg: e instanceof Error ? e.message : "Request failed" });
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   const shareReceipt = () => {
     if (!trade) return;
@@ -365,22 +400,49 @@ export function TradeStatusScreen({ tradeId, onBack }: Props) {
             )}
 
             {/* Actions */}
-            <div className="flex gap-3 pb-6">
-              {(isPaid || trade.status === "processing") && (
-                <button
-                  onClick={shareReceipt}
-                  className="flex-1 flex items-center justify-center gap-2 bg-secondary rounded-2xl py-3.5 text-sm font-bold"
-                >
-                  <Share2 className="size-4" />
-                  Share Receipt
-                </button>
-              )}
-              {isPaid && trade.xp_earned > 0 && (
-                <div className="flex items-center gap-1.5 bg-gold/10 text-gold rounded-2xl px-4 py-3.5 text-sm font-bold">
-                  <Zap className="size-4" />
-                  +{trade.xp_earned} XP
+            <div className="space-y-3 pb-6">
+              {/* Retry payout — only when stuck at verified and bank account is known */}
+              {trade.status === "verified" && payoutAccountNumber && (
+                <div className="space-y-2">
+                  <button
+                    disabled={retrying}
+                    onClick={handleRetryPayout}
+                    className="w-full flex items-center justify-center gap-2 bg-cyan text-jungle-deep rounded-2xl py-3.5 text-sm font-extrabold disabled:opacity-50"
+                  >
+                    {retrying
+                      ? <Loader2 className="size-4 animate-spin" />
+                      : <RotateCcw className="size-4" />
+                    }
+                    {retrying ? "Initiating Payout…" : "Retry Payout"}
+                  </button>
+                  <p className="text-[11px] text-center text-muted-foreground">
+                    To: {payoutAccountName} · {payoutAccountNumber}
+                  </p>
+                  {retryResult && (
+                    <p className={`text-xs font-semibold text-center ${retryResult.ok ? "text-cyan" : "text-red-400"}`}>
+                      {retryResult.ok ? "✓ " : "✗ "}{retryResult.msg}
+                    </p>
+                  )}
                 </div>
               )}
+
+              <div className="flex gap-3">
+                {(isPaid || trade.status === "processing") && (
+                  <button
+                    onClick={shareReceipt}
+                    className="flex-1 flex items-center justify-center gap-2 bg-secondary rounded-2xl py-3.5 text-sm font-bold"
+                  >
+                    <Share2 className="size-4" />
+                    Share Receipt
+                  </button>
+                )}
+                {isPaid && trade.xp_earned > 0 && (
+                  <div className="flex items-center gap-1.5 bg-gold/10 text-gold rounded-2xl px-4 py-3.5 text-sm font-bold">
+                    <Zap className="size-4" />
+                    +{trade.xp_earned} XP
+                  </div>
+                )}
+              </div>
             </div>
           </>
         ) : null}
