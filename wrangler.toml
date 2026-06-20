@@ -1,0 +1,62 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Cloudflare Workers — 7SEVEN CARDS
+# Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
+#
+# SETUP STEPS:
+#   1. Install Wrangler:    bun add -g wrangler
+#   2. Login:               wrangler login
+#   3. Add secrets:         wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env production
+#                           (repeat for each secret below)
+#   4. Deploy manually:     wrangler deploy --env production
+#      OR push to `main` and GitHub Actions deploys automatically.
+#
+# Required GitHub Secrets (add in repo Settings → Secrets):
+#   CLOUDFLARE_API_TOKEN   — Cloudflare dashboard → My Profile → API Tokens
+#   CLOUDFLARE_ACCOUNT_ID  — Cloudflare dashboard → right sidebar
+#   VITE_SUPABASE_URL      — Supabase → Settings → API
+#   VITE_SUPABASE_ANON_KEY — Supabase → Settings → API
+#   SUPABASE_SERVICE_ROLE_KEY — Supabase → Settings → API (keep secret!)
+# ─────────────────────────────────────────────────────────────────────────────
+
+name            = "seven-cards"
+main            = ".output/server/index.mjs"
+compatibility_date  = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Static assets (built by Vite)
+[assets]
+directory = ".output/public"
+binding   = "ASSETS"
+
+# ─── Development (wrangler dev) ───────────────────────────────────────────────
+[env.development]
+name = "seven-cards-dev"
+
+[env.development.vars]
+SQUADCO_ENV   = "sandbox"
+RELOADLY_ENV  = "sandbox"
+VITE_APP_URL  = "http://localhost:8787"
+
+# ─── Production (wrangler deploy --env production) ───────────────────────────
+[env.production]
+name = "seven-cards"
+
+[env.production.vars]
+SQUADCO_ENV  = "production"
+RELOADLY_ENV = "production"
+# VITE_APP_URL — set this in Cloudflare dashboard after first deploy (your *.workers.dev URL)
+# or add VITE_APP_URL to GitHub Secrets and it is injected at build time
+
+# Secrets — set via `wrangler secret put <NAME> --env production` or GitHub Actions:
+#   VITE_SUPABASE_URL
+#   VITE_SUPABASE_ANON_KEY
+#   SUPABASE_SERVICE_ROLE_KEY
+#   SQUADCO_SECRET_KEY
+#   BUSHA_API_KEY
+#   ONESIGNAL_APP_ID
+#   ONESIGNAL_REST_API_KEY
+#   RELOADLY_CLIENT_ID
+#   RELOADLY_CLIENT_SECRET
+#   DOJAH_APP_ID
+#   DOJAH_SECRET_KEY
+#   APP_SECRET
