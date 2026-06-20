@@ -26,6 +26,7 @@ interface EscrowScreenProps {
   extended: boolean;
   onExtend: () => void;
   onProceed: () => void;
+  onSupport?: () => void;
 }
 
 function useCountdownMs(targetMs: number) {
@@ -66,6 +67,7 @@ export function EscrowScreen({
   extended,
   onExtend,
   onProceed,
+  onSupport,
 }: EscrowScreenProps) {
   const remaining = useCountdownMs(escrowEndsAt);
   const isExpired = remaining <= 0;
@@ -438,6 +440,15 @@ export function EscrowScreen({
             >
               View Trade Status <ArrowRight className="size-4" />
             </button>
+            {onSupport && (
+              <button
+                onClick={onSupport}
+                className="w-full flex items-center justify-center gap-2 bg-secondary border border-border/60 rounded-2xl py-3 text-sm font-semibold text-muted-foreground active:scale-[0.98] transition-transform"
+              >
+                <Sparkles className="size-4" />
+                Get Help with This Trade
+              </button>
+            )}
           </div>
         )}
 

@@ -26,6 +26,12 @@ import {
   Timer,
   Zap,
   ArrowRight,
+  Building2,
+  MessageCircle,
+  Send,
+  UserCheck,
+  UserX,
+  Star,
 } from "lucide-react";
 import {
   getAdminStats,
@@ -43,8 +49,14 @@ import {
   getEscrowQueue,
   processEscrowTrade,
 } from "../server-functions/admin";
+import {
+  adminGetVendors,
+  adminUpdateVendorStatus,
+  adminAssignCard,
+  adminSendTelegramNotification,
+} from "../server-functions/vendors";
 
-type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit";
+type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors";
 
 type Props = {
   adminId: string;
@@ -1286,18 +1298,298 @@ function EscrowTab({ adminId }: { adminId: string }) {
   );
 }
 
+// ─── Vendors Tab ──────────────────────────────────────────────────────────────
+type VendorRow = {
+  id: string; business_name: string; contact_name: string | null;
+  email: string | null; phone: string | null; telegram_username: string | null;
+  status: "pending" | "active" | "suspended"; tier: string;
+  total_redeemed: number; last_active_at: string | null;
+  vendor_wallets?: Array<{ balance: number; total_funded: number }>;
+};
+
+function VendorsTab({ adminId }: { adminId: string }) {
+  const [vendors, setVendors] = useState<VendorRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [acting, setActing] = useState<string | null>(null);
+  const [assignModal, setAssignModal] = useState<{ vendorId: string; vendorName: string } | null>(null);
+  const [assignForm, setAssignForm] = useState({ brand: "Apple", amountUsd: "", amountNgn: "", cardCode: "", cardPin: "", tradeId: "", notifyTelegram: true });
+  const [assigning, setAssigning] = useState(false);
+  const [filterStatus, setFilterStatus] = useState<"all" | "pending" | "active" | "suspended">("all");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await adminGetVendors({ data: {} });
+      setVendors(rows as VendorRow[]);
+    } catch { setVendors([]); } finally { setLoading(false); }
+  }, [adminId]);
+
+  if (!vendors.length && !loading) load();
+  if (loading) return <CenterLoader />;
+
+  const filtered = vendors.filter(v => filterStatus === "all" || v.status === filterStatus);
+
+  const handleStatusChange = async (vendorId: string, status: "active" | "pending" | "suspended") => {
+    setActing(vendorId);
+    try {
+      await adminUpdateVendorStatus({ data: { vendorId, status } });
+      setVendors(prev => prev.map(v => v.id === vendorId ? { ...v, status } : v));
+    } finally { setActing(null); }
+  };
+
+  const handleAssign = async () => {
+    if (!assignModal || !assignForm.cardCode || !assignForm.amountUsd) return;
+    setAssigning(true);
+    try {
+      const result = await adminAssignCard({
+        data: {
+          vendorId: assignModal.vendorId,
+          tradeId: assignForm.tradeId || undefined,
+          brand: assignForm.brand,
+          amountUsd: parseFloat(assignForm.amountUsd),
+          amountNgn: parseFloat(assignForm.amountNgn) || 0,
+          cardCode: assignForm.cardCode,
+          cardPin: assignForm.cardPin || undefined,
+          notifyTelegram: assignForm.notifyTelegram,
+        },
+      }) as { success: boolean; assignmentId?: string; telegramResult?: { ok: boolean; error?: string } };
+
+      if (result.success) {
+        const tlg = result.telegramResult;
+        const msg = tlg?.ok ? " ✅ Telegram sent!" : tlg?.error ? ` ⚠️ Telegram: ${tlg.error}` : "";
+        alert(`Card assigned successfully!${msg}`);
+        setAssignModal(null);
+        setAssignForm({ brand: "Apple", amountUsd: "", amountNgn: "", cardCode: "", cardPin: "", tradeId: "", notifyTelegram: true });
+      }
+    } catch (e) { alert(e instanceof Error ? e.message : "Assignment failed"); }
+    finally { setAssigning(false); }
+  };
+
+  const handleSendTelegram = async (assignmentId: string) => {
+    setActing(assignmentId);
+    try {
+      const res = await adminSendTelegramNotification({ data: { assignmentId } }) as { ok: boolean; error?: string };
+      alert(res.ok ? "✅ Telegram notification sent!" : `⚠️ ${res.error}`);
+    } finally { setActing(null); }
+  };
+
+  const fmtNgn = (n: number) => "₦" + n.toLocaleString();
+  const timeAgoLocal = (iso: string) => {
+    const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 1) return "just now"; if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+  };
+
+  const BRANDS = ["Apple", "Amazon", "Steam", "Google Play", "Xbox", "PlayStation", "Netflix", "Spotify"];
+
+  return (
+    <div className="px-5 pt-4 pb-10 space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-extrabold">Vendor Network</p>
+          <p className="text-xs text-muted-foreground">{vendors.length} vendors registered</p>
+        </div>
+        <button onClick={load} className="text-muted-foreground"><RefreshCw className="size-4" /></button>
+      </div>
+
+      {/* Stats summary */}
+      <div className="grid grid-cols-3 gap-2">
+        {(["pending","active","suspended"] as const).map(s => (
+          <div key={s} className="bg-card border border-border/60 rounded-xl p-3 text-center">
+            <p className="text-lg font-extrabold">{vendors.filter(v => v.status === s).length}</p>
+            <p className="text-[10px] text-muted-foreground capitalize">{s}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Filter */}
+      <div className="flex gap-2">
+        {(["all","pending","active","suspended"] as const).map(f => (
+          <button key={f} onClick={() => setFilterStatus(f)}
+            className={`px-3 py-1.5 rounded-full text-xs font-bold capitalize transition-colors ${filterStatus === f ? "bg-cyan text-jungle-deep" : "bg-secondary text-muted-foreground"}`}>
+            {f}
+          </button>
+        ))}
+      </div>
+
+      {/* Vendor list */}
+      {filtered.length === 0 ? (
+        <EmptyState icon={Building2} message="No vendors in this category" />
+      ) : (
+        <div className="space-y-3">
+          {filtered.map(v => {
+            const walletBalance = v.vendor_wallets?.[0]?.balance ?? 0;
+            return (
+              <div key={v.id} className="bg-gradient-card border border-white/5 rounded-2xl p-4 space-y-3">
+                {/* Vendor header */}
+                <div className="flex items-start gap-3">
+                  <div className="size-10 rounded-xl bg-secondary grid place-items-center shrink-0">
+                    <Building2 className="size-5 text-muted-foreground" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-extrabold truncate">{v.business_name}</p>
+                      {v.tier === "premium" && <Star className="size-3 text-gold shrink-0" />}
+                    </div>
+                    <p className="text-xs text-muted-foreground">{v.contact_name ?? v.email ?? "—"}</p>
+                    {v.telegram_username && (
+                      <p className="text-[10px] text-blue-400 flex items-center gap-1 mt-0.5">
+                        <MessageCircle className="size-2.5" /> @{v.telegram_username}
+                      </p>
+                    )}
+                  </div>
+                  <span className={`text-[10px] font-bold px-2 py-1 rounded-full border capitalize shrink-0 ${
+                    v.status === "active" ? "text-green-400 bg-green-400/10 border-green-400/20"
+                    : v.status === "pending" ? "text-gold bg-gold/10 border-gold/20"
+                    : "text-red-400 bg-red-400/10 border-red-400/20"
+                  }`}>{v.status}</span>
+                </div>
+
+                {/* Stats row */}
+                <div className="flex gap-3 text-center">
+                  <div className="flex-1 bg-secondary/60 rounded-xl py-2">
+                    <p className="text-xs font-extrabold text-gold">{fmtNgn(walletBalance)}</p>
+                    <p className="text-[9px] text-muted-foreground">Balance</p>
+                  </div>
+                  <div className="flex-1 bg-secondary/60 rounded-xl py-2">
+                    <p className="text-xs font-extrabold">{v.total_redeemed}</p>
+                    <p className="text-[9px] text-muted-foreground">Redeemed</p>
+                  </div>
+                  <div className="flex-1 bg-secondary/60 rounded-xl py-2">
+                    <p className="text-xs font-extrabold text-muted-foreground">{v.last_active_at ? timeAgoLocal(v.last_active_at) : "Never"}</p>
+                    <p className="text-[9px] text-muted-foreground">Last Active</p>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setAssignModal({ vendorId: v.id, vendorName: v.business_name })}
+                    className="flex-1 flex items-center justify-center gap-1.5 bg-gold/15 border border-gold/20 text-gold text-xs font-bold rounded-xl py-2.5"
+                  >
+                    <Gift className="size-3.5" /> Assign Card
+                  </button>
+
+                  {v.status === "pending" && (
+                    <button
+                      onClick={() => handleStatusChange(v.id, "active")}
+                      disabled={acting === v.id}
+                      className="flex-1 flex items-center justify-center gap-1.5 bg-green-500/15 border border-green-500/25 text-green-400 text-xs font-bold rounded-xl py-2.5 disabled:opacity-50"
+                    >
+                      {acting === v.id ? <Loader2 className="size-3 animate-spin" /> : <UserCheck className="size-3.5" />}
+                      Activate
+                    </button>
+                  )}
+                  {v.status === "active" && (
+                    <button
+                      onClick={() => handleStatusChange(v.id, "suspended")}
+                      disabled={acting === v.id}
+                      className="px-3 flex items-center justify-center bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold rounded-xl py-2.5 disabled:opacity-50"
+                    >
+                      {acting === v.id ? <Loader2 className="size-3 animate-spin" /> : <UserX className="size-3.5" />}
+                    </button>
+                  )}
+                  {v.status === "suspended" && (
+                    <button
+                      onClick={() => handleStatusChange(v.id, "active")}
+                      disabled={acting === v.id}
+                      className="px-3 flex items-center justify-center bg-green-500/10 border border-green-500/20 text-green-400 text-xs font-bold rounded-xl py-2.5 disabled:opacity-50"
+                    >
+                      {acting === v.id ? <Loader2 className="size-3 animate-spin" /> : <UserCheck className="size-3.5" />}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Assign Card Modal */}
+      {assignModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center z-50 px-4 pb-6">
+          <div className="bg-card border border-border/60 rounded-3xl p-6 w-full max-w-sm space-y-4">
+            <div className="flex items-center gap-2">
+              <Gift className="size-5 text-gold" />
+              <h3 className="text-base font-extrabold">Assign Card to {assignModal.vendorName}</h3>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-muted-foreground mb-1 block">Brand</label>
+                <select value={assignForm.brand} onChange={e => setAssignForm(f => ({ ...f, brand: e.target.value }))}
+                  className="w-full bg-secondary border border-border/60 rounded-xl px-3 py-2.5 text-sm outline-none">
+                  {BRANDS.map(b => <option key={b}>{b}</option>)}
+                </select>
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="text-xs font-bold text-muted-foreground mb-1 block">Amount USD</label>
+                  <input type="number" value={assignForm.amountUsd} onChange={e => setAssignForm(f => ({ ...f, amountUsd: e.target.value }))}
+                    placeholder="e.g. 50" className="w-full bg-secondary border border-border/60 rounded-xl px-3 py-2.5 text-sm outline-none" />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-bold text-muted-foreground mb-1 block">NGN Credit</label>
+                  <input type="number" value={assignForm.amountNgn} onChange={e => setAssignForm(f => ({ ...f, amountNgn: e.target.value }))}
+                    placeholder="₦ credit" className="w-full bg-secondary border border-border/60 rounded-xl px-3 py-2.5 text-sm outline-none" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-muted-foreground mb-1 block">Card Code</label>
+                <input value={assignForm.cardCode} onChange={e => setAssignForm(f => ({ ...f, cardCode: e.target.value }))}
+                  placeholder="XXXX-XXXX-XXXX-XXXX" className="w-full bg-secondary border border-border/60 rounded-xl px-3 py-2.5 text-sm font-mono outline-none" />
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="text-xs font-bold text-muted-foreground mb-1 block">PIN (optional)</label>
+                  <input value={assignForm.cardPin} onChange={e => setAssignForm(f => ({ ...f, cardPin: e.target.value }))}
+                    placeholder="PIN" className="w-full bg-secondary border border-border/60 rounded-xl px-3 py-2.5 text-sm font-mono outline-none" />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-bold text-muted-foreground mb-1 block">Trade ID (optional)</label>
+                  <input value={assignForm.tradeId} onChange={e => setAssignForm(f => ({ ...f, tradeId: e.target.value }))}
+                    placeholder="UUID" className="w-full bg-secondary border border-border/60 rounded-xl px-3 py-2.5 text-sm outline-none" />
+                </div>
+              </div>
+              <label className="flex items-center gap-3 bg-secondary/50 rounded-xl px-3 py-2.5 cursor-pointer">
+                <input type="checkbox" checked={assignForm.notifyTelegram} onChange={e => setAssignForm(f => ({ ...f, notifyTelegram: e.target.checked }))} className="size-4 accent-gold" />
+                <div>
+                  <p className="text-xs font-bold">Send Telegram notification</p>
+                  <p className="text-[10px] text-muted-foreground">Card code delivered directly to vendor's Telegram</p>
+                </div>
+              </label>
+            </div>
+
+            <div className="flex gap-2">
+              <button onClick={() => setAssignModal(null)} className="flex-1 py-3 rounded-xl bg-secondary text-sm font-bold">Cancel</button>
+              <button onClick={handleAssign} disabled={assigning || !assignForm.cardCode || !assignForm.amountUsd}
+                className="flex-1 flex items-center justify-center gap-1.5 py-3 rounded-xl bg-gold text-jungle-deep text-sm font-extrabold disabled:opacity-50">
+                {assigning ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                {assigning ? "Assigning…" : "Assign"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Admin Screen ────────────────────────────────────────────────────────
 export function AdminScreen({ adminId, onBack }: Props) {
   const [tab, setTab] = useState<AdminTab>("stats");
 
   const TABS: { key: AdminTab; label: string; icon: typeof BarChart3 }[] = [
-    { key: "stats",  label: "Stats",  icon: BarChart3 },
-    { key: "kyc",    label: "KYC",    icon: ShieldCheck },
-    { key: "escrow", label: "Escrow", icon: Timer },
-    { key: "review", label: "Review", icon: Eye },
-    { key: "trades", label: "Trades", icon: TrendingUp },
-    { key: "rates",  label: "Rates",  icon: DollarSign },
-    { key: "credit", label: "Credit", icon: Wallet },
+    { key: "stats",   label: "Stats",   icon: BarChart3 },
+    { key: "kyc",     label: "KYC",     icon: ShieldCheck },
+    { key: "escrow",  label: "Escrow",  icon: Timer },
+    { key: "review",  label: "Review",  icon: Eye },
+    { key: "trades",  label: "Trades",  icon: TrendingUp },
+    { key: "rates",   label: "Rates",   icon: DollarSign },
+    { key: "credit",  label: "Credit",  icon: Wallet },
+    { key: "vendors", label: "Vendors", icon: Building2 },
   ];
 
   return (
@@ -1336,13 +1628,14 @@ export function AdminScreen({ adminId, onBack }: Props) {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {tab === "stats"  && <StatsTab  adminId={adminId} />}
-        {tab === "kyc"    && <KYCTab    adminId={adminId} />}
-        {tab === "escrow" && <EscrowTab adminId={adminId} />}
-        {tab === "review" && <ReviewTab adminId={adminId} />}
-        {tab === "trades" && <TradesTab adminId={adminId} />}
-        {tab === "rates"  && <RatesTab  adminId={adminId} />}
-        {tab === "credit" && <CreditTab adminId={adminId} />}
+        {tab === "stats"   && <StatsTab   adminId={adminId} />}
+        {tab === "kyc"     && <KYCTab     adminId={adminId} />}
+        {tab === "escrow"  && <EscrowTab  adminId={adminId} />}
+        {tab === "review"  && <ReviewTab  adminId={adminId} />}
+        {tab === "trades"  && <TradesTab  adminId={adminId} />}
+        {tab === "rates"   && <RatesTab   adminId={adminId} />}
+        {tab === "credit"  && <CreditTab  adminId={adminId} />}
+        {tab === "vendors" && <VendorsTab adminId={adminId} />}
       </div>
     </div>
   );
