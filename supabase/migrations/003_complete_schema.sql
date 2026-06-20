@@ -381,13 +381,63 @@ DO $pol$ BEGIN
   END IF;
 END $pol$;
 
+-- ─── Referral Commissions ────────────────────────────────────────────────────
+-- Records every 5% referral commission payment for full transparency.
+-- Platform model: platform keeps 15% of trade; 5% goes to referrer;
+--   net platform margin = 10%.
+
+CREATE TABLE IF NOT EXISTS referral_commissions (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  referrer_id     UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  referee_id      UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  trade_id        UUID NOT NULL REFERENCES trades(id)   ON DELETE CASCADE,
+  amount_ngn      NUMERIC(15,2) NOT NULL,
+  commission_rate NUMERIC(5,4)  NOT NULL DEFAULT 0.05,
+  created_at      TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (trade_id) -- one commission record per trade
+);
+
+ALTER TABLE referral_commissions ENABLE ROW LEVEL SECURITY;
+
+DO $pol$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='referral_commissions' AND policyname='Referrers can view own commissions') THEN
+    CREATE POLICY "Referrers can view own commissions" ON referral_commissions
+      FOR SELECT USING (auth.uid() = referrer_id);
+  END IF;
+END $pol$;
+
+-- ─── Verification Usage ───────────────────────────────────────────────────────
+-- Tracks daily gift-card verification API calls per free-tier user.
+-- Prevents runaway Reloadly API billing.
+-- Unlimited for: premium subscribers, $25+/week or $50+/month in paid trades.
+
+CREATE TABLE IF NOT EXISTS verification_usage (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  trade_id   UUID REFERENCES trades(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE verification_usage ENABLE ROW LEVEL SECURITY;
+
+DO $pol$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='verification_usage' AND policyname='Users can view own usage') THEN
+    CREATE POLICY "Users can view own usage" ON verification_usage
+      FOR SELECT USING (auth.uid() = user_id);
+  END IF;
+END $pol$;
+
 -- ─── Indexes ──────────────────────────────────────────────────────────────────
 
-CREATE INDEX IF NOT EXISTS idx_trades_user        ON trades(user_id);
-CREATE INDEX IF NOT EXISTS idx_trades_status      ON trades(status);
-CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
-CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id);
-CREATE INDEX IF NOT EXISTS idx_subscriptions_ref  ON subscriptions(transaction_ref);
+CREATE INDEX IF NOT EXISTS idx_trades_user              ON trades(user_id);
+CREATE INDEX IF NOT EXISTS idx_trades_status            ON trades(status);
+CREATE INDEX IF NOT EXISTS idx_trades_settled_at        ON trades(settled_at);
+CREATE INDEX IF NOT EXISTS idx_notifications_user       ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_user       ON subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_ref        ON subscriptions(transaction_ref);
+CREATE INDEX IF NOT EXISTS idx_ref_commissions_referrer ON referral_commissions(referrer_id);
+CREATE INDEX IF NOT EXISTS idx_ref_commissions_referee  ON referral_commissions(referee_id);
+CREATE INDEX IF NOT EXISTS idx_verification_user_date   ON verification_usage(user_id, created_at);
 
 -- Done!
 -- After running: go to Authentication → Triggers and confirm on_auth_user_created is listed
