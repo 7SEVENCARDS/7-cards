@@ -59,6 +59,7 @@ import {
   adminRejectWithdrawal,
   adminGetVendorLeaderboard,
   adminPromoteVendorTier,
+  adminRegisterVendor,
 } from "../server-functions/vendors";
 
 type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors";
@@ -1329,6 +1330,45 @@ function VendorsTab({ adminId }: { adminId: string }) {
   const [assigning, setAssigning] = useState(false);
   const [filterStatus, setFilterStatus] = useState<"all" | "pending" | "active" | "suspended">("all");
   const [vendorSubTab, setVendorSubTab] = useState<"vendors" | "withdrawals" | "leaderboard">("vendors");
+
+  // ── Add Vendor modal ──────────────────────────────────────────────────────
+  const [addVendorOpen, setAddVendorOpen] = useState(false);
+  const [addVendorForm, setAddVendorForm] = useState({
+    email: "", password: "", businessName: "", contactName: "", phone: "",
+    referralCode: "", securityDepositRequired: "",
+  });
+  const [addVendorLoading, setAddVendorLoading] = useState(false);
+  const [addVendorError, setAddVendorError] = useState("");
+  const [addVendorSuccess, setAddVendorSuccess] = useState("");
+
+  const handleAddVendor = async () => {
+    const { email, password, businessName, contactName, phone } = addVendorForm;
+    if (!email || !password || !businessName || !contactName || !phone)
+      return setAddVendorError("Email, password, business name, contact name and phone are required");
+    if (password.length < 8)
+      return setAddVendorError("Password must be at least 8 characters");
+    setAddVendorLoading(true); setAddVendorError(""); setAddVendorSuccess("");
+    try {
+      const res = await adminRegisterVendor({
+        data: {
+          email,
+          password,
+          businessName,
+          contactName,
+          phone,
+          referralCode: addVendorForm.referralCode.trim() || undefined,
+          securityDepositRequired: addVendorForm.securityDepositRequired
+            ? Number(addVendorForm.securityDepositRequired)
+            : undefined,
+        },
+      }) as { success: boolean; error?: string };
+      if (!res.success) return setAddVendorError(res.error ?? "Failed to create vendor");
+      setAddVendorSuccess(`Vendor account created for ${email}. Status: pending (activate below).`);
+      setAddVendorForm({ email: "", password: "", businessName: "", contactName: "", phone: "", referralCode: "", securityDepositRequired: "" });
+      await load();
+    } catch (e) { setAddVendorError(e instanceof Error ? e.message : "Failed to create vendor"); }
+    finally { setAddVendorLoading(false); }
+  };
   const [withdrawals, setWithdrawals] = useState<WithdrawalReq[]>([]);
   const [loadingWithdrawals, setLoadingWithdrawals] = useState(false);
   const [actingWithdrawal, setActingWithdrawal] = useState<string | null>(null);
@@ -1602,8 +1642,75 @@ function VendorsTab({ adminId }: { adminId: string }) {
           <p className="text-sm font-extrabold">Vendor Network</p>
           <p className="text-xs text-muted-foreground">{vendors.length} vendors registered</p>
         </div>
-        <button onClick={load} className="text-muted-foreground"><RefreshCw className="size-4" /></button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setAddVendorOpen(true); setAddVendorError(""); setAddVendorSuccess(""); }}
+            className="flex items-center gap-1.5 bg-gold text-jungle-deep text-xs font-extrabold px-3 py-1.5 rounded-xl"
+          >
+            <Plus className="size-3.5" /> Add Vendor
+          </button>
+          <button onClick={load} className="text-muted-foreground"><RefreshCw className="size-4" /></button>
+        </div>
       </div>
+
+      {/* Add Vendor modal */}
+      {addVendorOpen && (
+        <div className="bg-card border border-gold/25 rounded-2xl p-5 space-y-3">
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-sm font-extrabold text-gold">Create vendor account</p>
+            <button onClick={() => setAddVendorOpen(false)} className="text-muted-foreground text-xs">✕ Close</button>
+          </div>
+          {(["businessName", "contactName", "phone", "email"] as const).map(field => (
+            <div key={field}>
+              <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-1 block">
+                {field === "businessName" ? "Business name" : field === "contactName" ? "Contact name" : field === "phone" ? "Phone" : "Email"}
+              </label>
+              <input
+                type={field === "email" ? "email" : "text"}
+                value={addVendorForm[field]}
+                onChange={e => setAddVendorForm(f => ({ ...f, [field]: e.target.value }))}
+                placeholder={field === "phone" ? "+234..." : ""}
+                className="w-full bg-secondary border border-border/60 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-gold/40"
+              />
+            </div>
+          ))}
+          <div>
+            <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-1 block">Password (min 8 chars)</label>
+            <input
+              type="password"
+              value={addVendorForm.password}
+              onChange={e => setAddVendorForm(f => ({ ...f, password: e.target.value }))}
+              placeholder="Set a strong password"
+              className="w-full bg-secondary border border-border/60 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-gold/40"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-1 block">Security deposit required (₦, optional)</label>
+            <input
+              type="number"
+              value={addVendorForm.securityDepositRequired}
+              onChange={e => setAddVendorForm(f => ({ ...f, securityDepositRequired: e.target.value }))}
+              placeholder="e.g. 50000"
+              className="w-full bg-secondary border border-border/60 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-gold/40"
+            />
+          </div>
+          {addVendorError && (
+            <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2.5 text-xs text-red-400">{addVendorError}</div>
+          )}
+          {addVendorSuccess && (
+            <div className="bg-green-500/10 border border-green-500/20 rounded-xl px-3 py-2.5 text-xs text-green-400">{addVendorSuccess}</div>
+          )}
+          <button
+            onClick={handleAddVendor}
+            disabled={addVendorLoading}
+            className="w-full bg-gold text-jungle-deep font-extrabold rounded-xl py-3 text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            {addVendorLoading ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+            {addVendorLoading ? "Creating…" : "Create vendor account"}
+          </button>
+          <p className="text-[10px] text-muted-foreground text-center">Account starts as <span className="text-gold font-semibold">pending</span> — activate it below after reviewing.</p>
+        </div>
+      )}
 
       {/* Stats summary */}
       <div className="grid grid-cols-3 gap-2">
