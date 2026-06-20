@@ -7,7 +7,7 @@ import {
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import faviconAsset from "../assets/favicon.png.asset.json";
@@ -96,6 +96,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         href: "https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap",
       },
     ],
+    scripts: [
+      {
+        src: "https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js",
+        defer: true,
+        async: true,
+      },
+    ],
   }),
   shellComponent: RootShell,
   component: RootComponent,
@@ -119,6 +126,26 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  const oneSignalInit = useRef(false);
+
+  useEffect(() => {
+    if (oneSignalInit.current) return;
+    const appId = import.meta.env.VITE_ONESIGNAL_APP_ID as string | undefined;
+    if (!appId) return;
+
+    oneSignalInit.current = true;
+    // @ts-expect-error OneSignal loaded via external SDK script
+    window.OneSignalDeferred = window.OneSignalDeferred ?? [];
+    // @ts-expect-error OneSignal loaded via external SDK script
+    window.OneSignalDeferred.push(async (OneSignal: unknown) => {
+      await (OneSignal as { init: (opts: object) => Promise<void> }).init({
+        appId,
+        safari_web_id: `web.onesignal.auto.${appId}`,
+        notifyButton: { enable: false },
+        allowLocalhostAsSecureOrigin: import.meta.env.DEV as boolean,
+      });
+    });
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
