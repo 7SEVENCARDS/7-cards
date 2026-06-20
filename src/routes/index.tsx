@@ -238,6 +238,7 @@ function App() {
               setPendingCode(null);
               setActiveTradeId(null);
             }}
+            onNavigateSupport={() => setTab("support")}
             tradeId={activeTradeId}
             userId={user.id}
             cardCode={pendingCode?.code ?? ""}
@@ -1255,12 +1256,12 @@ const BRAND_LOGOS = [
 ];
 
 function VerifyScreen({
-  onBack, onDone,
+  onBack, onDone, onNavigateSupport,
   tradeId, userId, cardCode, cardPin,
   brand, amountUsd, amountNgn, recipientEmail,
   payoutBankCode, payoutAccountNumber, payoutAccountName,
 }: {
-  onBack: () => void; onDone: () => void;
+  onBack: () => void; onDone: () => void; onNavigateSupport?: () => void;
   tradeId: string | null; userId: string;
   cardCode: string; cardPin?: string;
   brand: string; amountUsd: number; amountNgn: number;
@@ -1427,6 +1428,7 @@ function VerifyScreen({
         extended={extended}
         onExtend={handleExtend}
         onProceed={onDone}
+        onSupport={onNavigateSupport}
       />
     );
   }
