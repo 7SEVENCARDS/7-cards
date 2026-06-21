@@ -13,6 +13,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { createServerFn } from "@tanstack/react-start";
+import { getAppUrl } from "../lib/constants";
 import { requireVendorAuth } from "../lib/auth-server";
 import { getServerSupabase } from "../lib/supabase.server";
 
@@ -365,7 +366,7 @@ async function provisionAssignmentVAN(
       amount: Math.round(opts.amountNgn),
       preferred_bank: "wema-bank",
       expiry_date: expiresAt.slice(0, 10).replace(/-/g, "/"),
-      callback_url: `${process.env.APP_URL ?? "https://7evencards.xyz"}/api/webhooks/squadco/payment`,
+      callback_url: `${getAppUrl()}/api/webhooks/squadco/payment`,
       is_permanent: false,
       beneficiary_account: "0000000000",
       meta_data: JSON.stringify({

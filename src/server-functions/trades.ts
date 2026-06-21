@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
+import { sanitizeStr, sanitizeCode, assertAmount, assertOneOf } from "../lib/validate";
 
 // ─── Submit a batch of cards (multi-card risk distribution) ──────────────────
 // Each card is an independent trade. Cards are distributed across different
@@ -11,13 +12,29 @@ import { requireUser } from "../lib/auth-server";
 // dispatched immediately. The rest are queued (batch_queued = true) and
 // dispatched one at a time as each preceding card is processed.
 export const submitCardBatch = createServerFn({ method: "POST" })
-  .validator((d: {
-    cards:        Array<{ cardCode: string; cardPin?: string }>;
-    brand:        string;
-    amountUsd:    number;
-    exchangeRate: number;
-    payoutMethod?: "bank" | "wallet";
-  }) => d)
+  .validator((d: unknown) => {
+    const raw = d as Record<string, unknown>;
+    const cards = raw.cards;
+    if (!Array.isArray(cards) || cards.length < 1 || cards.length > 10) {
+      throw new Error("cards must be an array of 1–10 items");
+    }
+    const validatedCards = cards.map((c: unknown, i: number) => {
+      const card = c as Record<string, unknown>;
+      return {
+        cardCode: sanitizeCode(card.cardCode, 64, `cards[${i}].cardCode`),
+        cardPin:  card.cardPin != null ? sanitizeCode(card.cardPin, 20, `cards[${i}].cardPin`, ) : undefined,
+      };
+    });
+    return {
+      cards:        validatedCards,
+      brand:        sanitizeStr(raw.brand,       100, "brand"),
+      amountUsd:    assertAmount(raw.amountUsd,  10_000, "amountUsd"),
+      exchangeRate: assertAmount(raw.exchangeRate, 5_000, "exchangeRate"),
+      payoutMethod: raw.payoutMethod != null
+        ? assertOneOf(raw.payoutMethod, ["bank", "wallet"] as const, "payoutMethod")
+        : undefined,
+    };
+  })
   .handler(async ({ data }) => {
     if (!data.cards.length || data.cards.length > 10) {
       throw new Error("Batch must have 1–10 cards");
@@ -285,14 +302,19 @@ export const createTrade = createServerFn({ method: "POST" })
 
 // ─── Verify gift card via Reloadly ────────────────────────────────────────────
 export const verifyGiftCard = createServerFn({ method: "POST" })
-  .validator((d: {
-    tradeId: string;
-    cardCode: string;
-    cardPin?: string;
-    brand: string;
-    amountUsd: number;
-    recipientEmail?: string;
-  }) => d)
+  .validator((d: unknown) => {
+    const raw = d as Record<string, unknown>;
+    return {
+      tradeId:        sanitizeStr(raw.tradeId,       36, "tradeId"),
+      cardCode:       sanitizeCode(raw.cardCode,     64, "cardCode"),
+      cardPin:        raw.cardPin != null ? sanitizeCode(raw.cardPin, 20, "cardPin") : undefined,
+      brand:          sanitizeStr(raw.brand,         100, "brand"),
+      amountUsd:      assertAmount(raw.amountUsd,  10_000, "amountUsd"),
+      recipientEmail: raw.recipientEmail != null
+        ? sanitizeStr(raw.recipientEmail, 254, "recipientEmail", { required: false })
+        : undefined,
+    };
+  })
   .handler(async ({ data }) => {
     const userId = await requireUser();
     const db = getServerSupabase();

@@ -922,15 +922,16 @@ export const adminSendTelegramNotification = createServerFn({ method: "POST" })
 
 // ─── Request Withdrawal ────────────────────────────────────────────────────────
 export const requestWithdrawal = createServerFn({ method: "POST" })
-  .validator(
-    (d: unknown) => d as {
-      amount: number;
-      bankName: string;
-      bankCode: string;
-      accountNumber: string;
-      accountName: string;
-    }
-  )
+  .validator((d: unknown) => {
+    const raw = d as Record<string, unknown>;
+    return {
+      amount:        Number(raw.amount),
+      bankName:      sanitizeStr(raw.bankName,      100, "bankName"),
+      bankCode:      sanitizeStr(raw.bankCode,       10, "bankCode"),
+      accountNumber: sanitizeStr(raw.accountNumber,  20, "accountNumber"),
+      accountName:   sanitizeStr(raw.accountName,   150, "accountName"),
+    };
+  })
   .handler(async ({ data }) => {
     const userId = await requireVendorAuth();
     const db = getServerSupabase();
@@ -1003,7 +1004,15 @@ export const getMyWithdrawals = createServerFn({ method: "GET" })
 
 // ─── Admin: Get All Withdrawal Requests ────────────────────────────────────────
 export const adminGetWithdrawalRequests = createServerFn({ method: "GET" })
-  .validator((d: unknown) => d as { status?: string })
+  .validator((d: unknown) => {
+    const raw = d as Record<string, unknown>;
+    const ALLOWED_STATUSES = ["pending","paid","failed","rejected","all"] as const;
+    const status = raw.status == null ? undefined : sanitizeStr(raw.status, 20, "status", { required: false }) || undefined;
+    if (status && !ALLOWED_STATUSES.includes(status as typeof ALLOWED_STATUSES[number])) {
+      throw new Error(`status must be one of: ${ALLOWED_STATUSES.join(", ")}`);
+    }
+    return { status };
+  })
   .handler(async ({ data }) => {
     const userId = await requireAdmin();
     const db = getServerSupabase();
@@ -1128,7 +1137,10 @@ export async function approveWithdrawalImpl(
 
 // ─── Admin: Approve Withdrawal (HTTP handler) ─────────────────────────────────
 export const adminApproveWithdrawal = createServerFn({ method: "POST" })
-  .validator((d: unknown) => d as { requestId: string })
+  .validator((d: unknown) => {
+    const raw = d as Record<string, unknown>;
+    return { requestId: sanitizeStr(raw.requestId, 36, "requestId") };
+  })
   .handler(async ({ data }) => {
     const userId = await requireAdmin();
     const db = getServerSupabase();
@@ -1200,7 +1212,13 @@ export async function rejectWithdrawalImpl(
 
 // ─── Admin: Reject Withdrawal (HTTP handler) ───────────────────────────────────
 export const adminRejectWithdrawal = createServerFn({ method: "POST" })
-  .validator((d: unknown) => d as { requestId: string; reason?: string })
+  .validator((d: unknown) => {
+    const raw = d as Record<string, unknown>;
+    return {
+      requestId: sanitizeStr(raw.requestId, 36, "requestId"),
+      reason:    raw.reason != null ? sanitizeStr(raw.reason, 500, "reason", { required: false }) : undefined,
+    };
+  })
   .handler(async ({ data }) => {
     const userId = await requireAdmin();
     const db = getServerSupabase();
@@ -1246,7 +1264,17 @@ export const adminGetVendorLeaderboard = createServerFn({ method: "GET" })
 
 // ─── Admin: Promote Vendor Tier ────────────────────────────────────────────────
 export const adminPromoteVendorTier = createServerFn({ method: "POST" })
-  .validator((d: unknown) => d as { vendorId: string; tier: "standard" | "premium" })
+  .validator((d: unknown) => {
+    const raw = d as Record<string, unknown>;
+    const tier = sanitizeStr(raw.tier, 20, "tier");
+    if (tier !== "standard" && tier !== "premium") {
+      throw new Error('tier must be "standard" or "premium"');
+    }
+    return {
+      vendorId: sanitizeStr(raw.vendorId, 36, "vendorId"),
+      tier: tier as "standard" | "premium",
+    };
+  })
   .handler(async ({ data }) => {
     const userId = await requireAdmin();
     const db = getServerSupabase();

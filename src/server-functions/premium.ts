@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
+import { getAppUrl } from "../lib/constants";
 
 const PREMIUM_PRICE_NGN  = 2000;
 const PREMIUM_PRICE_KOBO = PREMIUM_PRICE_NGN * 100;
@@ -49,7 +50,7 @@ export const createPremiumCheckout = createServerFn({ method: "POST" })
       .eq("id", userId)
       .single();
 
-    const email = profile?.email ?? `${userId}@7evencards.xyz`;
+    const email = profile?.email ?? `${userId}@7evencards.xyz`; // fallback for accounts without email
     const name  = profile?.full_name ?? "7SEVEN User";
 
     const transactionRef = `7SC-PREM-${userId.slice(0, 8)}-${Date.now()}`;
@@ -75,7 +76,7 @@ export const createPremiumCheckout = createServerFn({ method: "POST" })
         email,
         name,
         description: "7SEVEN Premium — Monthly",
-        redirectUrl: `${process.env.VITE_APP_URL ?? "https://7evencards.xyz"}/premium/success`,
+        redirectUrl: `${getAppUrl()}/premium/success`,
       });
 
       return { success: true, demo: false, checkoutUrl: result.checkoutUrl, transactionRef };
