@@ -418,6 +418,45 @@ export default {
       }
     }
 
+    // GET /api/admin/tenants/:tenantId/deliveries — last 25 webhook delivery attempts
+    if (request.method === "GET" && /^\/api\/admin\/tenants\/[^/]+\/deliveries$/.test(url.pathname)) {
+      if (!allow(rlKey("admin_deliveries", ip), 30, 60_000)) {
+        return addSecurityHeaders(tooManyRequests(60));
+      }
+      const auth = await adminAuthFromRawRequest(request);
+      if (auth instanceof Response) return addSecurityHeaders(auth);
+      const tenantId = url.pathname.split("/")[4];
+      try {
+        const { data, error } = await auth.db
+          .from("api_webhook_deliveries")
+          .select(`
+            id, event_type, status, response_code, attempt_number,
+            attempted_at, next_retry_at,
+            api_webhook_endpoints!inner(tenant_id, url)
+          `)
+          .eq("api_webhook_endpoints.tenant_id", tenantId)
+          .order("attempted_at", { ascending: false })
+          .limit(25);
+        if (error) return addSecurityHeaders(jsonErr(error.message, 500));
+        const deliveries = (data ?? []).map((d: Record<string, unknown>) => {
+          const ep = d.api_webhook_endpoints as Record<string, unknown> | null;
+          return {
+            id: d.id,
+            event_type: d.event_type,
+            status: d.status,
+            response_code: d.response_code,
+            attempt_number: d.attempt_number,
+            attempted_at: d.attempted_at,
+            next_retry_at: d.next_retry_at,
+            endpoint_url: ep?.url ?? null,
+          };
+        });
+        return addSecurityHeaders(jsonOk({ deliveries }));
+      } catch (e) {
+        return addSecurityHeaders(jsonErr(String(e), 500));
+      }
+    }
+
     // ── Health check ────────────────────────────────────────────────────────
     if (url.pathname === "/api/health") {
       return addSecurityHeaders(

@@ -95,6 +95,16 @@ function timeAgo(iso: string) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+function timeUntil(iso: string) {
+  const diff = new Date(iso).getTime() - Date.now();
+  if (diff <= 0) return "now";
+  const m = Math.ceil(diff / 60000);
+  if (m < 60) return `${m}m`;
+  const h = Math.ceil(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.ceil(h / 24)}d`;
+}
+
 function formatNgn(n: number) {
   return "₦" + n.toLocaleString();
 }
@@ -442,6 +452,17 @@ function SupportStaffCard() {
 // Admins provision third-party companies that use 7SEVEN's vendor network
 // and support staff as infrastructure (API key-based, no UI for TPOs).
 
+type WebhookDelivery = {
+  id: string;
+  event_type: string;
+  status: "pending" | "delivered" | "failed" | "retrying";
+  response_code: number | null;
+  attempt_number: number;
+  attempted_at: string | null;
+  next_retry_at: string | null;
+  endpoint_url: string | null;
+};
+
 type ApiTenant = {
   id: string;
   name: string;
@@ -479,6 +500,9 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
   const [editNotes, setEditNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [deliveries, setDeliveries] = useState<Record<string, WebhookDelivery[]>>({});
+  const [deliveriesLoading, setDeliveriesLoading] = useState<string | null>(null);
+  const [showDeliveriesId, setShowDeliveriesId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -564,6 +588,29 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
       setTimeout(() => setCopied(false), 2000);
     });
   }, [revealedKey]);
+
+  const loadDeliveries = useCallback(async (tenantId: string) => {
+    setDeliveriesLoading(tenantId);
+    try {
+      const r = await fetch(`/api/admin/tenants/${tenantId}/deliveries`);
+      if (!r.ok) throw new Error(await r.text());
+      const j = await r.json() as { deliveries: WebhookDelivery[] };
+      setDeliveries(prev => ({ ...prev, [tenantId]: j.deliveries }));
+    } catch (e) {
+      console.error("[ApiTenantsTab] loadDeliveries failed:", e);
+    } finally {
+      setDeliveriesLoading(null);
+    }
+  }, []);
+
+  const toggleDeliveries = useCallback((tenantId: string) => {
+    if (showDeliveriesId === tenantId) {
+      setShowDeliveriesId(null);
+    } else {
+      setShowDeliveriesId(tenantId);
+      if (!deliveries[tenantId]) loadDeliveries(tenantId);
+    }
+  }, [showDeliveriesId, deliveries, loadDeliveries]);
 
   const openEdit = useCallback((tenant: ApiTenant) => {
     setEditPlan(tenant.plan);
@@ -909,6 +956,118 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
                   <p className="text-[10px] font-mono text-muted-foreground">
                     Auth: <span className="text-foreground">Authorization: Bearer {activeKey?.key_prefix ?? "sk_live_"}…</span>
                   </p>
+                </div>
+
+                {/* Webhook Delivery Dashboard */}
+                <div className="border border-border/40 rounded-2xl overflow-hidden">
+                  <button
+                    className="w-full flex items-center justify-between px-3 py-2.5 text-left"
+                    onClick={() => toggleDeliveries(tenant.id)}
+                  >
+                    <span className="flex items-center gap-1.5 text-[11px] font-bold">
+                      <ExternalLink className="size-3.5 text-muted-foreground" />
+                      Webhook Deliveries
+                      {deliveries[tenant.id] && (
+                        <span className="ml-1 px-1.5 py-0.5 rounded-full bg-secondary text-[10px] font-bold text-muted-foreground">
+                          {deliveries[tenant.id].length}
+                        </span>
+                      )}
+                    </span>
+                    {deliveriesLoading === tenant.id
+                      ? <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+                      : <ChevronRight className={`size-3.5 text-muted-foreground transition-transform ${showDeliveriesId === tenant.id ? "rotate-90" : ""}`} />
+                    }
+                  </button>
+
+                  {showDeliveriesId === tenant.id && (
+                    <div className="border-t border-border/40">
+                      {deliveriesLoading === tenant.id && (
+                        <div className="flex items-center justify-center py-6">
+                          <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                        </div>
+                      )}
+
+                      {!deliveriesLoading && deliveries[tenant.id]?.length === 0 && (
+                        <div className="flex flex-col items-center gap-1.5 py-6 text-center">
+                          <ExternalLink className="size-5 text-muted-foreground/40" />
+                          <p className="text-[11px] text-muted-foreground">No webhook deliveries yet</p>
+                          <p className="text-[10px] text-muted-foreground/60">Events appear here once the tenant registers an endpoint and submits trades</p>
+                        </div>
+                      )}
+
+                      {!deliveriesLoading && (deliveries[tenant.id] ?? []).map((d, i) => {
+                        const dlvColor =
+                          d.status === "delivered" ? "text-cyan bg-cyan/10" :
+                          d.status === "retrying"  ? "text-gold bg-gold/10" :
+                          d.status === "failed"    ? "text-red-400 bg-red-500/10" :
+                          "text-muted-foreground bg-secondary";
+
+                        const codeColor =
+                          d.response_code && d.response_code < 300 ? "text-cyan" :
+                          d.response_code && d.response_code < 500 ? "text-gold" :
+                          "text-red-400";
+
+                        return (
+                          <div key={d.id}
+                            className={`flex items-start gap-3 px-3 py-2.5 text-xs ${i > 0 ? "border-t border-border/30" : ""}`}
+                          >
+                            {/* Status dot */}
+                            <div className={`mt-0.5 size-1.5 rounded-full flex-shrink-0 ${
+                              d.status === "delivered" ? "bg-cyan" :
+                              d.status === "retrying"  ? "bg-gold" :
+                              d.status === "failed"    ? "bg-red-400" : "bg-muted-foreground"
+                            }`} />
+
+                            <div className="flex-1 min-w-0 space-y-0.5">
+                              {/* Event type + status badge */}
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-mono font-bold text-[11px]">{d.event_type}</span>
+                                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${dlvColor}`}>
+                                  {d.status}
+                                </span>
+                                {d.response_code && (
+                                  <span className={`text-[10px] font-mono font-bold ${codeColor}`}>
+                                    HTTP {d.response_code}
+                                  </span>
+                                )}
+                                {d.attempt_number > 1 && (
+                                  <span className="text-[10px] text-muted-foreground">
+                                    attempt {d.attempt_number}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Endpoint URL */}
+                              {d.endpoint_url && (
+                                <p className="text-[10px] font-mono text-muted-foreground truncate">
+                                  {d.endpoint_url}
+                                </p>
+                              )}
+
+                              {/* Time + next retry */}
+                              <div className="flex items-center gap-3 text-[10px] text-muted-foreground/70">
+                                {d.attempted_at && <span>{timeAgo(d.attempted_at)}</span>}
+                                {d.status === "retrying" && d.next_retry_at && (
+                                  <span className="text-gold/80">
+                                    retry in {timeUntil(d.next_retry_at)}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Refresh single tenant's deliveries */}
+                            {i === 0 && (
+                              <button onClick={e => { e.stopPropagation(); loadDeliveries(tenant.id); }}
+                                className="flex-shrink-0 p-1 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                                title="Refresh deliveries">
+                                <RotateCcw className="size-3" />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
