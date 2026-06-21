@@ -19,8 +19,7 @@ import {
 import {
   getSupportMessages,
   sendSupportMessage,
-  getSupportThread,
-  syncFreeScoutReplies,
+  getSupportTicket,
 } from "../server-functions/support";
 
 type Message = {
@@ -33,7 +32,7 @@ type Message = {
 };
 
 type Thread = {
-  conversation_id: number;
+  id: string;
   category: string | null;
   created_at: string;
 } | null;
@@ -322,9 +321,7 @@ export function SupportScreen({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
   const [agentTyping, setAgentTyping] = useState(false);
-  const [lastSync, setLastSync] = useState<Date | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -336,7 +333,7 @@ export function SupportScreen({
     try {
       const [msgs, th] = await Promise.all([
         getSupportMessages({ data: { userId, limit: 80 } }) as Promise<Message[]>,
-        getSupportThread({ data: {} }),
+        getSupportTicket({ data: {} }),
       ]);
       setThread(th as Thread);
       if (msgs.length > 0) {
@@ -351,29 +348,22 @@ export function SupportScreen({
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Poll FreeScout replies every 30s when in chat view
-  const syncReplies = useCallback(async () => {
-    if (syncing) return;
-    setSyncing(true);
+  // Poll for new agent replies every 20s when in chat view
+  const refreshMessages = useCallback(async () => {
     try {
-      const { synced } = await syncFreeScoutReplies({ data: {} }) as { synced: number };
-      if (synced > 0) {
-        const fresh = await getSupportMessages({ data: { userId, limit: 80 } }) as Message[];
+      const fresh = await getSupportMessages({ data: { userId, limit: 80 } }) as Message[];
+      if (fresh.length > 0) {
         setMessages(fresh);
         scrollToBottom();
       }
-      setLastSync(new Date());
-    } catch { /* ignore */ } finally {
-      setSyncing(false);
-    }
-  }, [userId, syncing, scrollToBottom]);
+    } catch { /* ignore */ }
+  }, [userId, scrollToBottom]);
 
   useEffect(() => {
     if (view !== "chat") return;
-    syncReplies();
-    const id = setInterval(syncReplies, 30_000);
+    const id = setInterval(refreshMessages, 20_000);
     return () => clearInterval(id);
-  }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [view, refreshMessages]);
 
   const handleCategorySelect = (cat: typeof CATEGORIES[0]) => {
     setSelectedCategory(cat);
@@ -412,7 +402,7 @@ export function SupportScreen({
 
       const [fresh, th] = await Promise.all([
         getSupportMessages({ data: { userId, limit: 80 } }) as Promise<Message[]>,
-        getSupportThread({ data: {} }),
+        getSupportTicket({ data: {} }),
       ]);
       setMessages(fresh.length > 0 ? fresh : [optimistic]);
       setThread(th as Thread);
@@ -469,10 +459,10 @@ export function SupportScreen({
             )}
           </div>
           <div className="flex items-center gap-2">
-            {thread?.conversation_id ? (
+            {thread?.id ? (
               <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
                 <Hash className="size-2.5" />
-                {thread.conversation_id}
+                {thread.id.slice(0, 8).toUpperCase()}
               </span>
             ) : (
               <>
@@ -484,12 +474,11 @@ export function SupportScreen({
             )}
             {view === "chat" && (
               <button
-                onClick={syncReplies}
-                disabled={syncing}
+                onClick={refreshMessages}
                 className="ml-auto text-[10px] text-cyan flex items-center gap-1 shrink-0"
               >
-                <RefreshCw className={`size-2.5 ${syncing ? "animate-spin" : ""}`} />
-                {lastSync ? `${new Date(lastSync).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` : "Sync"}
+                <RefreshCw className="size-2.5" />
+                Refresh
               </button>
             )}
           </div>

@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
+import { requireAdmin } from "../lib/auth-server";
 import { getCryptoRates, COMPANY_SPREAD } from "../lib/busha";
 
 // ─── Get gift card exchange rates ─────────────────────────────────────────────
@@ -14,7 +15,6 @@ export const getExchangeRates = createServerFn({ method: "GET" }).handler(async 
     if (error) throw error;
     return data ?? [];
   } catch {
-    // Return hardcoded fallback if DB not configured
     return [
       { brand: "Apple",       region: "USA", rate_per_dollar: 1485, trend: "+2.1%", updated_at: new Date().toISOString() },
       { brand: "Amazon",      region: "USA", rate_per_dollar: 1420, trend: "+1.5%", updated_at: new Date().toISOString() },
@@ -28,8 +28,13 @@ export const getExchangeRates = createServerFn({ method: "GET" }).handler(async 
   }
 });
 
-// ─── Refresh rates from Reloadly (call periodically / on-demand) ──────────────
+// ─── Refresh rates from Reloadly — P0-4 fix: now requires admin auth ──────────
+// Previously unprotected — any caller could trigger a Reloadly products API call
+// and upsert exchange_rates. Now gated behind requireAdmin() like all other
+// rate-management functions.
 export const refreshExchangeRates = createServerFn({ method: "POST" }).handler(async () => {
+  await requireAdmin();
+
   try {
     const { getGiftCardProducts } = await import("../lib/reloadly");
     const db = getServerSupabase();
@@ -54,7 +59,6 @@ export const refreshExchangeRates = createServerFn({ method: "POST" }).handler(a
 
       if (!brand || !product.senderUnitPrice) continue;
 
-      // Compute NGN rate from Reloadly pricing
       const ratePerDollar =
         product.recipientCurrencyCode === "NGN" && product.minRecipientDenomination > 0
           ? Math.round(product.minRecipientDenomination / product.senderUnitPrice)
@@ -75,7 +79,6 @@ export const refreshExchangeRates = createServerFn({ method: "POST" }).handler(a
 });
 
 // ─── Get crypto rates (from Busha) with company spread applied ───────────────
-// The 7% margin is silently baked into the price the user sees.
 export const getCryptoExchangeRates = createServerFn({ method: "GET" }).handler(async () => {
   try {
     const raw = await getCryptoRates();

@@ -42,8 +42,10 @@ VITE_APP_URL  = "http://localhost:8787"
 name = "seven-cards"
 
 [env.production.vars]
-SQUADCO_ENV  = "production"
-RELOADLY_ENV = "production"
+SQUADCO_ENV    = "production"
+RELOADLY_ENV   = "production"
+NODE_ENV       = "production"
+IS_DEMO_MODE   = "false"
 # VITE_APP_URL — set this in Cloudflare dashboard after first deploy (your *.workers.dev URL)
 # or add VITE_APP_URL to GitHub Secrets and it is injected at build time
 

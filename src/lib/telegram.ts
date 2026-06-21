@@ -1,29 +1,69 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Telegram Bot API helper — for vendor notifications & broadcast flow
-// Set TELEGRAM_BOT_TOKEN in env to enable.
-// Vendors must /start the bot before messages can be delivered.
+// Telegram Bot API helper — vendor bot + admin bot
+// VENDOR BOT: TELEGRAM_BOT_TOKEN, webhook at /api/webhooks/telegram
+// ADMIN BOT:  ADMIN_TELEGRAM_BOT_TOKEN, webhook at /api/webhooks/telegram-admin
+// All outbound calls use fetchWithTimeout (P1-8 fix).
 // ─────────────────────────────────────────────────────────────────────────────
+
+import { fetchWithTimeout } from "./fetch-with-timeout";
 
 const TELEGRAM_API = "https://api.telegram.org";
 
-function getBotToken() {
+// ── Token helpers ─────────────────────────────────────────────────────────────
+function getVendorBotToken() {
   return process.env.TELEGRAM_BOT_TOKEN ?? "";
+}
+
+function getAdminBotToken() {
+  return process.env.ADMIN_TELEGRAM_BOT_TOKEN ?? "";
 }
 
 export function isTelegramConfigured() {
   return !!process.env.TELEGRAM_BOT_TOKEN;
 }
 
+export function isAdminBotConfigured() {
+  return !!process.env.ADMIN_TELEGRAM_BOT_TOKEN;
+}
+
+// ── Generic send (shared by both bots) ───────────────────────────────────────
+async function sendMessage(
+  token: string,
+  chatId: string | number,
+  text: string,
+  extra: Record<string, unknown> = {},
+): Promise<{ ok: boolean; messageId?: number; error?: string }> {
+  if (!token) return { ok: false, error: "Bot token not set" };
+  try {
+    const res = await fetchWithTimeout(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        ...extra,
+      }),
+    });
+    const data = (await res.json()) as { ok: boolean; result?: { message_id: number }; description?: string };
+    if (!data.ok) return { ok: false, error: data.description };
+    return { ok: true, messageId: data.result?.message_id };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Network error" };
+  }
+}
+
+// ── Vendor bot: send message ──────────────────────────────────────────────────
 export async function sendTelegramMessage(
   chatId: string | number,
   text: string,
-  parseMode: "HTML" | "Markdown" | "MarkdownV2" = "HTML"
+  parseMode: "HTML" | "Markdown" | "MarkdownV2" = "HTML",
 ): Promise<{ ok: boolean; messageId?: number; error?: string }> {
-  const token = getBotToken();
+  const token = getVendorBotToken();
   if (!token) return { ok: false, error: "TELEGRAM_BOT_TOKEN not set" };
-
   try {
-    const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+    const res = await fetchWithTimeout(`${TELEGRAM_API}/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -41,13 +81,73 @@ export async function sendTelegramMessage(
   }
 }
 
-// ── Register this bot's webhook with Telegram ─────────────────────────────────
-// Call once at deploy time (or via admin endpoint).
+// ── Admin bot: send message with optional inline keyboard ─────────────────────
+export async function sendAdminBotMessage(
+  chatId: string | number,
+  text: string,
+  inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>,
+): Promise<{ ok: boolean; messageId?: number; error?: string }> {
+  const token = getAdminBotToken();
+  const extra: Record<string, unknown> = {};
+  if (inlineKeyboard) {
+    extra.reply_markup = { inline_keyboard: inlineKeyboard };
+  }
+  return sendMessage(token, chatId, text, extra);
+}
+
+// ── Admin bot: edit message text ──────────────────────────────────────────────
+export async function editAdminBotMessage(
+  chatId: string | number,
+  messageId: number,
+  text: string,
+  inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>,
+): Promise<{ ok: boolean; error?: string }> {
+  const token = getAdminBotToken();
+  if (!token) return { ok: false, error: "ADMIN_TELEGRAM_BOT_TOKEN not set" };
+  try {
+    const body: Record<string, unknown> = {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    };
+    if (inlineKeyboard) body.reply_markup = { inline_keyboard: inlineKeyboard };
+    const res = await fetchWithTimeout(`${TELEGRAM_API}/bot${token}/editMessageText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await res.json()) as { ok: boolean; description?: string };
+    return { ok: data.ok, error: data.description };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Network error" };
+  }
+}
+
+// ── Admin bot: answer callback query (clears loading spinner) ─────────────────
+export async function answerCallbackQuery(
+  callbackQueryId: string,
+  text?: string,
+  showAlert = false,
+): Promise<void> {
+  const token = getAdminBotToken();
+  if (!token) return;
+  try {
+    await fetchWithTimeout(`${TELEGRAM_API}/bot${token}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ callback_query_id: callbackQueryId, text, show_alert: showAlert }),
+    });
+  } catch { /* non-critical */ }
+}
+
+// ── Register webhook ──────────────────────────────────────────────────────────
 export async function registerTelegramWebhook(webhookUrl: string, secretToken?: string): Promise<boolean> {
-  const token = getBotToken();
+  const token = getVendorBotToken();
   if (!token) return false;
   try {
-    const res = await fetch(`${TELEGRAM_API}/bot${token}/setWebhook`, {
+    const res = await fetchWithTimeout(`${TELEGRAM_API}/bot${token}/setWebhook`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -56,12 +156,47 @@ export async function registerTelegramWebhook(webhookUrl: string, secretToken?: 
         ...(secretToken ? { secret_token: secretToken } : {}),
       }),
     });
-    const data = await res.json() as { ok: boolean };
+    const data = (await res.json()) as { ok: boolean };
     return data.ok;
   } catch { return false; }
 }
 
-// ── Broadcast: "Card available — reply YES to claim" ─────────────────────────
+export async function registerAdminTelegramWebhook(webhookUrl: string, secretToken?: string): Promise<boolean> {
+  const token = getAdminBotToken();
+  if (!token) return false;
+  try {
+    const res = await fetchWithTimeout(`${TELEGRAM_API}/bot${token}/setWebhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: webhookUrl,
+        allowed_updates: ["message", "callback_query"],
+        ...(secretToken ? { secret_token: secretToken } : {}),
+      }),
+    });
+    const data = (await res.json()) as { ok: boolean };
+    return data.ok;
+  } catch { return false; }
+}
+
+// ── Fan-out: send to all linked admin chats ────────────────────────────────────
+// Returns array of {chatId, messageId} for resolving later.
+export async function fanOutToAdmins(
+  adminChatIds: bigint[],
+  text: string,
+  inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>,
+): Promise<Array<{ chatId: bigint; messageId: number }>> {
+  const sent: Array<{ chatId: bigint; messageId: number }> = [];
+  for (const chatId of adminChatIds) {
+    const result = await sendAdminBotMessage(Number(chatId), text, inlineKeyboard);
+    if (result.ok && result.messageId) {
+      sent.push({ chatId, messageId: result.messageId });
+    }
+  }
+  return sent;
+}
+
+// ── Vendor bot: message builders ──────────────────────────────────────────────
 export function buildBroadcastMessage(opts: {
   vendorName: string;
   brand: string;
@@ -87,7 +222,6 @@ export function buildBroadcastMessage(opts: {
   ].join("\n");
 }
 
-// ── Assignment: card code + PIN sent to the winning vendor ───────────────────
 export function buildCardAssignmentMessage(opts: {
   brand: string;
   amountUsd: number;
@@ -116,7 +250,6 @@ export function buildCardAssignmentMessage(opts: {
   ].join("\n");
 }
 
-// ── VAN: one-time payment account sent to vendor after claiming ───────────────
 export function buildVANPaymentMessage(opts: {
   vendorName: string;
   accountNumber: string;
@@ -146,7 +279,6 @@ export function buildVANPaymentMessage(opts: {
   ].filter(Boolean).join("\n");
 }
 
-// ── Already claimed notice sent to late vendors ───────────────────────────────
 export function buildAlreadyClaimedMessage(): string {
   return [
     `⚡ <b>Too Slow!</b>`,
@@ -232,9 +364,7 @@ export async function sendWithdrawalRejectedNotification(opts: {
   amountNgn: number;
   reason?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
-  const reasonLine = opts.reason
-    ? `\n📝 <b>Reason:</b> ${opts.reason}`
-    : "";
+  const reasonLine = opts.reason ? `\n📝 <b>Reason:</b> ${opts.reason}` : "";
   const text = [
     `❌ <b>Withdrawal Rejected — 7SEVEN CARDS</b>`,
     ``,

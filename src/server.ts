@@ -7,6 +7,7 @@ import {
   handleSquadPaymentWebhook,
   handleTelegramWebhook,
 } from "./server-functions/webhooks";
+import { handleAdminTelegramWebhook } from "./server-functions/admin-telegram-webhook";
 import { allow, clientIp, rlKey } from "./lib/rate-limiter";
 
 type ServerEntry = {
@@ -132,12 +133,20 @@ export default {
         return addSecurityHeaders(await handler(request));
       }
 
-      // Telegram webhook — must return 200 fast; processing is async inside handler
+      // Vendor Telegram webhook — must return 200 fast; processing is async inside handler
       if (url.pathname === "/api/webhooks/telegram") {
         if (!allow(rlKey("telegram_webhook", ip), 200, 60_000)) {
           return addSecurityHeaders(tooManyRequests(30));
         }
         return addSecurityHeaders(await handleTelegramWebhook(request));
+      }
+
+      // Admin Telegram bot webhook — inline buttons, link codes, support replies
+      if (url.pathname === "/api/webhooks/telegram-admin") {
+        if (!allow(rlKey("telegram_admin_webhook", ip), 200, 60_000)) {
+          return addSecurityHeaders(tooManyRequests(30));
+        }
+        return addSecurityHeaders(await handleAdminTelegramWebhook(request));
       }
 
       // ── Cron: vendor rate-check (every 6 hours via external scheduler) ──────

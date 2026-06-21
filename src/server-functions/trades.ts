@@ -119,10 +119,13 @@ export const submitCardBatch = createServerFn({ method: "POST" })
         });
 
         if (result.success) {
+          // P0-1 fix: Set pending_review status when Reloadly flags manual review needed.
+          const needsReview = result.requiresManualReview ?? false;
           await db.from("trades").update({
-            status:    "verified",
-            card_code: result.cardCode,
-            card_pin:  card.cardPin ?? null,
+            status:                 needsReview ? "pending_review" : "verified",
+            card_code:              result.cardCode,
+            card_pin:               card.cardPin ?? null,
+            requires_manual_review: needsReview,
           }).eq("id", trade.id);
 
           // Audit log — Pillar 1
@@ -140,8 +143,8 @@ export const submitCardBatch = createServerFn({ method: "POST" })
             },
           }).catch(() => {});
 
-          if (!queued) {
-            // Dispatch to assigned vendor immediately
+          if (!queued && !needsReview) {
+            // P0-1 fix: Only dispatch when verified — never dispatch pending_review trades.
             const dispatchResult = await directDispatchToVendor({
               tradeId:       trade.id,
               vendorId:      vendor.id,
@@ -160,7 +163,7 @@ export const submitCardBatch = createServerFn({ method: "POST" })
           results.push({
             position,
             tradeId:            trade.id,
-            status:             queued ? "queued" : "verified",
+            status:             needsReview ? "verified" : (queued ? "queued" : "verified"),
             assignedVendorName: vendor.business_name,
             assignedVendorId:   vendor.id,
             amountNgn,
@@ -317,11 +320,14 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
       });
 
       if (result.success) {
+        // P0-1 fix: pending_review is a real status — do NOT set status='verified'
+        // when the card requires manual admin review. Admin approves → status='verified'.
+        const needsReview = result.requiresManualReview ?? false;
         await db.from("trades").update({
-          status: "verified",
+          status: needsReview ? "pending_review" : "verified",
           card_code: result.cardCode,
           card_pin: data.cardPin ?? null,
-          requires_manual_review: result.requiresManualReview ?? false,
+          requires_manual_review: needsReview,
           reloadly_transaction_id: result.productId ? String(result.productId) : null,
         }).eq("id", data.tradeId);
 
@@ -352,26 +358,29 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
           console.warn("[AuditLog] card_verified log failed (non-fatal):", e instanceof Error ? e.message : e);
         }
 
-        // Trigger Telegram broadcast to all active vendors (fire-and-forget)
-        try {
-          const { broadcastTradeToVendors } = await import("./vendor-broadcast");
-          const { data: tradeRow } = await db
-            .from("trades")
-            .select("brand, amount_usd, amount_ngn")
-            .eq("id", data.tradeId)
-            .single() as { data: { brand: string; amount_usd: number; amount_ngn: number } | null };
-          if (tradeRow) {
-            broadcastTradeToVendors({
-              tradeId: data.tradeId,
-              brand: tradeRow.brand,
-              amountUsd: Number(tradeRow.amount_usd),
-              amountNgn: Number(tradeRow.amount_ngn),
-            }).catch(e =>
-              console.warn("[Trades] Broadcast failed (non-fatal):", e instanceof Error ? e.message : e)
-            );
+        // P0-1 fix: Only broadcast to vendors when NOT requiring manual review.
+        // Pending-review trades enter the vendor pipeline only after admin approval.
+        if (!needsReview) {
+          try {
+            const { broadcastTradeToVendors } = await import("./vendor-broadcast");
+            const { data: tradeRow } = await db
+              .from("trades")
+              .select("brand, amount_usd, amount_ngn")
+              .eq("id", data.tradeId)
+              .single() as { data: { brand: string; amount_usd: number; amount_ngn: number } | null };
+            if (tradeRow) {
+              broadcastTradeToVendors({
+                tradeId: data.tradeId,
+                brand: tradeRow.brand,
+                amountUsd: Number(tradeRow.amount_usd),
+                amountNgn: Number(tradeRow.amount_ngn),
+              }).catch(e =>
+                console.warn("[Trades] Broadcast failed (non-fatal):", e instanceof Error ? e.message : e)
+              );
+            }
+          } catch (e) {
+            console.warn("[Trades] Broadcast import failed (non-fatal):", e instanceof Error ? e.message : e);
           }
-        } catch (e) {
-          console.warn("[Trades] Broadcast import failed (non-fatal):", e instanceof Error ? e.message : e);
         }
 
         return {
@@ -413,7 +422,7 @@ export const processPayout = createServerFn({ method: "POST" })
     // Fetch trade from DB — verify ownership and status
     const { data: trade, error: tradeErr } = await db
       .from("trades")
-      .select("id, user_id, amount_ngn, status")
+      .select("id, user_id, amount_ngn, status, requires_manual_review")
       .eq("id", data.tradeId)
       .single();
 
@@ -422,6 +431,12 @@ export const processPayout = createServerFn({ method: "POST" })
     }
     if (trade.user_id !== userId) {
       return { success: false, reason: "Access denied." };
+    }
+    // P0-1 fix: Explicitly block payout when trade is pending_review.
+    // The old code relied on status !== "verified" but pending_review trades were
+    // mistakenly set to "verified", so payout could proceed before admin approval.
+    if (trade.status === "pending_review" || trade.requires_manual_review === true) {
+      return { success: false, reason: "Your card is pending manual review by our team. You will be notified once it's approved and your payout can proceed." };
     }
     if (trade.status !== "verified") {
       return { success: false, reason: `Trade is not verified (status: ${trade.status}).` };

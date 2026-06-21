@@ -35,7 +35,7 @@ export const getAdminStats = createServerFn({ method: "GET" })
       db.from("trades").select("*", { count: "exact", head: true }).eq("status", "paid"),
       db.from("trades").select("amount_ngn").eq("status", "paid").gte("settled_at", monthStart.toISOString()),
       db.from("profiles").select("*", { count: "exact", head: true }).eq("kyc_status", "submitted"),
-      db.from("trades").select("*", { count: "exact", head: true }).eq("requires_manual_review", true).eq("status", "verified"),
+      db.from("trades").select("*", { count: "exact", head: true }).eq("status", "pending_review"),
       db.from("trades").select("*", { count: "exact", head: true }).gte("created_at", dayStart.toISOString()),
     ]);
 
@@ -129,11 +129,11 @@ export const getManualReviewQueue = createServerFn({ method: "GET" })
       .from("trades")
       .select(`
         id, brand, region, amount_usd, amount_ngn, card_code,
-        reloadly_transaction_id, status, created_at,
+        reloadly_transaction_id, status, requires_manual_review, created_at,
+        direct_vendor_id, batch_id, batch_position,
         profiles!inner(id, full_name, phone, kyc_status)
       `)
-      .eq("requires_manual_review", true)
-      .eq("status", "verified")
+      .eq("status", "pending_review")
       .order("created_at", { ascending: true })
       .limit(data.limit ?? 50);
 
@@ -142,35 +142,65 @@ export const getManualReviewQueue = createServerFn({ method: "GET" })
   });
 
 // ─── Approve Manual Trade ─────────────────────────────────────────────────────
+// P0-1 fix: race-safe conditional UPDATE — only transitions from 'pending_review'.
+// On success, sets status='verified' + clears requires_manual_review, then
+// fires deferred vendor dispatch so the card enters the normal payout flow.
 export const approveManualTrade = createServerFn({ method: "POST" })
   .validator((d: { tradeId: string }) => d)
   .handler(async ({ data }) => {
     const adminId = await requireAdmin();
     const db = getServerSupabase();
 
-    const { data: trade } = await db
+    // Race-safe: only update if still in pending_review state
+    const { data: updated } = await db
       .from("trades")
-      .select("user_id, amount_ngn")
+      .update({ status: "verified", requires_manual_review: false })
       .eq("id", data.tradeId)
-      .single();
+      .eq("status", "pending_review")       // guard: another admin hasn't already handled it
+      .select("id, user_id, amount_ngn, brand, amount_usd, direct_vendor_id, batch_position, batch_id")
+      .maybeSingle();
 
-    if (!trade) throw new Error("Trade not found");
+    if (!updated) {
+      // Already handled (approved/rejected) by another admin — return gracefully
+      return { success: false, reason: "Already handled by another admin or not in pending_review state." };
+    }
 
-    await db.from("trades").update({ requires_manual_review: false }).eq("id", data.tradeId);
-
+    // Notify user
     await db.from("notifications").insert({
-      user_id: trade.user_id,
+      user_id: updated.user_id,
       title: "Card Verified ✅",
-      message: "Your gift card has been manually verified. Proceed to submit for payout.",
+      message: "Your gift card has been manually verified. Your payout is now being processed.",
       type: "success",
     });
 
     try {
       const { pushNotify } = await import("../lib/onesignal");
-      pushNotify(trade.user_id, "Card Verified ✅", "Your card is verified. Proceed to payout.");
+      pushNotify(updated.user_id, "Card Verified ✅", "Your card is verified. Payout is being processed.");
     } catch { /* non-critical */ }
 
-    await logAdminAction(adminId, "manual_trade_approve", data.tradeId);
+    // Deferred vendor dispatch — fire-and-forget after returning success
+    if (updated.direct_vendor_id) {
+      Promise.resolve().then(async () => {
+        try {
+          const { directDispatchToVendor } = await import("./vendor-broadcast");
+          await directDispatchToVendor({
+            tradeId:       updated.id,
+            vendorId:      updated.direct_vendor_id!,
+            brand:         updated.brand,
+            amountUsd:     Number(updated.amount_usd),
+            amountNgn:     Number(updated.amount_ngn),
+            batchPosition: updated.batch_position ?? 1,
+            batchTotal:    1,
+          });
+        } catch (e) {
+          console.error("[approveManualTrade] Deferred dispatch failed:", e);
+        }
+      });
+    }
+
+    await logAdminAction(adminId, "manual_trade_approve", data.tradeId, {
+      dispatched: !!updated.direct_vendor_id,
+    });
     return { success: true };
   });
 

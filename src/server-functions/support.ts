@@ -1,3 +1,22 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Support Server Functions — Telegram-based
+//
+// FreeScout has been replaced with a Telegram-based support system.
+// Customer support staff / moderators operate entirely from Telegram.
+//
+// Flow:
+//   1. User sends a message in-app → stored in support_messages DB table
+//   2. Message is forwarded to the support Telegram group (SUPPORT_TELEGRAM_CHAT_ID)
+//      with ticket context (category, user tier, masked user ID)
+//   3. Support staff reply in Telegram using the admin bot command:
+//      /reply <ticketId> <message>
+//   4. The admin bot webhook stores the reply in support_messages (sender='agent')
+//   5. The user's app polls and displays the reply
+//
+// Dispute communications: vendors are referred to by their moniker,
+// not real names or contact details. The admin bot enforces this.
+// ─────────────────────────────────────────────────────────────────────────────
+
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
@@ -9,101 +28,41 @@ type Message = {
   body: string;
   read: boolean;
   created_at: string;
-  freescout_thread_id?: number | null;
+  ticket_id?: string | null;
   category?: string | null;
 };
 
-// ─── FreeScout helpers ────────────────────────────────────────────────────────
-function freescoutHeaders() {
-  const key = process.env.FREESCOUT_API_KEY ?? "";
-  return {
-    "X-FreeScout-API-Key": key,
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  };
-}
-
-function isFreescoutConfigured() {
-  return !!(process.env.FREESCOUT_URL && process.env.FREESCOUT_API_KEY);
-}
-
-async function createFreescoutConversation(opts: {
-  email: string;
-  firstName: string;
-  lastName: string;
-  subject: string;
+// ─── Forward message to Telegram support group ────────────────────────────────
+async function forwardToTelegramSupport(opts: {
+  ticketId: string;
+  userId: string;
+  userDisplayName: string;
+  isPremium: boolean;
+  category: string | null;
   body: string;
-  mailboxId: number;
-}): Promise<{ conversationId: number | null; customerId: number | null }> {
-  const base = process.env.FREESCOUT_URL!.replace(/\/$/, "");
-  try {
-    const res = await fetch(`${base}/api/conversations`, {
-      method: "POST",
-      headers: freescoutHeaders(),
-      body: JSON.stringify({
-        type: "email",
-        mailboxId: opts.mailboxId,
-        subject: opts.subject,
-        status: "active",
-        customer: {
-          email: opts.email,
-          firstName: opts.firstName,
-          lastName: opts.lastName || "-",
-        },
-        threads: [{ type: "customer", text: opts.body, status: "active" }],
-      }),
-    });
-    if (!res.ok) return { conversationId: null, customerId: null };
-    const data = (await res.json()) as {
-      id?: number;
-      _embedded?: { customers?: Array<{ id?: number }> };
-    };
-    return {
-      conversationId: data.id ?? null,
-      customerId: data._embedded?.customers?.[0]?.id ?? null,
-    };
-  } catch {
-    return { conversationId: null, customerId: null };
-  }
-}
+}): Promise<void> {
+  const chatId = process.env.SUPPORT_TELEGRAM_CHAT_ID;
+  if (!chatId) return;
 
-async function addFreescoutThread(conversationId: number, body: string, customerId?: number | null) {
-  const base = process.env.FREESCOUT_URL!.replace(/\/$/, "");
-  try {
-    await fetch(`${base}/api/conversations/${conversationId}/threads`, {
-      method: "POST",
-      headers: freescoutHeaders(),
-      body: JSON.stringify({
-        type: "customer",
-        text: body,
-        status: "active",
-        ...(customerId ? { customer: { id: customerId } } : {}),
-      }),
-    });
-  } catch { /* non-critical */ }
-}
+  const { isAdminBotConfigured, sendAdminBotMessage } = await import("../lib/telegram");
+  if (!isAdminBotConfigured()) return;
 
-async function getFreescoutThreads(conversationId: number): Promise<
-  Array<{ id: number; type: string; body?: string; text?: string; createdAt?: string }>
-> {
-  const base = process.env.FREESCOUT_URL!.replace(/\/$/, "");
-  try {
-    const res = await fetch(
-      `${base}/api/conversations/${conversationId}/threads`,
-      { headers: freescoutHeaders() }
-    );
-    if (!res.ok) return [];
-    const data = (await res.json()) as {
-      _embedded?: { threads?: Array<{ id: number; type: string; body?: string; text?: string; createdAt?: string }> };
-    };
-    return data._embedded?.threads ?? [];
-  } catch {
-    return [];
-  }
-}
+  const priorityTag = opts.isPremium ? "⭐ PRO PRIORITY" : "Standard";
+  const categoryLabel = opts.category ? ` · ${opts.category.toUpperCase()}` : "";
+  const userTag = `${opts.userDisplayName} [${opts.userId.slice(0, 8)}]`;
 
-function stripHtml(html: string): string {
-  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const text = [
+    `🎫 <b>New Support Ticket</b> [${priorityTag}${categoryLabel}]`,
+    ``,
+    `<b>User:</b> ${userTag}`,
+    `<b>Ticket:</b> <code>${opts.ticketId}</code>`,
+    ``,
+    opts.body,
+    ``,
+    `<i>Reply via admin bot: /reply ${opts.ticketId} your message here</i>`,
+  ].join("\n");
+
+  await sendAdminBotMessage(chatId, text).catch(() => {});
 }
 
 // ─── Get own conversation history ─────────────────────────────────────────────
@@ -122,7 +81,6 @@ export const getSupportMessages = createServerFn({ method: "GET" })
 
       if (error) throw error;
 
-      // Mark agent messages as read
       await db
         .from("support_messages")
         .update({ read: true })
@@ -136,25 +94,28 @@ export const getSupportMessages = createServerFn({ method: "GET" })
     }
   });
 
-// ─── Get user's FreeScout thread info ─────────────────────────────────────────
-export const getSupportThread = createServerFn({ method: "GET" })
+// ─── Get user's support ticket info ───────────────────────────────────────────
+export const getSupportTicket = createServerFn({ method: "GET" })
   .validator((d: Record<string, never>) => d)
   .handler(async () => {
     try {
       const userId = await requireUser();
       const db = getServerSupabase();
       const { data } = await db
-        .from("support_threads")
-        .select("conversation_id, category, created_at")
+        .from("support_tickets")
+        .select("id, category, status, created_at")
         .eq("user_id", userId)
-        .single();
+        .eq("status", "open")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
       return data ?? null;
     } catch {
       return null;
     }
   });
 
-// ─── Send a user message (+ forward to FreeScout if configured) ───────────────
+// ─── Send support message (Telegram-forwarded) ────────────────────────────────
 export const sendSupportMessage = createServerFn({ method: "POST" })
   .validator((d: { body: string; category?: string }) => d)
   .handler(async ({ data }) => {
@@ -162,7 +123,6 @@ export const sendSupportMessage = createServerFn({ method: "POST" })
       const userId = await requireUser();
       const db = getServerSupabase();
 
-      // Get profile
       const { data: profile } = await db
         .from("profiles")
         .select("full_name, phone, premium")
@@ -171,178 +131,63 @@ export const sendSupportMessage = createServerFn({ method: "POST" })
 
       const isPremium = profile?.premium ?? false;
       const fullName = profile?.full_name ?? "User";
-      const [firstName, ...rest] = fullName.split(" ");
 
-      // Save user message to Supabase
+      // Upsert open support ticket
+      let ticketId: string | null = null;
+      const { data: existingTicket } = await db
+        .from("support_tickets")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("status", "open")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existingTicket) {
+        ticketId = existingTicket.id;
+      } else {
+        const { data: newTicket } = await db
+          .from("support_tickets")
+          .insert({ user_id: userId, category: data.category ?? null, status: "open" })
+          .select("id")
+          .single();
+        ticketId = newTicket?.id ?? null;
+      }
+
+      // Save message to DB
       await db.from("support_messages").insert({
         user_id: userId,
         sender: "user",
         body: data.body,
         category: data.category ?? null,
+        ...(ticketId ? { ticket_id: ticketId } : {}),
       });
 
-      if (isFreescoutConfigured()) {
-        // ── FreeScout mode ──────────────────────────────────────────────────
-        const mailboxId = parseInt(process.env.FREESCOUT_MAILBOX_ID ?? "1");
-
-        // Check for existing conversation
-        const { data: thread } = await db
-          .from("support_threads")
-          .select("conversation_id, customer_id")
-          .eq("user_id", userId)
-          .single();
-
-        let conversationId = thread?.conversation_id ?? null;
-        let customerId = thread?.customer_id ?? null;
-
-        if (!conversationId) {
-          // Get user's email from auth
-          const { data: authData } = await db.auth.admin.getUserById(userId);
-          const email = authData?.user?.email ?? `${userId.slice(0, 8)}@7sevencards.app`;
-
-          const categoryLabel = data.category ? `[${data.category}] ` : "";
-          const subject = `${categoryLabel}${fullName} — 7SEVEN Support`;
-
-          const result = await createFreescoutConversation({
-            email,
-            firstName,
-            lastName: rest.join(" "),
-            subject,
-            body: data.body,
-            mailboxId,
-          });
-
-          conversationId = result.conversationId;
-          customerId = result.customerId;
-
-          if (conversationId) {
-            await db.from("support_threads").upsert({
-              user_id: userId,
-              conversation_id: conversationId,
-              customer_id: customerId,
-              category: data.category ?? null,
-            });
-          }
-        } else {
-          // Add to existing conversation
-          await addFreescoutThread(conversationId, data.body, customerId);
-        }
-
-        // Immediate acknowledgment
-        const ticketRef = conversationId ? ` (Ticket #${conversationId})` : "";
-        await db.from("support_messages").insert({
-          user_id: userId,
-          sender: "agent",
-          body: isPremium
-            ? `✅ Message received${ticketRef}. As a PRO member you have priority status — a human agent will reply within 1 hour.`
-            : `✅ Message received${ticketRef}. Our support team will reply within 24 hours. Upgrade to PRO for 1-hour responses.`,
-        });
-      } else {
-        // ── Fallback: smart auto-reply bot ──────────────────────────────────
-        const lower = data.body.toLowerCase();
-        let reply = "";
-
-        if (lower.includes("payout") || lower.includes("payment") || lower.includes("paid")) {
-          reply =
-            "Your payout is processed via Squadco and typically arrives within 5–10 minutes. If it's been over 30 minutes, share your trade ID and we'll investigate immediately.";
-        } else if (lower.includes("card") && (lower.includes("reject") || lower.includes("invalid") || lower.includes("fail"))) {
-          reply =
-            "Sorry to hear your card was rejected. This usually means the card has already been redeemed or the code was entered incorrectly. Double-check the code and PIN, then try again.";
-        } else if (lower.includes("kyc") || lower.includes("verify") || lower.includes("bvn") || lower.includes("nin")) {
-          reply =
-            "KYC verification is handled by Dojah and usually completes in seconds. If yours is stuck, ensure your BVN/NIN matches your registered name exactly.";
-        } else if (lower.includes("rate") || lower.includes("exchange")) {
-          reply =
-            "Our rates update in real time from the market. PRO members get an additional +2% on all rates. Check the current rates on the Home screen.";
-        } else if (lower.includes("account") || lower.includes("bank")) {
-          reply =
-            "You can add and manage bank accounts under Profile → Payout Accounts. We support all Nigerian banks via Squadco.";
-        } else if (lower.includes("premium") || lower.includes("upgrade")) {
-          reply =
-            "7SEVEN PRO costs ₦2,000/month — higher limits, +2% better rates, priority payouts, and 1-hour support. Upgrade from Profile → Get Premium.";
-        } else if (lower.includes("referral") || lower.includes("bonus")) {
-          reply =
-            "You earn 5% commission on every trade your referrals complete. Check Profile → Referral Program for your unique code and earnings.";
-        } else if (/^(hi|hello|hey|good\s+\w+)/i.test(data.body)) {
-          reply = isPremium
-            ? "Hello! 👋 Welcome back, PRO member. You have priority support — what can I help you with today?"
-            : "Hello! 👋 Welcome to 7SEVEN support. How can I help you today?";
-        } else {
-          reply = isPremium
-            ? "Thanks for reaching out. As a PRO member, your case is flagged as priority and a human agent will respond within 1 hour."
-            : "Thanks for reaching out! Our team will review your message and respond within 24 hours. For faster support, upgrade to PRO under Profile → Get Premium.";
-        }
-
-        await db.from("support_messages").insert({
-          user_id: userId,
-          sender: "agent",
-          body: reply,
-        });
+      // Forward to Telegram support group (fire-and-forget)
+      if (ticketId) {
+        forwardToTelegramSupport({
+          ticketId,
+          userId,
+          userDisplayName: fullName,
+          isPremium,
+          category: data.category ?? null,
+          body: data.body,
+        }).catch(() => {});
       }
 
-      return { success: true };
+      // Immediate acknowledgment reply
+      await db.from("support_messages").insert({
+        user_id: userId,
+        sender: "agent",
+        body: isPremium
+          ? `✅ Message received. As a PRO member you have priority status — our support team will reply within 1 hour via this chat.`
+          : `✅ Message received. Our support team will reply within 24 hours. Upgrade to PRO for 1-hour responses.`,
+        ...(ticketId ? { ticket_id: ticketId } : {}),
+      });
+
+      return { success: true, ticketId };
     } catch {
-      return { success: false };
-    }
-  });
-
-// ─── Sync FreeScout agent replies into Supabase ───────────────────────────────
-export const syncFreeScoutReplies = createServerFn({ method: "GET" })
-  .validator((d: Record<string, never>) => d)
-  .handler(async () => {
-    if (!isFreescoutConfigured()) return { synced: 0 };
-    try {
-      const userId = await requireUser();
-      const db = getServerSupabase();
-
-      const { data: thread } = await db
-        .from("support_threads")
-        .select("conversation_id")
-        .eq("user_id", userId)
-        .single();
-
-      if (!thread?.conversation_id) return { synced: 0 };
-
-      const threads = await getFreescoutThreads(thread.conversation_id);
-
-      // Get already-synced FreeScout thread IDs
-      const { data: existing } = await db
-        .from("support_messages")
-        .select("freescout_thread_id")
-        .eq("user_id", userId)
-        .not("freescout_thread_id", "is", null);
-
-      const syncedIds = new Set((existing ?? []).map((m) => m.freescout_thread_id));
-
-      let synced = 0;
-      for (const t of threads) {
-        if (t.type !== "lineitem" && t.type === "agent" && t.id && !syncedIds.has(t.id)) {
-          const body = stripHtml(t.body ?? t.text ?? "").trim();
-          if (!body) continue;
-          await db.from("support_messages").insert({
-            user_id: userId,
-            sender: "agent",
-            body,
-            freescout_thread_id: t.id,
-            created_at: t.createdAt ?? new Date().toISOString(),
-          });
-          synced++;
-        }
-      }
-
-      if (synced > 0) {
-        await db
-          .from("support_messages")
-          .update({ read: false })
-          .eq("user_id", userId)
-          .eq("sender", "agent")
-          .not("freescout_thread_id", "is", null)
-          .eq("read", true);
-      }
-
-      return { synced };
-    } catch {
-      return { synced: 0 };
+      return { success: false, ticketId: null };
     }
   });
 
@@ -363,4 +208,76 @@ export const getUnreadSupportCount = createServerFn({ method: "GET" })
     } catch {
       return { count: 0 };
     }
+  });
+
+// ─── Admin: reply to support ticket (called by admin-telegram-webhook.ts) ─────
+// This is the internal function — admin Telegram bot calls this directly
+// after parsing /reply <ticketId> <message> from the support group.
+export async function adminReplyToTicket(ticketId: string, replyBody: string, adminId: string): Promise<boolean> {
+  try {
+    const { createClient } = await import("@supabase/supabase-js");
+    const db = createClient(
+      process.env.VITE_SUPABASE_URL ?? "",
+      process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    );
+
+    const { data: ticket } = await db
+      .from("support_tickets")
+      .select("id, user_id")
+      .eq("id", ticketId)
+      .single();
+
+    if (!ticket) return false;
+
+    await db.from("support_messages").insert({
+      user_id: ticket.user_id,
+      sender: "agent",
+      body: replyBody,
+      ticket_id: ticketId,
+    });
+
+    await db.from("admin_audit_log").insert({
+      admin_id: adminId,
+      action: "support_reply",
+      target_id: ticketId,
+      meta: { via: "telegram", reply_length: replyBody.length },
+    }).catch(() => {});
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ─── Admin: list open support tickets ─────────────────────────────────────────
+export const adminGetSupportTickets = createServerFn({ method: "GET" })
+  .validator((d: { limit?: number }) => d)
+  .handler(async ({ data }) => {
+    const { requireAdmin } = await import("../lib/auth-server");
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    const { data: tickets, error } = await db
+      .from("support_tickets")
+      .select(`
+        id, category, status, created_at,
+        profiles!inner(id, full_name, premium)
+      `)
+      .eq("status", "open")
+      .order("created_at", { ascending: true })
+      .limit(data.limit ?? 50);
+
+    if (error) throw error;
+    return tickets ?? [];
+  });
+
+// Keep legacy export name for any existing imports
+export const getSupportThread = getSupportTicket;
+export const syncFreeScoutReplies = createServerFn({ method: "GET" })
+  .validator((d: Record<string, never>) => d)
+  .handler(async () => {
+    // FreeScout has been replaced with Telegram-based support.
+    // Replies now arrive via the admin bot webhook — no polling needed.
+    return { synced: 0 };
   });

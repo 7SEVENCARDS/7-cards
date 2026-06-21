@@ -350,7 +350,7 @@ export const updateVendorProfile = createServerFn({ method: "POST" })
 export const getMyAssignments = createServerFn({ method: "GET" })
   .validator((d: { status?: string; limit?: number }) => d)
   .handler(async ({ data }) => {
-    const userId = await requireUser();
+    const userId = await requireVendorAuth(); // P0-3: throws 403 if suspended
     const db = getServerSupabase();
 
     const vendor = await getVendorId(db, userId);
@@ -390,7 +390,7 @@ export const getMyAssignments = createServerFn({ method: "GET" })
 export const markAssignmentRedeemed = createServerFn({ method: "POST" })
   .validator((d: { assignmentId: string; notes?: string }) => d)
   .handler(async ({ data }) => {
-    const userId = await requireUser();
+    const userId = await requireVendorAuth(); // P0-3: throws 403 if suspended
     const db = getServerSupabase();
 
     const vendor = await getVendorId(db, userId);
@@ -464,7 +464,7 @@ export const markAssignmentRedeemed = createServerFn({ method: "POST" })
 export const markAssignmentFailed = createServerFn({ method: "POST" })
   .validator((d: { assignmentId: string; reason: string }) => d)
   .handler(async ({ data }) => {
-    const userId = await requireUser();
+    const userId = await requireVendorAuth(); // P0-3: throws 403 if suspended
     const db = getServerSupabase();
 
     const vendor = await getVendorId(db, userId);
@@ -609,7 +609,7 @@ export const markAssignmentFailed = createServerFn({ method: "POST" })
 export const getVendorWallet = createServerFn({ method: "GET" })
   .validator((d: Record<string, never>) => d)
   .handler(async () => {
-    const userId = await requireUser();
+    const userId = await requireVendorAuth(); // P0-3: throws 403 if suspended
     const db = getServerSupabase();
 
     const vendor = await getVendorId(db, userId);
@@ -632,7 +632,7 @@ export const getVendorWallet = createServerFn({ method: "GET" })
 export const getActiveVirtualAccounts = createServerFn({ method: "GET" })
   .validator((d: Record<string, never>) => d)
   .handler(async () => {
-    const userId = await requireUser();
+    const userId = await requireVendorAuth(); // P0-3: throws 403 if suspended
     const db = getServerSupabase();
 
     const vendor = await getVendorId(db, userId);
@@ -654,7 +654,7 @@ export const getActiveVirtualAccounts = createServerFn({ method: "GET" })
 export const provisionVirtualAccount = createServerFn({ method: "POST" })
   .validator((d: { amountNgn: number }) => d)
   .handler(async ({ data }) => {
-    const userId = await requireUser();
+    const userId = await requireVendorAuth(); // P0-3: throws 403 if suspended
     const db = getServerSupabase();
 
     const { data: vendor } = await db
