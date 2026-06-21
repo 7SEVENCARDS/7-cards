@@ -473,6 +473,12 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editPlan, setEditPlan] = useState("free");
+  const [editRpm, setEditRpm] = useState(60);
+  const [editNotes, setEditNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -558,6 +564,38 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
       setTimeout(() => setCopied(false), 2000);
     });
   }, [revealedKey]);
+
+  const openEdit = useCallback((tenant: ApiTenant) => {
+    setEditPlan(tenant.plan);
+    setEditRpm(tenant.rate_limit_rpm);
+    setEditNotes(tenant.notes ?? "");
+    setSaveError("");
+    setEditingId(tenant.id);
+  }, []);
+
+  const handleUpdate = useCallback(async (tenantId: string) => {
+    setSaving(true);
+    setSaveError("");
+    try {
+      const r = await fetch("/api/admin/tenants/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenantId, plan: editPlan, rateLimitRpm: editRpm, notes: editNotes }),
+      });
+      const j = await r.json() as { error?: string };
+      if (!r.ok) throw new Error(j.error ?? "Save failed");
+      setTenants(prev => prev.map(t =>
+        t.id === tenantId
+          ? { ...t, plan: editPlan, rate_limit_rpm: editRpm, notes: editNotes || null }
+          : t
+      ));
+      setEditingId(null);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }, [editPlan, editRpm, editNotes]);
 
   const statusColor = (s: string) =>
     s === "active" ? "text-cyan bg-cyan/10" :
@@ -767,6 +805,100 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
                     </button>
                   )}
                 </div>
+
+                {/* Plan & rate limit edit section */}
+                {editingId === tenant.id ? (
+                  <div className="bg-secondary/40 border border-border/60 rounded-2xl p-3 space-y-3">
+                    <p className="text-[11px] font-bold flex items-center gap-1.5">
+                      <Zap className="size-3 text-gold" />
+                      Edit Plan &amp; Limits
+                    </p>
+
+                    {/* Plan picker */}
+                    <div>
+                      <p className="text-[10px] text-muted-foreground mb-1.5">Plan</p>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {(["free", "pro", "enterprise"] as const).map(p => (
+                          <button key={p} onClick={() => {
+                            setEditPlan(p);
+                            setEditRpm(p === "free" ? 60 : p === "pro" ? 300 : 1500);
+                          }}
+                            className={`py-2 rounded-xl text-[11px] font-bold border transition-colors ${
+                              editPlan === p
+                                ? p === "enterprise"
+                                  ? "bg-purple-500/20 border-purple-400/40 text-purple-300"
+                                  : p === "pro"
+                                    ? "bg-cyan/20 border-cyan/40 text-cyan"
+                                    : "bg-secondary border-border text-foreground"
+                                : "bg-transparent border-border/30 text-muted-foreground"
+                            }`}>
+                            {p === "free" ? "Free" : p === "pro" ? "Pro" : "Enterprise"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Rate limit slider + number */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <p className="text-[10px] text-muted-foreground">Rate limit</p>
+                        <p className="text-[11px] font-bold text-cyan">{editRpm} req/min</p>
+                      </div>
+                      <input type="range"
+                        min={10} max={3000} step={10}
+                        value={editRpm}
+                        onChange={e => setEditRpm(Number(e.target.value))}
+                        className="w-full accent-cyan h-1.5" />
+                      <div className="flex justify-between text-[9px] text-muted-foreground/60 mt-1">
+                        <span>10</span>
+                        <span>Free: 60 · Pro: 300 · Enterprise: 1500</span>
+                        <span>3000</span>
+                      </div>
+                    </div>
+
+                    {/* Custom rate limit override (precise input) */}
+                    <div className="flex items-center gap-2">
+                      <p className="text-[10px] text-muted-foreground flex-shrink-0">Custom exact:</p>
+                      <input type="number"
+                        min={1} max={10000}
+                        value={editRpm}
+                        onChange={e => setEditRpm(Math.max(1, Number(e.target.value)))}
+                        className="flex-1 bg-secondary border border-border/40 rounded-lg px-2 py-1.5 text-xs font-mono focus:outline-none focus:border-cyan/40 text-right" />
+                      <p className="text-[10px] text-muted-foreground flex-shrink-0">req/min</p>
+                    </div>
+
+                    {/* Internal notes */}
+                    <div>
+                      <p className="text-[10px] text-muted-foreground mb-1.5">Internal notes (optional)</p>
+                      <textarea rows={2} value={editNotes}
+                        onChange={e => setEditNotes(e.target.value)}
+                        placeholder="e.g. Agreed 6-month lock-in, renews Jan 2027"
+                        className="w-full bg-secondary border border-border/40 rounded-xl px-3 py-2 text-xs placeholder:text-muted-foreground/50 focus:outline-none focus:border-cyan/40 resize-none" />
+                    </div>
+
+                    {saveError && <p className="text-[11px] text-red-400">{saveError}</p>}
+
+                    <div className="flex gap-2">
+                      <button onClick={() => handleUpdate(tenant.id)} disabled={saving}
+                        className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-cyan/10 border border-cyan/20 text-[11px] font-bold text-cyan disabled:opacity-50">
+                        {saving ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                        {saving ? "Saving…" : "Save Changes"}
+                      </button>
+                      <button onClick={() => { setEditingId(null); setSaveError(""); }}
+                        disabled={saving}
+                        className="px-4 py-2.5 rounded-xl bg-secondary text-[11px] font-bold disabled:opacity-50">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => openEdit(tenant)}
+                    disabled={tenant.status === "terminated"}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-border/60 text-[11px] font-bold text-muted-foreground hover:border-cyan/30 hover:text-cyan transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                    <Zap className="size-3.5" />
+                    Edit Plan &amp; Rate Limit
+                  </button>
+                )}
 
                 {/* API info quick-reference */}
                 <div className="bg-secondary/40 rounded-xl p-3 space-y-1">
