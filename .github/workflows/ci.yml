@@ -46,8 +46,11 @@ jobs:
           BUSHA_API_KEY: ${{ secrets.BUSHA_API_KEY }}
           ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
           RELOADLY_CLIENT_ID: ${{ secrets.RELOADLY_CLIENT_ID }}
+          RELOADLY_CLIENT_SECRET: ${{ secrets.RELOADLY_CLIENT_SECRET }}
           SQUADCO_SECRET_KEY: ${{ secrets.SQUADCO_SECRET_KEY }}
           APP_SECRET: ${{ secrets.APP_SECRET }}
+          VITE_APP_URL: https://7evencards.xyz
+          APP_URL: https://7evencards.xyz
 
       - name: Test
         run: bun run test
