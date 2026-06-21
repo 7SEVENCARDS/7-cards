@@ -87,51 +87,10 @@ jobs:
           ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
 
       - name: Deploy to Cloudflare Workers
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy --env production
-          secrets: |
-            SUPABASE_SERVICE_ROLE_KEY
-            VITE_SUPABASE_URL
-            VITE_SUPABASE_ANON_KEY
-            SQUADCO_SECRET_KEY
-            BUSHA_API_KEY
-            ONESIGNAL_APP_ID
-            ONESIGNAL_REST_API_KEY
-            ONESIGNAL_ANDROID_CHANNEL_ID
-            RELOADLY_CLIENT_ID
-            RELOADLY_CLIENT_SECRET
-            ADMIN_TELEGRAM_BOT_TOKEN
-            ADMIN_TELEGRAM_BOT_USERNAME
-            ADMIN_TELEGRAM_CHAT_ID
-            ADMIN_TELEGRAM_WEBHOOK_SECRET
-            TELEGRAM_BOT_TOKEN
-            TELEGRAM_WEBHOOK_SECRET
-            SUPPORT_EMAIL
-            SUPPORT_TELEGRAM_CHAT_ID
-            SUPPORT_WHATSAPP
+        run: pnpm exec wrangler deploy --env production
         env:
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          SQUADCO_SECRET_KEY: ${{ secrets.SQUADCO_SECRET_KEY }}
-          BUSHA_API_KEY: ${{ secrets.BUSHA_API_KEY }}
-          ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
-          ONESIGNAL_REST_API_KEY: ${{ secrets.ONESIGNAL_REST_API_KEY }}
-          ONESIGNAL_ANDROID_CHANNEL_ID: ${{ secrets.ONESIGNAL_ANDROID_CHANNEL_ID }}
-          RELOADLY_CLIENT_ID: ${{ secrets.RELOADLY_CLIENT_ID }}
-          RELOADLY_CLIENT_SECRET: ${{ secrets.RELOADLY_CLIENT_SECRET }}
-          ADMIN_TELEGRAM_BOT_TOKEN: ${{ secrets.ADMIN_TELEGRAM_BOT_TOKEN }}
-          ADMIN_TELEGRAM_BOT_USERNAME: ${{ secrets.ADMIN_TELEGRAM_BOT_USERNAME }}
-          ADMIN_TELEGRAM_CHAT_ID: ${{ secrets.ADMIN_TELEGRAM_CHAT_ID }}
-          ADMIN_TELEGRAM_WEBHOOK_SECRET: ${{ secrets.ADMIN_TELEGRAM_WEBHOOK_SECRET }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
-          SUPPORT_EMAIL: ${{ secrets.SUPPORT_EMAIL }}
-          SUPPORT_TELEGRAM_CHAT_ID: ${{ secrets.SUPPORT_TELEGRAM_CHAT_ID }}
-          SUPPORT_WHATSAPP: ${{ secrets.SUPPORT_WHATSAPP }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Register Telegram Webhooks
         run: |
@@ -158,12 +117,11 @@ jobs:
         working-directory: artifacts/api-server
 
       - name: Deploy API Worker to Cloudflare (api.7evencards.xyz)
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: artifacts/api-server
-          command: deploy --env production
+        run: pnpm exec wrangler deploy --env production
+        working-directory: artifacts/api-server
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Post-deploy health check
         run: |
