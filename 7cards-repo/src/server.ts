@@ -10,6 +10,71 @@ import {
 import { handleAdminTelegramWebhook } from "./server-functions/admin-telegram-webhook";
 import { registerAdminTelegramWebhook } from "./server-functions/admin-telegram";
 import { allow, clientIp, rlKey } from "./lib/rate-limiter";
+import { createClient } from "@supabase/supabase-js";
+
+// ── Admin auth helper (for raw CF Worker routes, not TanStack server fns) ─────
+// Extracts Supabase JWT from cookie, verifies it, and checks admin role.
+// Returns { adminId } on success or a Response on failure (caller must return it).
+async function adminAuthFromRawRequest(
+  request: Request,
+): Promise<{ adminId: string; db: ReturnType<typeof createClient> } | Response> {
+  const cookieHeader = request.headers.get("cookie") ?? "";
+  const tokenMatch = cookieHeader.match(/sb-[^-]+-auth-token=([^;]+)/);
+
+  const fail = (msg: string, status: number) =>
+    new Response(JSON.stringify({ error: msg }), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  if (!tokenMatch) return fail("Authentication required", 401);
+
+  let accessToken: string | null = null;
+  try {
+    const raw = decodeURIComponent(tokenMatch[1]);
+    const parsed = JSON.parse(raw);
+    accessToken = Array.isArray(parsed)
+      ? (parsed[0]?.access_token ?? null)
+      : (parsed?.access_token ?? null);
+  } catch {
+    return fail("Invalid session cookie", 401);
+  }
+
+  if (!accessToken) return fail("Authentication required", 401);
+
+  const supaUrl = process.env.VITE_SUPABASE_URL ?? "";
+  const supaKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+  const db = createClient(supaUrl, supaKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  const { data: { user }, error } = await db.auth.getUser(accessToken);
+  if (error || !user) return fail("Invalid or expired session", 401);
+
+  const { data: profile } = await db
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+
+  if (profile?.role !== "admin") return fail("Admin access required", 403);
+
+  return { adminId: user.id, db };
+}
+
+function jsonOk(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function jsonErr(msg: string, status = 400): Response {
+  return new Response(JSON.stringify({ error: msg }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -150,6 +215,134 @@ export default {
         return addSecurityHeaders(await handleAdminTelegramWebhook(request));
       }
 
+      // ── Admin: API tenant management ────────────────────────────────────────
+      // POST /api/admin/provision-tenant
+      if (url.pathname === "/api/admin/provision-tenant") {
+        if (!allow(rlKey("admin_provision_tenant", ip), 5, 60_000)) {
+          return addSecurityHeaders(tooManyRequests(60));
+        }
+        const auth = await adminAuthFromRawRequest(request);
+        if (auth instanceof Response) return addSecurityHeaders(auth);
+        try {
+          const body = await request.json() as { name?: string; contactEmail?: string };
+          if (!body.name?.trim() || !body.contactEmail?.trim()) {
+            return addSecurityHeaders(jsonErr("name and contactEmail are required"));
+          }
+          const { data, error } = await auth.db.rpc("provision_api_tenant", {
+            p_name: body.name.trim(),
+            p_contact_email: body.contactEmail.trim(),
+            p_created_by: auth.adminId,
+          });
+          if (error) {
+            const msg = error.message?.includes("unique") || error.code === "23505"
+              ? `A tenant with email ${body.contactEmail} already exists`
+              : error.message?.includes("forbidden") ? "Admin access required"
+              : error.message ?? "Provisioning failed";
+            return addSecurityHeaders(jsonErr(msg, 422));
+          }
+          // Audit log (non-blocking)
+          auth.db.from("admin_audit_log").insert({
+            admin_id: auth.adminId,
+            action: "api_tenant_provisioned",
+            target_id: (data as { tenant_id: string }).tenant_id,
+            meta: { name: body.name, contact_email: body.contactEmail },
+          }).then(() => {}).catch(() => {});
+          return addSecurityHeaders(jsonOk(data, 201));
+        } catch (e) {
+          return addSecurityHeaders(jsonErr(String(e), 500));
+        }
+      }
+
+      // POST /api/admin/tenants/status
+      if (url.pathname === "/api/admin/tenants/status") {
+        if (!allow(rlKey("admin_tenant_status", ip), 20, 60_000)) {
+          return addSecurityHeaders(tooManyRequests(60));
+        }
+        const auth = await adminAuthFromRawRequest(request);
+        if (auth instanceof Response) return addSecurityHeaders(auth);
+        try {
+          const body = await request.json() as { tenantId?: string; status?: string };
+          if (!body.tenantId || !body.status) {
+            return addSecurityHeaders(jsonErr("tenantId and status required"));
+          }
+          const { error } = await auth.db.rpc("set_tenant_status", {
+            p_tenant_id: body.tenantId,
+            p_status: body.status,
+            p_admin_id: auth.adminId,
+          });
+          if (error) return addSecurityHeaders(jsonErr(error.message, 422));
+          auth.db.from("admin_audit_log").insert({
+            admin_id: auth.adminId,
+            action: `api_tenant_status_${body.status}`,
+            target_id: body.tenantId,
+          }).then(() => {}).catch(() => {});
+          return addSecurityHeaders(jsonOk({ tenantId: body.tenantId, status: body.status }));
+        } catch (e) {
+          return addSecurityHeaders(jsonErr(String(e), 500));
+        }
+      }
+
+      // POST /api/admin/tenants/rotate-key
+      if (url.pathname === "/api/admin/tenants/rotate-key") {
+        if (!allow(rlKey("admin_rotate_key", ip), 10, 60_000)) {
+          return addSecurityHeaders(tooManyRequests(60));
+        }
+        const auth = await adminAuthFromRawRequest(request);
+        if (auth instanceof Response) return addSecurityHeaders(auth);
+        try {
+          const body = await request.json() as { tenantId?: string; keyId?: string };
+          if (!body.tenantId || !body.keyId) {
+            return addSecurityHeaders(jsonErr("tenantId and keyId required"));
+          }
+          const { data, error } = await auth.db.rpc("rotate_api_key", {
+            p_tenant_id: body.tenantId,
+            p_key_id: body.keyId,
+            p_admin_id: auth.adminId,
+          });
+          if (error) return addSecurityHeaders(jsonErr(error.message, 422));
+          auth.db.from("admin_audit_log").insert({
+            admin_id: auth.adminId,
+            action: "api_key_rotated",
+            target_id: body.tenantId,
+            meta: { old_key_id: body.keyId },
+          }).then(() => {}).catch(() => {});
+          return addSecurityHeaders(jsonOk(data));
+        } catch (e) {
+          return addSecurityHeaders(jsonErr(String(e), 500));
+        }
+      }
+
+      // POST /api/admin/tenants/update
+      if (url.pathname === "/api/admin/tenants/update") {
+        if (!allow(rlKey("admin_tenant_update", ip), 20, 60_000)) {
+          return addSecurityHeaders(tooManyRequests(60));
+        }
+        const auth = await adminAuthFromRawRequest(request);
+        if (auth instanceof Response) return addSecurityHeaders(auth);
+        try {
+          const body = await request.json() as {
+            tenantId?: string;
+            rateLimitRpm?: number;
+            plan?: string;
+            notes?: string;
+          };
+          if (!body.tenantId) return addSecurityHeaders(jsonErr("tenantId required"));
+          const updates: Record<string, unknown> = {};
+          if (body.rateLimitRpm != null) updates.rate_limit_rpm = body.rateLimitRpm;
+          if (body.plan) updates.plan = body.plan;
+          if (body.notes != null) updates.notes = body.notes;
+          if (!Object.keys(updates).length) return addSecurityHeaders(jsonErr("No fields to update"));
+          const { error } = await auth.db
+            .from("api_tenants")
+            .update(updates)
+            .eq("id", body.tenantId);
+          if (error) return addSecurityHeaders(jsonErr(error.message, 422));
+          return addSecurityHeaders(jsonOk({ tenantId: body.tenantId, updated: updates }));
+        } catch (e) {
+          return addSecurityHeaders(jsonErr(String(e), 500));
+        }
+      }
+
       // Admin: one-click register admin bot webhook with Telegram
       // Called from AdminScreen — requires admin auth (checked inside server fn)
       if (url.pathname === "/api/admin/register-telegram-webhook" && request.method === "POST") {
@@ -200,6 +393,28 @@ export default {
             headers: { "Content-Type": "application/json" },
           })
         );
+      }
+    }
+
+    // GET /api/admin/tenants — list all API tenants with their active keys
+    if (request.method === "GET" && url.pathname === "/api/admin/tenants") {
+      if (!allow(rlKey("admin_list_tenants", ip), 30, 60_000)) {
+        return addSecurityHeaders(tooManyRequests(60));
+      }
+      const auth = await adminAuthFromRawRequest(request);
+      if (auth instanceof Response) return addSecurityHeaders(auth);
+      try {
+        const { data, error } = await auth.db
+          .from("api_tenants")
+          .select(`
+            id, name, contact_email, status, plan, rate_limit_rpm, notes, created_at,
+            api_keys(id, key_prefix, label, last_used_at, revoked_at, created_at)
+          `)
+          .order("created_at", { ascending: false });
+        if (error) return addSecurityHeaders(jsonErr(error.message, 500));
+        return addSecurityHeaders(jsonOk({ tenants: data ?? [] }));
+      } catch (e) {
+        return addSecurityHeaders(jsonErr(String(e), 500));
       }
     }
 

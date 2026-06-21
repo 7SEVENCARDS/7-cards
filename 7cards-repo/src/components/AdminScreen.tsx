@@ -32,6 +32,11 @@ import {
   UserCheck,
   UserX,
   Star,
+  Globe,
+  Copy,
+  Key,
+  RotateCcw,
+  ExternalLink,
 } from "lucide-react";
 import {
   getAdminStats,
@@ -73,7 +78,7 @@ import {
   adminRegisterVendor,
 } from "../server-functions/vendors";
 
-type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors" | "audit";
+type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors" | "audit" | "api";
 
 type Props = {
   adminId: string;
@@ -429,6 +434,355 @@ function SupportStaffCard() {
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── API Tenants Tab ──────────────────────────────────────────────────────────
+// Admins provision third-party companies that use 7SEVEN's vendor network
+// and support staff as infrastructure (API key-based, no UI for TPOs).
+
+type ApiTenant = {
+  id: string;
+  name: string;
+  contact_email: string;
+  status: "active" | "suspended" | "terminated";
+  plan: string;
+  rate_limit_rpm: number;
+  notes: string | null;
+  created_at: string;
+  api_keys: Array<{
+    id: string;
+    key_prefix: string;
+    label: string;
+    last_used_at: string | null;
+    revoked_at: string | null;
+    created_at: string;
+  }>;
+};
+
+function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
+  const [tenants, setTenants] = useState<ApiTenant[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [provisioning, setProvisioning] = useState(false);
+  const [provisionError, setProvisionError] = useState("");
+  const [revealedKey, setRevealedKey] = useState<{ key: string; tenantName: string } | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/admin/tenants");
+      if (!r.ok) throw new Error(await r.text());
+      const j = await r.json() as { tenants: ApiTenant[] };
+      setTenants(j.tenants);
+    } catch (e) {
+      console.error("[ApiTenantsTab] load failed:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleProvision = useCallback(async () => {
+    if (!name.trim() || !email.trim()) return;
+    setProvisioning(true);
+    setProvisionError("");
+    try {
+      const r = await fetch("/api/admin/provision-tenant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), contactEmail: email.trim() }),
+      });
+      const j = await r.json() as { api_key?: string; error?: string };
+      if (!r.ok) throw new Error(j.error ?? "Provisioning failed");
+      setRevealedKey({ key: j.api_key!, tenantName: name.trim() });
+      setName(""); setEmail(""); setShowForm(false);
+      await load();
+    } catch (e) {
+      setProvisionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setProvisioning(false);
+    }
+  }, [name, email, load]);
+
+  const handleStatus = useCallback(async (tenantId: string, status: string) => {
+    setActionLoading(`status-${tenantId}`);
+    try {
+      const r = await fetch("/api/admin/tenants/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenantId, status }),
+      });
+      if (!r.ok) { const j = await r.json() as { error?: string }; throw new Error(j.error); }
+      setTenants(prev => prev.map(t => t.id === tenantId ? { ...t, status: status as ApiTenant["status"] } : t));
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Action failed");
+    } finally {
+      setActionLoading(null);
+    }
+  }, []);
+
+  const handleRotateKey = useCallback(async (tenant: ApiTenant) => {
+    const activeKey = tenant.api_keys.find(k => !k.revoked_at);
+    if (!activeKey) { alert("No active key to rotate"); return; }
+    if (!confirm(`Rotate API key for ${tenant.name}? The old key will stop working immediately.`)) return;
+    setActionLoading(`rotate-${tenant.id}`);
+    try {
+      const r = await fetch("/api/admin/tenants/rotate-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenantId: tenant.id, keyId: activeKey.id }),
+      });
+      const j = await r.json() as { api_key?: string; key_prefix?: string; error?: string };
+      if (!r.ok) throw new Error(j.error);
+      setRevealedKey({ key: j.api_key!, tenantName: tenant.name });
+      await load();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Rotation failed");
+    } finally {
+      setActionLoading(null);
+    }
+  }, [load]);
+
+  const copyKey = useCallback(() => {
+    if (!revealedKey) return;
+    navigator.clipboard.writeText(revealedKey.key).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [revealedKey]);
+
+  const statusColor = (s: string) =>
+    s === "active" ? "text-cyan bg-cyan/10" :
+    s === "suspended" ? "text-gold bg-gold/10" :
+    "text-red-400 bg-red-500/10";
+
+  const planColor = (p: string) =>
+    p === "enterprise" ? "text-purple-400 bg-purple-500/10" :
+    p === "pro" ? "text-cyan bg-cyan/10" :
+    "text-muted-foreground bg-secondary";
+
+  return (
+    <div className="space-y-4 px-5 py-4">
+
+      {/* API Key Reveal Modal — shown once immediately after provision or rotate */}
+      {revealedKey && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-5">
+          <div className="bg-card border border-border rounded-2xl p-5 w-full max-w-sm space-y-4 shadow-xl">
+            <div className="flex items-center gap-2">
+              <Key className="size-5 text-gold" />
+              <h3 className="font-bold text-sm">API Key — Copy Now</h3>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              This is the <span className="text-gold font-bold">only time</span> this key will be shown.
+              It is not stored anywhere. Copy it and give it to <strong>{revealedKey.tenantName}</strong>.
+            </p>
+            <div className="bg-secondary/60 border border-border rounded-xl p-3 font-mono text-xs break-all select-all">
+              {revealedKey.key}
+            </div>
+            <div className="flex gap-2">
+              <button onClick={copyKey}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gold/10 border border-gold/20 text-xs font-bold text-gold">
+                {copied ? <CheckCircle2 className="size-3.5" /> : <Copy className="size-3.5" />}
+                {copied ? "Copied!" : "Copy Key"}
+              </button>
+              <button onClick={() => { setRevealedKey(null); setCopied(false); }}
+                className="flex-1 py-2.5 rounded-xl bg-secondary text-xs font-bold">
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Header row */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-bold text-sm">API Tenants</h2>
+          <p className="text-[10px] text-muted-foreground mt-0.5">
+            Third-party companies using your vendor + support infrastructure
+          </p>
+        </div>
+        <button onClick={() => setShowForm(f => !f)}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-cyan/10 border border-cyan/20 text-xs font-bold text-cyan">
+          <Globe className="size-3.5" />
+          New Tenant
+        </button>
+      </div>
+
+      {/* Provision form */}
+      {showForm && (
+        <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
+          <p className="text-xs font-bold">Provision New API Tenant</p>
+          <input value={name} onChange={e => setName(e.target.value)}
+            placeholder="Company name"
+            className="w-full bg-secondary/60 border border-border/40 rounded-xl px-3 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:border-cyan/40" />
+          <input value={email} onChange={e => setEmail(e.target.value)}
+            type="email" placeholder="Contact email"
+            className="w-full bg-secondary/60 border border-border/40 rounded-xl px-3 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:border-cyan/40" />
+          {provisionError && <p className="text-[11px] text-red-400">{provisionError}</p>}
+          <div className="flex gap-2">
+            <button onClick={handleProvision} disabled={provisioning || !name.trim() || !email.trim()}
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-cyan/10 border border-cyan/20 text-xs font-bold text-cyan disabled:opacity-50">
+              {provisioning ? <Loader2 className="size-3.5 animate-spin" /> : <Key className="size-3.5" />}
+              {provisioning ? "Provisioning…" : "Provision & Get API Key"}
+            </button>
+            <button onClick={() => { setShowForm(false); setProvisionError(""); }}
+              className="px-4 py-2.5 rounded-xl bg-secondary text-xs font-bold">
+              Cancel
+            </button>
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            The API key is shown <span className="text-gold font-bold">once</span> immediately after provisioning.
+            Copy it and deliver it to the client securely.
+          </p>
+        </div>
+      )}
+
+      {/* Stats row */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="bg-card rounded-2xl border border-border p-3 text-center">
+          <p className="text-lg font-extrabold">{tenants.length}</p>
+          <p className="text-[10px] text-muted-foreground">Total</p>
+        </div>
+        <div className="bg-card rounded-2xl border border-border p-3 text-center">
+          <p className="text-lg font-extrabold text-cyan">
+            {tenants.filter(t => t.status === "active").length}
+          </p>
+          <p className="text-[10px] text-muted-foreground">Active</p>
+        </div>
+        <div className="bg-card rounded-2xl border border-border p-3 text-center">
+          <p className="text-lg font-extrabold text-gold">
+            {tenants.filter(t => t.status === "suspended").length}
+          </p>
+          <p className="text-[10px] text-muted-foreground">Suspended</p>
+        </div>
+      </div>
+
+      {/* Tenant list */}
+      {loading && <CenterLoader />}
+      {!loading && !tenants.length && (
+        <EmptyState icon={Globe} message="No API tenants yet. Provision one to get started." />
+      )}
+
+      {!loading && tenants.map(tenant => {
+        const activeKey = tenant.api_keys.find(k => !k.revoked_at);
+        const isExpanded = expandedId === tenant.id;
+        const isActing = actionLoading?.includes(tenant.id);
+
+        return (
+          <div key={tenant.id} className="bg-card border border-border rounded-2xl overflow-hidden">
+            {/* Collapsed row */}
+            <button className="w-full flex items-center gap-3 p-4 text-left"
+              onClick={() => setExpandedId(isExpanded ? null : tenant.id)}>
+              <div className="size-10 rounded-xl bg-cyan/10 grid place-items-center flex-shrink-0">
+                <Building2 className="size-5 text-cyan" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-bold truncate">{tenant.name}</p>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusColor(tenant.status)}`}>
+                    {tenant.status}
+                  </span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${planColor(tenant.plan)}`}>
+                    {tenant.plan}
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted-foreground truncate">{tenant.contact_email}</p>
+                {activeKey && (
+                  <p className="text-[10px] font-mono text-muted-foreground mt-0.5">
+                    {activeKey.key_prefix}…
+                    {activeKey.last_used_at
+                      ? <span className="ml-2 text-cyan/70">used {timeAgo(activeKey.last_used_at)}</span>
+                      : <span className="ml-2 text-muted-foreground/50">never used</span>}
+                  </p>
+                )}
+              </div>
+              <ChevronRight className={`size-4 text-muted-foreground flex-shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+            </button>
+
+            {/* Expanded detail */}
+            {isExpanded && (
+              <div className="border-t border-border/40 px-4 pb-4 pt-3 space-y-3">
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <p className="text-muted-foreground text-[10px]">Rate limit</p>
+                    <p className="font-bold">{tenant.rate_limit_rpm} req/min</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground text-[10px]">Member since</p>
+                    <p className="font-bold">{new Date(tenant.created_at).toLocaleDateString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground text-[10px]">Active keys</p>
+                    <p className="font-bold">{tenant.api_keys.filter(k => !k.revoked_at).length}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground text-[10px]">Total keys (incl. revoked)</p>
+                    <p className="font-bold">{tenant.api_keys.length}</p>
+                  </div>
+                </div>
+
+                {/* Action buttons */}
+                <div className="flex flex-wrap gap-2">
+                  {tenant.status === "active" && (
+                    <button onClick={() => handleStatus(tenant.id, "suspended")}
+                      disabled={!!isActing}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gold/10 border border-gold/20 text-[11px] font-bold text-gold disabled:opacity-50">
+                      {isActing ? <Loader2 className="size-3 animate-spin" /> : <Ban className="size-3" />}
+                      Suspend
+                    </button>
+                  )}
+                  {tenant.status === "suspended" && (
+                    <button onClick={() => handleStatus(tenant.id, "active")}
+                      disabled={!!isActing}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-cyan/10 border border-cyan/20 text-[11px] font-bold text-cyan disabled:opacity-50">
+                      {isActing ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />}
+                      Reactivate
+                    </button>
+                  )}
+                  {tenant.status !== "terminated" && (
+                    <button onClick={() => handleStatus(tenant.id, "terminated")}
+                      disabled={!!isActing}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/20 text-[11px] font-bold text-red-400 disabled:opacity-50">
+                      {isActing ? <Loader2 className="size-3 animate-spin" /> : <XCircle className="size-3" />}
+                      Terminate
+                    </button>
+                  )}
+                  {activeKey && (
+                    <button onClick={() => handleRotateKey(tenant)}
+                      disabled={!!isActing}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-secondary border border-border text-[11px] font-bold disabled:opacity-50">
+                      {actionLoading === `rotate-${tenant.id}`
+                        ? <Loader2 className="size-3 animate-spin" />
+                        : <RotateCcw className="size-3" />}
+                      Rotate Key
+                    </button>
+                  )}
+                </div>
+
+                {/* API info quick-reference */}
+                <div className="bg-secondary/40 rounded-xl p-3 space-y-1">
+                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide">Quick Reference</p>
+                  <p className="text-[10px] font-mono text-muted-foreground">
+                    Base URL: <span className="text-foreground">https://api.7sevencards.com/v1</span>
+                  </p>
+                  <p className="text-[10px] font-mono text-muted-foreground">
+                    Auth: <span className="text-foreground">Authorization: Bearer {activeKey?.key_prefix ?? "sk_live_"}…</span>
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -2242,6 +2596,7 @@ export function AdminScreen({ adminId, onBack }: Props) {
     { key: "credit",  label: "Credit",  icon: Wallet },
     { key: "vendors", label: "Vendors", icon: Building2 },
     { key: "audit",   label: "Audit",   icon: Zap },
+    { key: "api",     label: "API",     icon: Globe },
   ];
 
   return (
@@ -2293,6 +2648,7 @@ export function AdminScreen({ adminId, onBack }: Props) {
             <AuditLogViewer />
           </div>
         )}
+        {tab === "api"     && <ApiTenantsTab adminId={adminId} />}
       </div>
     </div>
   );
