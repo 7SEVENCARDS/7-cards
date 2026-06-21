@@ -1617,3 +1617,657 @@ BEGIN
 END;
 $$;
 
+
+-- ============================================================
+-- 021_api_tenants.sql
+-- ============================================================
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 021 — Third-party API tenancy layer
+--
+-- Enables external trading companies to use 7SEVEN's vendor network and
+-- support staff as pure infrastructure. They submit gift cards → we verify
+-- + dispatch to vendors → they receive webhooks on every status change.
+--
+-- Auth model: SHA-256-hashed Bearer tokens stored in api_keys.
+-- Tenant isolation: api_tenant_trades + api_tenant_support_tickets join tables.
+-- All API server calls use the service role key (bypasses RLS).
+-- App-level admin policies are added for the admin dashboard.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ── 1. api_tenants ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS api_tenants (
+  id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  name             TEXT        NOT NULL,
+  contact_email    TEXT        NOT NULL,
+  status           TEXT        NOT NULL DEFAULT 'active'
+                     CHECK (status IN ('active', 'suspended', 'terminated')),
+  plan             TEXT        NOT NULL DEFAULT 'free'
+                     CHECK (plan IN ('free', 'pro', 'enterprise')),
+  rate_limit_rpm   INTEGER     NOT NULL DEFAULT 60,
+  notes            TEXT,
+  created_by       UUID        REFERENCES auth.users(id),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT api_tenants_email_unique UNIQUE (contact_email)
+);
+
+-- ── 2. api_keys ───────────────────────────────────────────────────────────────
+-- Keys are stored as SHA-256 hashes; plaintext is shown exactly once.
+CREATE TABLE IF NOT EXISTS api_keys (
+  id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id      UUID        NOT NULL REFERENCES api_tenants(id) ON DELETE CASCADE,
+  key_hash       TEXT        NOT NULL,          -- SHA-256(sk_live_...)
+  key_prefix     TEXT        NOT NULL,          -- first 16 chars shown in UI
+  label          TEXT        NOT NULL DEFAULT 'default',
+  last_used_at   TIMESTAMPTZ,
+  revoked_at     TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT api_keys_hash_unique UNIQUE (key_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_tenant
+  ON api_keys(tenant_id) WHERE revoked_at IS NULL;
+
+-- ── 3. api_webhook_endpoints ──────────────────────────────────────────────────
+-- TPOs register HTTPS URLs. We sign each delivery with HMAC-SHA256.
+CREATE TABLE IF NOT EXISTS api_webhook_endpoints (
+  id              UUID      PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id       UUID      NOT NULL REFERENCES api_tenants(id) ON DELETE CASCADE,
+  url             TEXT      NOT NULL,
+  events          TEXT[]    NOT NULL DEFAULT '{}',
+  signing_secret  TEXT      NOT NULL,          -- whsec_... (shown once at creation)
+  is_active       BOOLEAN   NOT NULL DEFAULT TRUE,
+  failure_count   INTEGER   NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_webhook_endpoints_tenant
+  ON api_webhook_endpoints(tenant_id) WHERE is_active = TRUE;
+
+-- ── 4. api_webhook_deliveries ─────────────────────────────────────────────────
+-- Delivery log with retry tracking. Retry schedule: 0s, 30s, 2m, 10m (max 4 attempts).
+CREATE TABLE IF NOT EXISTS api_webhook_deliveries (
+  id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  endpoint_id      UUID        NOT NULL REFERENCES api_webhook_endpoints(id) ON DELETE CASCADE,
+  event_type       TEXT        NOT NULL,
+  payload          JSONB       NOT NULL,
+  attempt_count    INTEGER     NOT NULL DEFAULT 0,
+  last_attempt_at  TIMESTAMPTZ,
+  last_status_code INTEGER,
+  last_response    TEXT,
+  delivered_at     TIMESTAMPTZ,             -- non-null = successfully delivered
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_webhook_deliveries_endpoint
+  ON api_webhook_deliveries(endpoint_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_api_webhook_deliveries_pending
+  ON api_webhook_deliveries(endpoint_id)
+  WHERE delivered_at IS NULL AND attempt_count < 4;
+
+-- ── 5. api_tenant_trades ──────────────────────────────────────────────────────
+-- Links trades to the tenant that submitted them + stores the TPO's customer ref.
+-- Trades themselves use a shared API_GATEWAY_USER_ID profile (see SETUP.md).
+CREATE TABLE IF NOT EXISTS api_tenant_trades (
+  id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id     UUID        NOT NULL REFERENCES api_tenants(id) ON DELETE CASCADE,
+  trade_id      UUID        NOT NULL REFERENCES trades(id) ON DELETE CASCADE,
+  customer_ref  TEXT,                       -- TPO's own reference for their customer
+  batch_ref     TEXT,                       -- TPO's batch reference (for batch submits)
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT api_tenant_trades_unique UNIQUE (tenant_id, trade_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_tenant_trades_tenant
+  ON api_tenant_trades(tenant_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_api_tenant_trades_customer
+  ON api_tenant_trades(tenant_id, customer_ref) WHERE customer_ref IS NOT NULL;
+
+-- ── 6. api_tenant_support_tickets ────────────────────────────────────────────
+-- Links support tickets to the tenant that opened them on behalf of a customer.
+CREATE TABLE IF NOT EXISTS api_tenant_support_tickets (
+  id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id      UUID        NOT NULL REFERENCES api_tenants(id) ON DELETE CASCADE,
+  ticket_id      UUID        NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+  customer_ref   TEXT,
+  customer_name  TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT api_tenant_tickets_unique UNIQUE (tenant_id, ticket_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_tenant_tickets_tenant
+  ON api_tenant_support_tickets(tenant_id, created_at DESC);
+
+-- ── 7. RLS ────────────────────────────────────────────────────────────────────
+-- The Express API server always uses the service role key (bypasses RLS).
+-- We only add authenticated policies for admin read access.
+
+ALTER TABLE api_tenants              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_keys                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_webhook_endpoints    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_webhook_deliveries   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_tenant_trades        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_tenant_support_tickets ENABLE ROW LEVEL SECURITY;
+
+-- Service role has full access (used by api-server Express app)
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_tenants' AND policyname = 'service_role_api_tenants'
+  ) THEN
+    CREATE POLICY service_role_api_tenants
+      ON api_tenants FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_keys' AND policyname = 'service_role_api_keys'
+  ) THEN
+    CREATE POLICY service_role_api_keys
+      ON api_keys FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_webhook_endpoints' AND policyname = 'service_role_api_webhooks'
+  ) THEN
+    CREATE POLICY service_role_api_webhooks
+      ON api_webhook_endpoints FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_webhook_deliveries' AND policyname = 'service_role_api_deliveries'
+  ) THEN
+    CREATE POLICY service_role_api_deliveries
+      ON api_webhook_deliveries FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_tenant_trades' AND policyname = 'service_role_tenant_trades'
+  ) THEN
+    CREATE POLICY service_role_tenant_trades
+      ON api_tenant_trades FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_tenant_support_tickets' AND policyname = 'service_role_tenant_tickets'
+  ) THEN
+    CREATE POLICY service_role_tenant_tickets
+      ON api_tenant_support_tickets FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+-- Admin read policies (for admin dashboard server functions)
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_tenants' AND policyname = 'admin_read_api_tenants'
+  ) THEN
+    CREATE POLICY admin_read_api_tenants
+      ON api_tenants FOR SELECT TO authenticated
+      USING (
+        EXISTS (
+          SELECT 1 FROM profiles
+          WHERE profiles.id = auth.uid() AND profiles.role = 'admin'
+        )
+      );
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_keys' AND policyname = 'admin_read_api_keys'
+  ) THEN
+    CREATE POLICY admin_read_api_keys
+      ON api_keys FOR SELECT TO authenticated
+      USING (
+        EXISTS (
+          SELECT 1 FROM profiles
+          WHERE profiles.id = auth.uid() AND profiles.role = 'admin'
+        )
+      );
+  END IF;
+END $$;
+
+-- ── 8. DB functions ───────────────────────────────────────────────────────────
+
+-- provision_api_tenant: admin-only, creates tenant + hashed API key in one TX.
+-- Returns plaintext key (shown ONCE — never stored).
+-- Requires pgcrypto extension (already enabled in Supabase).
+CREATE OR REPLACE FUNCTION provision_api_tenant(
+  p_name          TEXT,
+  p_contact_email TEXT,
+  p_created_by    UUID
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_tenant_id  UUID;
+  v_key_plain  TEXT;
+  v_key_prefix TEXT;
+  v_key_hash   TEXT;
+BEGIN
+  -- Admin guard
+  IF NOT EXISTS (
+    SELECT 1 FROM profiles WHERE id = p_created_by AND role = 'admin'
+  ) THEN
+    RAISE EXCEPTION 'forbidden: admin only';
+  END IF;
+
+  INSERT INTO api_tenants (name, contact_email, created_by)
+  VALUES (p_name, p_contact_email, p_created_by)
+  RETURNING id INTO v_tenant_id;
+
+  -- Generate key: sk_live_ + 32 lowercase hex chars = 40 chars total
+  v_key_plain  := 'sk_live_' || encode(gen_random_bytes(16), 'hex');
+  v_key_prefix := left(v_key_plain, 16);       -- e.g. sk_live_a3f9...
+  v_key_hash   := encode(digest(v_key_plain, 'sha256'), 'hex');
+
+  INSERT INTO api_keys (tenant_id, key_hash, key_prefix, label)
+  VALUES (v_tenant_id, v_key_hash, v_key_prefix, 'default');
+
+  RETURN jsonb_build_object(
+    'tenant_id',  v_tenant_id,
+    'api_key',    v_key_plain,     -- plaintext — shown once, never stored again
+    'key_prefix', v_key_prefix
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION provision_api_tenant TO authenticated;
+
+-- rotate_api_key: revoke old key, issue new one atomically.
+CREATE OR REPLACE FUNCTION rotate_api_key(
+  p_tenant_id UUID,
+  p_key_id    UUID,
+  p_admin_id  UUID
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_key_plain  TEXT;
+  v_key_prefix TEXT;
+  v_key_hash   TEXT;
+  v_new_id     UUID;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM profiles WHERE id = p_admin_id AND role = 'admin'
+  ) THEN
+    RAISE EXCEPTION 'forbidden: admin only';
+  END IF;
+
+  UPDATE api_keys
+  SET revoked_at = NOW()
+  WHERE id = p_key_id AND tenant_id = p_tenant_id AND revoked_at IS NULL;
+
+  v_key_plain  := 'sk_live_' || encode(gen_random_bytes(16), 'hex');
+  v_key_prefix := left(v_key_plain, 16);
+  v_key_hash   := encode(digest(v_key_plain, 'sha256'), 'hex');
+
+  INSERT INTO api_keys (tenant_id, key_hash, key_prefix, label)
+  VALUES (p_tenant_id, v_key_hash, v_key_prefix, 'rotated')
+  RETURNING id INTO v_new_id;
+
+  RETURN jsonb_build_object(
+    'key_id',     v_new_id,
+    'api_key',    v_key_plain,
+    'key_prefix', v_key_prefix
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION rotate_api_key TO authenticated;
+
+-- suspend / unsuspend tenant
+CREATE OR REPLACE FUNCTION set_tenant_status(
+  p_tenant_id UUID,
+  p_status    TEXT,
+  p_admin_id  UUID
+) RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM profiles WHERE id = p_admin_id AND role = 'admin'
+  ) THEN
+    RAISE EXCEPTION 'forbidden: admin only';
+  END IF;
+
+  IF p_status NOT IN ('active', 'suspended', 'terminated') THEN
+    RAISE EXCEPTION 'invalid status';
+  END IF;
+
+  UPDATE api_tenants SET status = p_status WHERE id = p_tenant_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION set_tenant_status TO authenticated;
+
+-- ============================================================
+-- 022_api_billing.sql
+-- ============================================================
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 022 — API Tenant Billing & Subscription Plans
+--
+-- Revenue model for third-party trading companies (TPOs) using 7SEVEN's
+-- vendor network and support staff as infrastructure:
+--
+--   • Monthly platform fee: starts at ₦20,000 (Starter plan)
+--   • Trade fee: 7% of each successfully dispatched trade's NGN value
+--     (decreases with higher plans — reward volume)
+--   • Support staff fee: ₦5,000/month per active staff slot
+--
+-- Architecture:
+--   api_subscription_plans  — plan catalogue with pricing in Naira
+--   api_tenant_billing_cycles — monthly invoice aggregates per tenant
+--   api_billing_transactions  — individual line items (trade fees, monthly fees)
+--   record_api_trade_fee()  — called by api-server on each dispatched trade
+--   open_monthly_billing_cycle() — called at month start (cron/manual)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ── 1. Subscription Plans ─────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS api_subscription_plans (
+  id                          TEXT        PRIMARY KEY,   -- 'starter','growth','professional','enterprise'
+  name                        TEXT        NOT NULL,
+  monthly_fee_ngn             NUMERIC(12,2) NOT NULL DEFAULT 0,
+  trade_fee_pct               NUMERIC(5,4) NOT NULL DEFAULT 0.0700, -- 7.00%
+  support_staff_slots         INT         NOT NULL DEFAULT 1,
+  support_staff_monthly_ngn   NUMERIC(12,2) NOT NULL DEFAULT 5000,  -- per slot
+  rate_limit_rpm              INT         NOT NULL DEFAULT 60,
+  description                 TEXT,
+  is_active                   BOOLEAN     NOT NULL DEFAULT TRUE,
+  sort_order                  INT         NOT NULL DEFAULT 0,
+  created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed the four tiers (idempotent)
+INSERT INTO api_subscription_plans
+  (id, name, monthly_fee_ngn, trade_fee_pct, support_staff_slots, support_staff_monthly_ngn, rate_limit_rpm, description, sort_order)
+VALUES
+  ('starter',      'Starter',      20000,  0.0700, 1,  5000, 60,   'Entry-level for small trading companies. ₦20,000/mo platform fee + 7% per trade.',       1),
+  ('growth',       'Growth',       35000,  0.0650, 2,  5000, 300,  'Growing trading desks. ₦35,000/mo + 6.5% per trade. 2 support staff slots.',              2),
+  ('professional', 'Professional', 65000,  0.0600, 3,  5000, 600,  'High-volume operations. ₦65,000/mo + 6% per trade. 3 staff slots, 600 req/min.',          3),
+  ('enterprise',   'Enterprise',   150000, 0.0500, 10, 5000, 1500, 'Custom enterprise deployments. ₦150,000/mo + 5% per trade. 10 staff slots, 1500 req/min.',4)
+ON CONFLICT (id) DO NOTHING;
+
+-- ── 2. Widen plan CHECK on api_tenants ───────────────────────────────────────
+-- Existing constraint only allowed 'free','pro','enterprise'. Add new plan IDs.
+ALTER TABLE api_tenants DROP CONSTRAINT IF EXISTS api_tenants_plan_check;
+ALTER TABLE api_tenants
+  ADD CONSTRAINT api_tenants_plan_check
+  CHECK (plan IN ('free','starter','growth','professional','enterprise'));
+
+-- Add support_staff_count to track how many staff slots a tenant is using
+ALTER TABLE api_tenants
+  ADD COLUMN IF NOT EXISTS support_staff_count INT NOT NULL DEFAULT 1;
+
+-- ── 3. Monthly Billing Cycles ─────────────────────────────────────────────────
+-- One row per tenant per calendar month. Aggregates all fees for invoicing.
+CREATE TABLE IF NOT EXISTS api_tenant_billing_cycles (
+  id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id         UUID        NOT NULL REFERENCES api_tenants(id) ON DELETE CASCADE,
+  plan_id           TEXT        NOT NULL REFERENCES api_subscription_plans(id),
+  billing_month     DATE        NOT NULL,   -- always the 1st of the month
+  platform_fee_ngn  NUMERIC(12,2) NOT NULL DEFAULT 0,
+  trade_fee_ngn     NUMERIC(12,2) NOT NULL DEFAULT 0,
+  support_fee_ngn   NUMERIC(12,2) NOT NULL DEFAULT 0,
+  trade_count       INT         NOT NULL DEFAULT 0,
+  trade_volume_ngn  NUMERIC(16,2) NOT NULL DEFAULT 0,
+  status            TEXT        NOT NULL DEFAULT 'open'
+                      CHECK (status IN ('open','invoiced','paid','overdue')),
+  invoiced_at       TIMESTAMPTZ,
+  paid_at           TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (tenant_id, billing_month)
+);
+
+CREATE INDEX IF NOT EXISTS idx_billing_cycles_tenant
+  ON api_tenant_billing_cycles(tenant_id, billing_month DESC);
+
+CREATE INDEX IF NOT EXISTS idx_billing_cycles_status
+  ON api_tenant_billing_cycles(status) WHERE status IN ('open','invoiced','overdue');
+
+-- ── 4. Individual Billing Line Items ──────────────────────────────────────────
+-- Audit trail: one row per trade fee, monthly platform fee, support fee, etc.
+CREATE TABLE IF NOT EXISTS api_billing_transactions (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id   UUID        NOT NULL REFERENCES api_tenants(id) ON DELETE CASCADE,
+  cycle_id    UUID        REFERENCES api_tenant_billing_cycles(id),
+  type        TEXT        NOT NULL
+                CHECK (type IN ('trade_fee','platform_fee','support_fee','adjustment','credit')),
+  amount_ngn  NUMERIC(12,2) NOT NULL,
+  description TEXT,
+  trade_id    UUID        REFERENCES trades(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_billing_txns_tenant
+  ON api_billing_transactions(tenant_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_billing_txns_cycle
+  ON api_billing_transactions(cycle_id, created_at DESC);
+
+-- ── 5. Fix api_webhook_deliveries — add status tracking columns ───────────────
+-- Migration 021 uses attempt_count/last_attempt_at/last_status_code/delivered_at
+-- for raw tracking. Add derived status columns to support the admin dashboard.
+ALTER TABLE api_webhook_deliveries
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending','delivered','failed','retrying')),
+  ADD COLUMN IF NOT EXISTS attempt_number INT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS response_code  INT,
+  ADD COLUMN IF NOT EXISTS attempted_at   TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS next_retry_at  TIMESTAMPTZ;
+
+-- Backfill existing rows from the raw tracking columns
+UPDATE api_webhook_deliveries SET
+  attempt_number = attempt_count,
+  response_code  = last_status_code,
+  attempted_at   = last_attempt_at,
+  status = CASE
+    WHEN delivered_at IS NOT NULL THEN 'delivered'
+    WHEN attempt_count >= 4       THEN 'failed'
+    WHEN attempt_count > 0        THEN 'retrying'
+    ELSE 'pending'
+  END
+WHERE attempt_number = 0 OR status = 'pending';
+
+-- ── 6. RLS ────────────────────────────────────────────────────────────────────
+ALTER TABLE api_subscription_plans      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_tenant_billing_cycles   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_billing_transactions    ENABLE ROW LEVEL SECURITY;
+
+-- Service role: full access (api-server uses service role key)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'api_subscription_plans' AND policyname = 'svc_plans') THEN
+    CREATE POLICY svc_plans ON api_subscription_plans FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'api_tenant_billing_cycles' AND policyname = 'svc_billing_cycles') THEN
+    CREATE POLICY svc_billing_cycles ON api_tenant_billing_cycles FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'api_billing_transactions' AND policyname = 'svc_billing_txns') THEN
+    CREATE POLICY svc_billing_txns ON api_billing_transactions FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+-- Admin read access
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'api_subscription_plans' AND policyname = 'admin_read_plans') THEN
+    CREATE POLICY admin_read_plans ON api_subscription_plans FOR SELECT TO authenticated
+      USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'api_tenant_billing_cycles' AND policyname = 'admin_read_billing_cycles') THEN
+    CREATE POLICY admin_read_billing_cycles ON api_tenant_billing_cycles FOR SELECT TO authenticated
+      USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'api_billing_transactions' AND policyname = 'admin_read_billing_txns') THEN
+    CREATE POLICY admin_read_billing_txns ON api_billing_transactions FOR SELECT TO authenticated
+      USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+  END IF;
+END $$;
+
+-- ── 7. record_api_trade_fee() ──────────────────────────────────────────────────
+-- Called by the API server (service role) after every successfully dispatched
+-- trade. Calculates the platform's cut (7% on Starter, down to 5% Enterprise)
+-- and appends it to the tenant's current monthly billing cycle.
+CREATE OR REPLACE FUNCTION record_api_trade_fee(
+  p_tenant_id   UUID,
+  p_trade_id    UUID,
+  p_amount_ngn  NUMERIC
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_plan_id  TEXT;
+  v_plan     api_subscription_plans%ROWTYPE;
+  v_fee_ngn  NUMERIC(12,2);
+  v_cycle_id UUID;
+  v_month    DATE;
+BEGIN
+  -- Resolve tenant's current plan
+  SELECT COALESCE(plan, 'starter') INTO v_plan_id
+  FROM api_tenants WHERE id = p_tenant_id;
+
+  SELECT * INTO v_plan FROM api_subscription_plans WHERE id = v_plan_id;
+  IF NOT FOUND THEN
+    SELECT * INTO v_plan FROM api_subscription_plans WHERE id = 'starter';
+  END IF;
+
+  v_fee_ngn := ROUND(p_amount_ngn * v_plan.trade_fee_pct, 2);
+  v_month   := date_trunc('month', NOW())::DATE;
+
+  -- Upsert the current month's billing cycle
+  INSERT INTO api_tenant_billing_cycles
+    (tenant_id, plan_id, billing_month, trade_fee_ngn, trade_count, trade_volume_ngn)
+  VALUES
+    (p_tenant_id, v_plan.id, v_month, v_fee_ngn, 1, p_amount_ngn)
+  ON CONFLICT (tenant_id, billing_month) DO UPDATE SET
+    trade_fee_ngn    = api_tenant_billing_cycles.trade_fee_ngn + v_fee_ngn,
+    trade_count      = api_tenant_billing_cycles.trade_count   + 1,
+    trade_volume_ngn = api_tenant_billing_cycles.trade_volume_ngn + p_amount_ngn,
+    updated_at       = NOW()
+  RETURNING id INTO v_cycle_id;
+
+  -- Record the line item
+  INSERT INTO api_billing_transactions
+    (tenant_id, cycle_id, type, amount_ngn, description, trade_id)
+  VALUES (
+    p_tenant_id, v_cycle_id, 'trade_fee', v_fee_ngn,
+    format('%s%% platform fee on ₦%s trade',
+      to_char(v_plan.trade_fee_pct * 100, 'FM990.9'),
+      to_char(p_amount_ngn, 'FM999,999,999')),
+    p_trade_id
+  );
+
+  RETURN jsonb_build_object('fee_ngn', v_fee_ngn, 'cycle_id', v_cycle_id);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION record_api_trade_fee TO service_role;
+
+-- ── 8. open_monthly_billing_cycle() ───────────────────────────────────────────
+-- Run at the start of each calendar month (e.g. via pg_cron or a Supabase Edge
+-- Function cron). Seeds platform + support fees for all active tenants.
+-- Idempotent: ON CONFLICT DO NOTHING means safe to run multiple times.
+CREATE OR REPLACE FUNCTION open_monthly_billing_cycle(
+  p_billing_month DATE DEFAULT date_trunc('month', NOW())::DATE
+) RETURNS INT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_tenant   RECORD;
+  v_plan     api_subscription_plans%ROWTYPE;
+  v_support  NUMERIC(12,2);
+  v_count    INT := 0;
+BEGIN
+  FOR v_tenant IN
+    SELECT t.id,
+           COALESCE(t.plan, 'starter') AS plan_id,
+           COALESCE(t.support_staff_count, 1) AS staff_count
+    FROM api_tenants t
+    WHERE t.status = 'active'
+  LOOP
+    SELECT * INTO v_plan FROM api_subscription_plans WHERE id = v_tenant.plan_id;
+    IF NOT FOUND THEN
+      SELECT * INTO v_plan FROM api_subscription_plans WHERE id = 'starter';
+    END IF;
+
+    v_support := v_plan.support_staff_monthly_ngn * v_tenant.staff_count;
+
+    -- Open the cycle (no-op if already exists)
+    INSERT INTO api_tenant_billing_cycles
+      (tenant_id, plan_id, billing_month, platform_fee_ngn, support_fee_ngn)
+    VALUES
+      (v_tenant.id, v_plan.id, p_billing_month, v_plan.monthly_fee_ngn, v_support)
+    ON CONFLICT (tenant_id, billing_month) DO NOTHING;
+
+    -- Platform fee line item (idempotent guard)
+    INSERT INTO api_billing_transactions
+      (tenant_id, type, amount_ngn, description)
+    SELECT
+      v_tenant.id, 'platform_fee', v_plan.monthly_fee_ngn,
+      format('Monthly API platform fee — %s plan (%s)',
+        v_plan.name, to_char(p_billing_month, 'Mon YYYY'))
+    WHERE NOT EXISTS (
+      SELECT 1 FROM api_billing_transactions
+      WHERE tenant_id = v_tenant.id
+        AND type = 'platform_fee'
+        AND date_trunc('month', created_at)::DATE = p_billing_month
+    );
+
+    -- Support fee line item
+    IF v_support > 0 THEN
+      INSERT INTO api_billing_transactions
+        (tenant_id, type, amount_ngn, description)
+      SELECT
+        v_tenant.id, 'support_fee', v_support,
+        format('Support staff — %s slot%s × ₦%s/mo (%s)',
+          v_tenant.staff_count,
+          CASE WHEN v_tenant.staff_count = 1 THEN '' ELSE 's' END,
+          to_char(v_plan.support_staff_monthly_ngn, 'FM999,999'),
+          to_char(p_billing_month, 'Mon YYYY'))
+      WHERE NOT EXISTS (
+        SELECT 1 FROM api_billing_transactions
+        WHERE tenant_id = v_tenant.id
+          AND type = 'support_fee'
+          AND date_trunc('month', created_at)::DATE = p_billing_month
+      );
+    END IF;
+
+    v_count := v_count + 1;
+  END LOOP;
+
+  RETURN v_count;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION open_monthly_billing_cycle TO service_role;
