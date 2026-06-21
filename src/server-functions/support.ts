@@ -62,7 +62,9 @@ async function forwardToTelegramSupport(opts: {
     `<i>Reply via admin bot: /reply ${opts.ticketId} your message here</i>`,
   ].join("\n");
 
-  await sendAdminBotMessage(chatId, text).catch(() => {});
+  await sendAdminBotMessage(chatId, text).catch(e =>
+    console.error("[Support] admin bot forward failed:", e instanceof Error ? e.message : e)
+  );
 }
 
 // ─── Get own conversation history ─────────────────────────────────────────────
@@ -172,7 +174,9 @@ export const sendSupportMessage = createServerFn({ method: "POST" })
           isPremium,
           category: data.category ?? null,
           body: data.body,
-        }).catch(() => {});
+        }).catch(e =>
+          console.error("[Support] forwardToTelegramSupport failed:", e instanceof Error ? e.message : e)
+        );
       }
 
       // Immediate acknowledgment reply
@@ -242,7 +246,9 @@ export async function adminReplyToTicket(ticketId: string, replyBody: string, ad
       action: "support_reply",
       target_id: ticketId,
       meta: { via: "telegram", reply_length: replyBody.length },
-    }).catch(() => {});
+    }).catch(e =>
+      console.error("[Support] audit_log insert failed:", e instanceof Error ? e.message : e)
+    );
 
     return true;
   } catch {
