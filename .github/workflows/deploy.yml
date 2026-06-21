@@ -109,6 +109,8 @@ jobs:
             ONESIGNAL_ANDROID_CHANNEL_ID
             RELOADLY_CLIENT_ID
             RELOADLY_CLIENT_SECRET
+            DOJAH_APP_ID
+            DOJAH_SECRET_KEY
             APP_SECRET
             ADMIN_TELEGRAM_BOT_TOKEN
             ADMIN_TELEGRAM_BOT_USERNAME
@@ -131,6 +133,8 @@ jobs:
           ONESIGNAL_ANDROID_CHANNEL_ID: ${{ secrets.ONESIGNAL_ANDROID_CHANNEL_ID }}
           RELOADLY_CLIENT_ID: ${{ secrets.RELOADLY_CLIENT_ID }}
           RELOADLY_CLIENT_SECRET: ${{ secrets.RELOADLY_CLIENT_SECRET }}
+          DOJAH_APP_ID: ${{ secrets.DOJAH_APP_ID }}
+          DOJAH_SECRET_KEY: ${{ secrets.DOJAH_SECRET_KEY }}
           APP_SECRET: ${{ secrets.APP_SECRET }}
           ADMIN_TELEGRAM_BOT_TOKEN: ${{ secrets.ADMIN_TELEGRAM_BOT_TOKEN }}
           ADMIN_TELEGRAM_BOT_USERNAME: ${{ secrets.ADMIN_TELEGRAM_BOT_USERNAME }}
