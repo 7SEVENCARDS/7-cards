@@ -23,6 +23,7 @@ import {
   getMyBadges,
   getMyReferralInfo,
 } from "../server-functions/vendors";
+import { getMyBroadcastClaims } from "../server-functions/vendor-broadcast";
 
 export const Route = createFileRoute("/vendor")({
   component: VendorPortal,
@@ -39,7 +40,10 @@ type VendorSession = {
 type Assignment = {
   id: string; brand: string; amount_usd: number; amount_ngn: number | null;
   card_code: string; card_pin: string | null; status: string;
-  telegram_sent: boolean; created_at: string; redeemed_at: string | null;
+  telegram_sent: boolean; claimed_via_telegram: boolean;
+  created_at: string; redeemed_at: string | null;
+  van_account_number: string | null; van_bank_name: string | null;
+  van_amount_ngn: number | null; van_paid: boolean; van_paid_at: string | null;
 };
 type WalletData = { wallet: { balance: number; total_funded: number } | null; transactions: Array<{ id: string; type: string; amount: number; description: string | null; created_at: string }> };
 
@@ -371,7 +375,49 @@ function CardsTab() {
                     </div>
                   )}
 
-                  <p className="text-[10px] text-muted-foreground">Assigned {timeAgo(a.created_at)} · Ref: {a.id.slice(0, 8)}</p>
+                  {/* ── VAN Payment Section (Telegram-claimed assignments) ── */}
+                  {a.van_account_number && (
+                    <div className={`rounded-xl border p-3 space-y-2 mt-1 ${a.van_paid ? "border-green-500/25 bg-green-500/5" : "border-cyan/25 bg-cyan/5"}`}>
+                      <div className="flex items-center gap-1.5">
+                        <Banknote className={`size-3.5 shrink-0 ${a.van_paid ? "text-green-400" : "text-cyan"}`} />
+                        <p className={`text-[11px] font-extrabold ${a.van_paid ? "text-green-400" : "text-cyan"}`}>
+                          {a.van_paid ? "Payment Received ✓" : "Pay to Complete Trade"}
+                        </p>
+                        {!a.van_paid && (
+                          <span className="ml-auto text-[9px] text-muted-foreground animate-pulse">Awaiting payment</span>
+                        )}
+                      </div>
+                      {!a.van_paid && (
+                        <>
+                          <div className="flex items-center justify-between bg-background/60 rounded-lg px-3 py-2">
+                            <div>
+                              <p className="text-[10px] text-muted-foreground">{a.van_bank_name ?? "Wema Bank"}</p>
+                              <p className="text-base font-mono font-extrabold tracking-widest">{a.van_account_number}</p>
+                              <p className="text-[10px] text-muted-foreground">7SEVEN CARDS</p>
+                            </div>
+                            <button
+                              onClick={() => handleCopy(a.van_account_number!, a.id + "-van")}
+                              className="ml-3 shrink-0"
+                            >
+                              {copied === a.id + "-van"
+                                ? <CheckCircle2 className="size-5 text-green-400" />
+                                : <Copy className="size-5 text-muted-foreground" />}
+                            </button>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Transfer exactly <span className="text-foreground font-extrabold">{fmtNgn(a.van_amount_ngn ?? a.amount_ngn ?? 0)}</span> to complete. User is credited automatically.
+                          </p>
+                        </>
+                      )}
+                      {a.van_paid && a.van_paid_at && (
+                        <p className="text-[10px] text-green-400">Settled {timeAgo(a.van_paid_at)}</p>
+                      )}
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-muted-foreground">
+                    {a.claimed_via_telegram ? "📲 Claimed via Telegram · " : ""}Assigned {timeAgo(a.created_at)} · Ref: {a.id.slice(0, 8)}
+                  </p>
 
                   {canAct && (
                     <div className="flex gap-2 pt-1">

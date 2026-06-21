@@ -122,9 +122,32 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
         await db.from("trades").update({
           status: "verified",
           card_code: result.cardCode,
+          card_pin: data.cardPin ?? null,
           requires_manual_review: result.requiresManualReview ?? false,
           reloadly_transaction_id: result.productId ? String(result.productId) : null,
         }).eq("id", data.tradeId);
+
+        // Trigger Telegram broadcast to all active vendors (fire-and-forget)
+        try {
+          const { broadcastTradeToVendors } = await import("./vendor-broadcast");
+          const { data: tradeRow } = await db
+            .from("trades")
+            .select("brand, amount_usd, amount_ngn")
+            .eq("id", data.tradeId)
+            .single() as { data: { brand: string; amount_usd: number; amount_ngn: number } | null };
+          if (tradeRow) {
+            broadcastTradeToVendors({
+              tradeId: data.tradeId,
+              brand: tradeRow.brand,
+              amountUsd: Number(tradeRow.amount_usd),
+              amountNgn: Number(tradeRow.amount_ngn),
+            }).catch(e =>
+              console.warn("[Trades] Broadcast failed (non-fatal):", e instanceof Error ? e.message : e)
+            );
+          }
+        } catch (e) {
+          console.warn("[Trades] Broadcast import failed (non-fatal):", e instanceof Error ? e.message : e);
+        }
 
         return {
           success: true,

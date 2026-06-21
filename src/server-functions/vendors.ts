@@ -45,6 +45,7 @@ type VendorProfile = {
 type CardAssignment = {
   id: string;
   vendor_id: string;
+  trade_id: string | null;
   brand: string;
   region: string | null;
   amount_usd: number;
@@ -53,8 +54,17 @@ type CardAssignment = {
   card_pin: string | null;
   status: "assigned" | "viewed" | "redeemed" | "failed" | "cancelled";
   telegram_sent: boolean;
+  claimed_via_telegram: boolean;
   viewed_at: string | null;
   redeemed_at: string | null;
+  completed_at: string | null;
+  failed_at: string | null;
+  van_account_number: string | null;
+  van_bank_name: string | null;
+  van_amount_ngn: number | null;
+  van_paid: boolean;
+  van_paid_at: string | null;
+  van_squad_ref: string | null;
   notes: string | null;
   created_at: string;
 };
