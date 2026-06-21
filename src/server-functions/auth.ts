@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { getWebRequest } from "@tanstack/react-start/server";
+import { getRequest } from "@tanstack/react-start/server";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
 
@@ -7,7 +7,7 @@ import { requireUser } from "../lib/auth-server";
 // Safe: reads session from HTTP-only cookie; never trusts client-supplied IDs.
 export const getSessionUser = createServerFn({ method: "GET" }).handler(async () => {
   try {
-    const request = getWebRequest();
+    const request = getRequest();
     const cookieHeader = request?.headers.get("cookie") ?? "";
 
     const tokenMatch = cookieHeader.match(/sb-[^-]+-auth-token=([^;]+)/);
