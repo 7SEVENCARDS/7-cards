@@ -418,6 +418,103 @@ export default {
       }
     }
 
+    // GET /api/admin/billing/plans — all active subscription plans
+    if (request.method === "GET" && url.pathname === "/api/admin/billing/plans") {
+      if (!allow(rlKey("admin_plans", ip), 30, 60_000)) {
+        return addSecurityHeaders(tooManyRequests(60));
+      }
+      const auth = await adminAuthFromRawRequest(request);
+      if (auth instanceof Response) return addSecurityHeaders(auth);
+      try {
+        const { data, error } = await auth.db
+          .from("api_subscription_plans")
+          .select("*")
+          .eq("is_active", true)
+          .order("sort_order");
+        if (error) return addSecurityHeaders(jsonErr(error.message, 500));
+        return addSecurityHeaders(jsonOk({ plans: data ?? [] }));
+      } catch (e) {
+        return addSecurityHeaders(jsonErr(String(e), 500));
+      }
+    }
+
+    // GET /api/admin/tenants/:tenantId/billing — current + last 3 months billing summary
+    if (request.method === "GET" && /^\/api\/admin\/tenants\/[^/]+\/billing$/.test(url.pathname)) {
+      if (!allow(rlKey("admin_billing", ip), 30, 60_000)) {
+        return addSecurityHeaders(tooManyRequests(60));
+      }
+      const auth = await adminAuthFromRawRequest(request);
+      if (auth instanceof Response) return addSecurityHeaders(auth);
+      const tenantId = url.pathname.split("/")[4];
+      try {
+        const { data: cycles, error } = await auth.db
+          .from("api_tenant_billing_cycles")
+          .select("id, plan_id, billing_month, platform_fee_ngn, trade_fee_ngn, support_fee_ngn, trade_count, trade_volume_ngn, status, invoiced_at, paid_at")
+          .eq("tenant_id", tenantId)
+          .order("billing_month", { ascending: false })
+          .limit(4);
+        if (error) return addSecurityHeaders(jsonErr(error.message, 500));
+
+        const currentMonth = new Date();
+        currentMonth.setDate(1);
+        currentMonth.setHours(0, 0, 0, 0);
+
+        const rows = (cycles ?? []).map((c: Record<string, unknown>) => ({
+          ...c,
+          total_fee_ngn:
+            Number(c.platform_fee_ngn ?? 0) +
+            Number(c.trade_fee_ngn ?? 0) +
+            Number(c.support_fee_ngn ?? 0),
+        }));
+
+        return addSecurityHeaders(jsonOk({
+          current_cycle: rows[0] ?? null,
+          history: rows.slice(1),
+        }));
+      } catch (e) {
+        return addSecurityHeaders(jsonErr(String(e), 500));
+      }
+    }
+
+    // GET /api/admin/tenants/:tenantId/usage — last 14 days trade counts (sparkline)
+    if (request.method === "GET" && /^\/api\/admin\/tenants\/[^/]+\/usage$/.test(url.pathname)) {
+      if (!allow(rlKey("admin_usage", ip), 30, 60_000)) {
+        return addSecurityHeaders(tooManyRequests(60));
+      }
+      const auth = await adminAuthFromRawRequest(request);
+      if (auth instanceof Response) return addSecurityHeaders(auth);
+      const tenantId = url.pathname.split("/")[4];
+      try {
+        const since = new Date();
+        since.setDate(since.getDate() - 13);
+        since.setHours(0, 0, 0, 0);
+
+        const { data: rows, error } = await auth.db
+          .from("api_tenant_trades")
+          .select("created_at")
+          .eq("tenant_id", tenantId)
+          .gte("created_at", since.toISOString());
+        if (error) return addSecurityHeaders(jsonErr(error.message, 500));
+
+        // Build day buckets for the last 14 days
+        const buckets: Record<string, number> = {};
+        for (let i = 13; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          buckets[d.toISOString().slice(0, 10)] = 0;
+        }
+        for (const row of (rows ?? [])) {
+          const day = (row as Record<string, string>).created_at.slice(0, 10);
+          if (day in buckets) buckets[day]++;
+        }
+
+        const usage = Object.entries(buckets).map(([day, count]) => ({ day, count }));
+        return addSecurityHeaders(jsonOk({ usage }));
+      } catch (e) {
+        return addSecurityHeaders(jsonErr(String(e), 500));
+      }
+    }
+
     // GET /api/admin/tenants/:tenantId/deliveries — last 25 webhook delivery attempts
     if (request.method === "GET" && /^\/api\/admin\/tenants\/[^/]+\/deliveries$/.test(url.pathname)) {
       if (!allow(rlKey("admin_deliveries", ip), 30, 60_000)) {

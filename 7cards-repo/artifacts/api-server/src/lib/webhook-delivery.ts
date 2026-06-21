@@ -109,15 +109,32 @@ async function attemptDelivery(
     responseText = (e instanceof Error ? e.message : String(e)).slice(0, 500);
   }
 
+  const now = new Date().toISOString();
+  const nextAttemptNum = attempt + 1;
+  const nextRetryAt = nextAttemptNum < MAX_ATTEMPTS && !success
+    ? new Date(Date.now() + (BACKOFF_MS[nextAttemptNum] ?? 600_000)).toISOString()
+    : null;
+
   const updateData: Record<string, unknown> = {
-    attempt_count: attempt + 1,
-    last_attempt_at: new Date().toISOString(),
+    // Legacy tracking columns
+    attempt_count:    nextAttemptNum,
+    last_attempt_at:  now,
     last_status_code: statusCode,
-    last_response: responseText,
+    last_response:    responseText,
+    // New status columns (migration 022)
+    attempt_number: nextAttemptNum,
+    response_code:  statusCode,
+    attempted_at:   now,
+    next_retry_at:  nextRetryAt,
+    status: success
+      ? "delivered"
+      : nextAttemptNum >= MAX_ATTEMPTS
+        ? "failed"
+        : "retrying",
   };
 
   if (success) {
-    updateData.delivered_at = new Date().toISOString();
+    updateData.delivered_at = now;
     await db
       .from("api_webhook_deliveries")
       .update(updateData)
@@ -130,8 +147,8 @@ async function attemptDelivery(
     .update(updateData)
     .eq("id", deliveryId);
 
-  if (attempt + 1 < MAX_ATTEMPTS) {
-    scheduleDelivery(endpointId, deliveryId, url, secret, payload, attempt + 1);
+  if (nextAttemptNum < MAX_ATTEMPTS) {
+    scheduleDelivery(endpointId, deliveryId, url, secret, payload, nextAttemptNum);
   } else {
     await db
       .from("api_webhook_endpoints")

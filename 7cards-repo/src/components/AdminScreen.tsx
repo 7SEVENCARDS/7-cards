@@ -463,6 +463,68 @@ type WebhookDelivery = {
   endpoint_url: string | null;
 };
 
+type SubPlan = {
+  id: string;
+  name: string;
+  monthly_fee_ngn: number;
+  trade_fee_pct: number;
+  support_staff_slots: number;
+  support_staff_monthly_ngn: number;
+  rate_limit_rpm: number;
+  description: string;
+};
+
+type BillingCycle = {
+  id: string;
+  plan_id: string;
+  billing_month: string;
+  platform_fee_ngn: number;
+  trade_fee_ngn: number;
+  support_fee_ngn: number;
+  total_fee_ngn: number;
+  trade_count: number;
+  trade_volume_ngn: number;
+  status: "open" | "invoiced" | "paid" | "overdue";
+  invoiced_at: string | null;
+  paid_at: string | null;
+};
+
+type UsageDay = { day: string; count: number };
+
+const NGN = (n: number) =>
+  "₦" + Math.round(n).toLocaleString("en-NG");
+
+const PLAN_COLORS: Record<string, string> = {
+  starter:      "text-muted-foreground bg-secondary",
+  growth:       "text-cyan bg-cyan/10",
+  professional: "text-purple-400 bg-purple-500/10",
+  enterprise:   "text-gold bg-gold/10",
+  free:         "text-muted-foreground bg-secondary",
+  pro:          "text-cyan bg-cyan/10",
+};
+
+function TinySparkline({ data, className }: { data: UsageDay[]; className?: string }) {
+  if (!data.length) return null;
+  const counts = data.map(d => d.count);
+  const max = Math.max(...counts, 1);
+  const W = 80; const H = 24; const n = counts.length;
+  const pts = counts.map((c, i) =>
+    `${(i / (n - 1)) * W},${H - (c / max) * (H - 2) - 1}`
+  ).join(" ");
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className={className ?? "w-20 h-6"} preserveAspectRatio="none">
+      <polyline
+        points={pts}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 type ApiTenant = {
   id: string;
   name: string;
@@ -503,6 +565,13 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
   const [deliveries, setDeliveries] = useState<Record<string, WebhookDelivery[]>>({});
   const [deliveriesLoading, setDeliveriesLoading] = useState<string | null>(null);
   const [showDeliveriesId, setShowDeliveriesId] = useState<string | null>(null);
+  const [plans, setPlans] = useState<SubPlan[]>([]);
+  const [showPlans, setShowPlans] = useState(false);
+  const [billing, setBilling] = useState<Record<string, { current: BillingCycle | null; history: BillingCycle[] }>>({});
+  const [billingLoading, setBillingLoading] = useState<string | null>(null);
+  const [showBillingId, setShowBillingId] = useState<string | null>(null);
+  const [usage, setUsage] = useState<Record<string, UsageDay[]>>({});
+  const [usageLoading, setUsageLoading] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -612,6 +681,51 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
     }
   }, [showDeliveriesId, deliveries, loadDeliveries]);
 
+  // Load subscription plans on mount (for plan picker + reference section)
+  useEffect(() => {
+    fetch("/api/admin/billing/plans")
+      .then(r => r.json() as Promise<{ plans: SubPlan[] }>)
+      .then(j => setPlans(j.plans ?? []))
+      .catch(() => {});
+  }, []);
+
+  const loadBilling = useCallback(async (tenantId: string) => {
+    setBillingLoading(tenantId);
+    try {
+      const r = await fetch(`/api/admin/tenants/${tenantId}/billing`);
+      if (!r.ok) throw new Error(await r.text());
+      const j = await r.json() as { current_cycle: BillingCycle | null; history: BillingCycle[] };
+      setBilling(prev => ({ ...prev, [tenantId]: { current: j.current_cycle, history: j.history } }));
+    } catch (e) {
+      console.error("[ApiTenantsTab] loadBilling failed:", e);
+    } finally {
+      setBillingLoading(null);
+    }
+  }, []);
+
+  const loadUsage = useCallback(async (tenantId: string) => {
+    setUsageLoading(tenantId);
+    try {
+      const r = await fetch(`/api/admin/tenants/${tenantId}/usage`);
+      if (!r.ok) throw new Error(await r.text());
+      const j = await r.json() as { usage: UsageDay[] };
+      setUsage(prev => ({ ...prev, [tenantId]: j.usage }));
+    } catch (e) {
+      console.error("[ApiTenantsTab] loadUsage failed:", e);
+    } finally {
+      setUsageLoading(null);
+    }
+  }, []);
+
+  const toggleBilling = useCallback((tenantId: string) => {
+    if (showBillingId === tenantId) {
+      setShowBillingId(null);
+    } else {
+      setShowBillingId(tenantId);
+      if (!billing[tenantId]) loadBilling(tenantId);
+    }
+  }, [showBillingId, billing, loadBilling]);
+
   const openEdit = useCallback((tenant: ApiTenant) => {
     setEditPlan(tenant.plan);
     setEditRpm(tenant.rate_limit_rpm);
@@ -649,10 +763,7 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
     s === "suspended" ? "text-gold bg-gold/10" :
     "text-red-400 bg-red-500/10";
 
-  const planColor = (p: string) =>
-    p === "enterprise" ? "text-purple-400 bg-purple-500/10" :
-    p === "pro" ? "text-cyan bg-cyan/10" :
-    "text-muted-foreground bg-secondary";
+  const planColor = (p: string) => PLAN_COLORS[p] ?? "text-muted-foreground bg-secondary";
 
   return (
     <div className="space-y-4 px-5 py-4">
@@ -751,6 +862,45 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
         </div>
       </div>
 
+      {/* Subscription plans reference */}
+      {plans.length > 0 && (
+        <div className="bg-card border border-border rounded-2xl overflow-hidden">
+          <button className="w-full flex items-center justify-between px-4 py-3"
+            onClick={() => setShowPlans(v => !v)}>
+            <span className="text-[11px] font-bold flex items-center gap-1.5">
+              <Key className="size-3.5 text-gold" />
+              Subscription Plans
+            </span>
+            <ChevronRight className={`size-3.5 text-muted-foreground transition-transform ${showPlans ? "rotate-90" : ""}`} />
+          </button>
+          {showPlans && (
+            <div className="border-t border-border/40 p-3 grid grid-cols-2 gap-2">
+              {plans.map(p => (
+                <div key={p.id} className={`rounded-xl border p-2.5 space-y-1.5 ${
+                  p.id === "enterprise" ? "border-gold/20 bg-gold/5" :
+                  p.id === "professional" ? "border-purple-400/20 bg-purple-500/5" :
+                  p.id === "growth" ? "border-cyan/20 bg-cyan/5" :
+                  "border-border bg-secondary/30"
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] font-bold">{p.name}</p>
+                    <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${PLAN_COLORS[p.id]}`}>
+                      {(p.trade_fee_pct * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <p className="text-[13px] font-extrabold">{NGN(p.monthly_fee_ngn)}<span className="text-[9px] font-normal text-muted-foreground">/mo</span></p>
+                  <div className="space-y-0.5 text-[9px] text-muted-foreground">
+                    <p>• {p.rate_limit_rpm} req/min</p>
+                    <p>• {p.support_staff_slots} staff slot{p.support_staff_slots > 1 ? "s" : ""} ({NGN(p.support_staff_monthly_ngn)}/slot)</p>
+                    <p>• {(p.trade_fee_pct * 100).toFixed(1)}% fee per trade</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Tenant list */}
       {loading && <CenterLoader />}
       {!loading && !tenants.length && (
@@ -762,16 +912,22 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
         const isExpanded = expandedId === tenant.id;
         const isActing = actionLoading?.includes(tenant.id);
 
+        const tenantUsage = usage[tenant.id] ?? [];
+
         return (
           <div key={tenant.id} className="bg-card border border-border rounded-2xl overflow-hidden">
             {/* Collapsed row */}
             <button className="w-full flex items-center gap-3 p-4 text-left"
-              onClick={() => setExpandedId(isExpanded ? null : tenant.id)}>
+              onClick={() => {
+                const next = isExpanded ? null : tenant.id;
+                setExpandedId(next);
+                if (next && !usage[next]) loadUsage(next);
+              }}>
               <div className="size-10 rounded-xl bg-cyan/10 grid place-items-center flex-shrink-0">
                 <Building2 className="size-5 text-cyan" />
               </div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <p className="text-sm font-bold truncate">{tenant.name}</p>
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusColor(tenant.status)}`}>
                     {tenant.status}
@@ -790,6 +946,11 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
                   </p>
                 )}
               </div>
+              {/* 14-day trade sparkline */}
+              {tenantUsage.length > 0 && (
+                <TinySparkline data={tenantUsage}
+                  className="w-14 h-5 flex-shrink-0 text-cyan/60" />
+              )}
               <ChevronRight className={`size-4 text-muted-foreground flex-shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
             </button>
 
@@ -864,24 +1025,30 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
                     {/* Plan picker */}
                     <div>
                       <p className="text-[10px] text-muted-foreground mb-1.5">Plan</p>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        {(["free", "pro", "enterprise"] as const).map(p => (
-                          <button key={p} onClick={() => {
-                            setEditPlan(p);
-                            setEditRpm(p === "free" ? 60 : p === "pro" ? 300 : 1500);
-                          }}
-                            className={`py-2 rounded-xl text-[11px] font-bold border transition-colors ${
-                              editPlan === p
-                                ? p === "enterprise"
-                                  ? "bg-purple-500/20 border-purple-400/40 text-purple-300"
-                                  : p === "pro"
-                                    ? "bg-cyan/20 border-cyan/40 text-cyan"
-                                    : "bg-secondary border-border text-foreground"
-                                : "bg-transparent border-border/30 text-muted-foreground"
-                            }`}>
-                            {p === "free" ? "Free" : p === "pro" ? "Pro" : "Enterprise"}
-                          </button>
-                        ))}
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {plans.length > 0
+                          ? plans.map(p => (
+                            <button key={p.id}
+                              onClick={() => { setEditPlan(p.id); setEditRpm(p.rate_limit_rpm); }}
+                              className={`py-2 px-2 rounded-xl text-left border transition-colors ${
+                                editPlan === p.id
+                                  ? `${PLAN_COLORS[p.id] ?? ""} border-current/30`
+                                  : "bg-transparent border-border/30 text-muted-foreground"
+                              }`}>
+                              <p className="text-[11px] font-bold leading-none">{p.name}</p>
+                              <p className="text-[9px] mt-0.5 opacity-80">{NGN(p.monthly_fee_ngn)}/mo · {(p.trade_fee_pct * 100).toFixed(1)}%</p>
+                            </button>
+                          ))
+                          : (["starter","growth","professional","enterprise"] as const).map(p => (
+                            <button key={p}
+                              onClick={() => { setEditPlan(p); setEditRpm(p === "starter" ? 60 : p === "growth" ? 300 : p === "professional" ? 600 : 1500); }}
+                              className={`py-2 px-2 rounded-xl text-left border transition-colors ${
+                                editPlan === p ? `${PLAN_COLORS[p]} border-current/30` : "bg-transparent border-border/30 text-muted-foreground"
+                              }`}>
+                              <p className="text-[11px] font-bold capitalize">{p}</p>
+                            </button>
+                          ))
+                        }
                       </div>
                     </div>
 
@@ -898,7 +1065,7 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
                         className="w-full accent-cyan h-1.5" />
                       <div className="flex justify-between text-[9px] text-muted-foreground/60 mt-1">
                         <span>10</span>
-                        <span>Free: 60 · Pro: 300 · Enterprise: 1500</span>
+                        <span>Starter: 60 · Growth: 300 · Pro: 600 · Enterprise: 1500</span>
                         <span>3000</span>
                       </div>
                     </div>
@@ -946,6 +1113,140 @@ function ApiTenantsTab({ adminId: _adminId }: { adminId: string }) {
                     Edit Plan &amp; Rate Limit
                   </button>
                 )}
+
+                {/* Sparkline + usage context (14-day view) */}
+                {tenantUsage.length > 0 && (() => {
+                  const total = tenantUsage.reduce((s, d) => s + d.count, 0);
+                  const peak = Math.max(...tenantUsage.map(d => d.count));
+                  return (
+                    <div className="bg-secondary/40 rounded-xl p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide">14-day Activity</p>
+                        <span className="text-[10px] text-muted-foreground">{total} trades · peak {peak}/day</span>
+                      </div>
+                      <TinySparkline data={tenantUsage} className="w-full h-8 text-cyan" />
+                      <div className="flex justify-between text-[9px] text-muted-foreground/60 mt-1">
+                        <span>{tenantUsage[0]?.day?.slice(5)}</span>
+                        <span>{tenantUsage[tenantUsage.length - 1]?.day?.slice(5)}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+                {usageLoading === tenant.id && (
+                  <div className="bg-secondary/40 rounded-xl p-3 flex items-center gap-2">
+                    <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+                    <span className="text-[11px] text-muted-foreground">Loading activity…</span>
+                  </div>
+                )}
+
+                {/* Billing summary */}
+                <div className="border border-border/40 rounded-2xl overflow-hidden">
+                  <button className="w-full flex items-center justify-between px-3 py-2.5 text-left"
+                    onClick={() => toggleBilling(tenant.id)}>
+                    <span className="flex items-center gap-1.5 text-[11px] font-bold">
+                      <DollarSign className="size-3.5 text-gold" />
+                      Billing
+                      {billing[tenant.id]?.current && (
+                        <span className="ml-1 font-mono text-gold">
+                          {NGN(billing[tenant.id].current!.total_fee_ngn)}
+                        </span>
+                      )}
+                    </span>
+                    {billingLoading === tenant.id
+                      ? <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+                      : <ChevronRight className={`size-3.5 text-muted-foreground transition-transform ${showBillingId === tenant.id ? "rotate-90" : ""}`} />
+                    }
+                  </button>
+
+                  {showBillingId === tenant.id && (
+                    <div className="border-t border-border/40">
+                      {billingLoading === tenant.id && (
+                        <div className="flex items-center justify-center py-5">
+                          <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                        </div>
+                      )}
+
+                      {!billingLoading && !billing[tenant.id]?.current && (
+                        <div className="px-3 py-5 text-center">
+                          <p className="text-[11px] text-muted-foreground">No billing cycle yet this month</p>
+                          <p className="text-[10px] text-muted-foreground/60 mt-0.5">Fees accrue when trades are dispatched or at month open</p>
+                        </div>
+                      )}
+
+                      {!billingLoading && billing[tenant.id]?.current && (() => {
+                        const c = billing[tenant.id].current!;
+                        const cycleStatusColor =
+                          c.status === "paid"     ? "text-cyan bg-cyan/10" :
+                          c.status === "invoiced" ? "text-gold bg-gold/10" :
+                          c.status === "overdue"  ? "text-red-400 bg-red-500/10" :
+                          "text-muted-foreground bg-secondary";
+                        return (
+                          <div className="px-3 py-3 space-y-2.5">
+                            {/* Current month header */}
+                            <div className="flex items-center justify-between">
+                              <p className="text-[11px] font-bold">
+                                {new Date(c.billing_month).toLocaleDateString("en-NG", { month: "long", year: "numeric" })}
+                              </p>
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${cycleStatusColor}`}>
+                                {c.status}
+                              </span>
+                            </div>
+
+                            {/* Fee breakdown */}
+                            <div className="space-y-1.5 text-xs">
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Platform fee</span>
+                                <span className="font-bold">{NGN(c.platform_fee_ngn)}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">
+                                  Trade fee ({plans.find(p => p.id === c.plan_id)
+                                    ? `${(plans.find(p => p.id === c.plan_id)!.trade_fee_pct * 100).toFixed(1)}%`
+                                    : "7%"} × {c.trade_count} trade{c.trade_count !== 1 ? "s" : ""})
+                                </span>
+                                <span className="font-bold">{NGN(c.trade_fee_ngn)}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Support staff</span>
+                                <span className="font-bold">{NGN(c.support_fee_ngn)}</span>
+                              </div>
+                              <div className="flex justify-between border-t border-border/40 pt-1.5 mt-1.5">
+                                <span className="font-bold">Total this month</span>
+                                <span className="font-extrabold text-gold">{NGN(c.total_fee_ngn)}</span>
+                              </div>
+                              <div className="flex justify-between text-[10px] text-muted-foreground">
+                                <span>Volume processed</span>
+                                <span>{NGN(c.trade_volume_ngn)}</span>
+                              </div>
+                            </div>
+
+                            {/* Past months mini-history */}
+                            {billing[tenant.id].history.length > 0 && (
+                              <div className="pt-1 border-t border-border/40 space-y-1">
+                                <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wide">Previous months</p>
+                                {billing[tenant.id].history.map(h => (
+                                  <div key={h.id} className="flex items-center justify-between text-[10px]">
+                                    <span className="text-muted-foreground">
+                                      {new Date(h.billing_month).toLocaleDateString("en-NG", { month: "short", year: "numeric" })}
+                                    </span>
+                                    <div className="flex items-center gap-2">
+                                      <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
+                                        h.status === "paid" ? "text-cyan bg-cyan/10" :
+                                        h.status === "overdue" ? "text-red-400 bg-red-500/10" :
+                                        "text-muted-foreground bg-secondary"
+                                      }`}>{h.status}</span>
+                                      <span className="font-bold">{NGN(h.total_fee_ngn)}</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
 
                 {/* API info quick-reference */}
                 <div className="bg-secondary/40 rounded-xl p-3 space-y-1">

@@ -158,6 +158,15 @@ router.post("/", async (req, res) => {
       trade_id: trade.id, customer_ref,
       vendor_name: (dispatchResult as { vendorName?: string }).vendorName,
     }).catch(() => {});
+
+    // Record 7% platform fee for this trade in the tenant's monthly billing cycle
+    db.rpc("record_api_trade_fee", {
+      p_tenant_id:  tenant.tenantId,
+      p_trade_id:   trade.id,
+      p_amount_ngn: amountNgn,
+    } as never).catch((e: unknown) => {
+      console.error("[billing] record_api_trade_fee failed:", e);
+    });
   }
 
   res.status(201).json({
@@ -290,6 +299,14 @@ router.post("/batch", async (req, res) => {
 
     if (dispatchResult.ok) {
       fireWebhookEvent(tenant.tenantId, "trade.dispatched", { trade_id: trade.id, customer_ref: card.customer_ref, batch_ref }).catch(() => {});
+
+      db.rpc("record_api_trade_fee", {
+        p_tenant_id:  tenant.tenantId,
+        p_trade_id:   trade.id,
+        p_amount_ngn: amountNgn,
+      } as never).catch((e: unknown) => {
+        console.error("[billing] batch record_api_trade_fee failed:", e);
+      });
     }
 
     results.push({ position, trade_id: trade.id, status: "verified", customer_ref: card.customer_ref });
