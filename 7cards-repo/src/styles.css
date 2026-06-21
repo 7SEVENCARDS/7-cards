@@ -1,0 +1,168 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* 7SEVEN brand tokens */
+  --color-jungle: var(--jungle);
+  --color-jungle-deep: var(--jungle-deep);
+  --color-gold: var(--gold);
+  --color-pink: var(--pink);
+  --color-cyan: var(--cyan);
+  --color-orange: var(--orange);
+  --color-sand: var(--sand);
+  --color-midnight: var(--midnight);
+  --color-cloud: var(--cloud);
+
+  --font-display: "Sora", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  --radius: 1rem;
+
+  /* Brand */
+  --jungle: oklch(0.35 0.09 158);
+  --jungle-deep: oklch(0.25 0.07 158);
+  --gold: oklch(0.87 0.17 92);
+  --pink: oklch(0.66 0.27 0);
+  --cyan: oklch(0.88 0.17 180);
+  --orange: oklch(0.72 0.19 42);
+  --sand: oklch(0.94 0.025 75);
+  --midnight: oklch(0.18 0.02 260);
+  --cloud: oklch(0.985 0.003 260);
+
+  /* Dark by default — feels right for a hustle app */
+  --background: var(--midnight);
+  --foreground: oklch(0.97 0.01 90);
+  --card: oklch(0.22 0.025 260);
+  --card-foreground: oklch(0.97 0.01 90);
+  --popover: oklch(0.22 0.025 260);
+  --popover-foreground: oklch(0.97 0.01 90);
+  --primary: var(--jungle);
+  --primary-foreground: oklch(0.97 0.01 90);
+  --secondary: oklch(0.28 0.03 260);
+  --secondary-foreground: oklch(0.97 0.01 90);
+  --muted: oklch(0.26 0.025 260);
+  --muted-foreground: oklch(0.7 0.02 260);
+  --accent: var(--gold);
+  --accent-foreground: var(--midnight);
+  --destructive: oklch(0.65 0.22 25);
+  --destructive-foreground: oklch(0.98 0.01 90);
+  --border: oklch(0.3 0.02 260);
+  --input: oklch(0.3 0.02 260);
+  --ring: var(--gold);
+
+  --gradient-hero: linear-gradient(135deg, var(--jungle-deep) 0%, var(--jungle) 50%, oklch(0.4 0.12 158) 100%);
+  --gradient-gold: linear-gradient(135deg, var(--gold) 0%, var(--orange) 100%);
+  --gradient-pink: linear-gradient(135deg, var(--pink) 0%, oklch(0.55 0.25 340) 100%);
+  --gradient-cyan: linear-gradient(135deg, var(--cyan) 0%, oklch(0.7 0.15 200) 100%);
+  --gradient-card: linear-gradient(160deg, oklch(0.24 0.03 260) 0%, oklch(0.2 0.025 260) 100%);
+
+  --shadow-glow-gold: 0 10px 40px -8px oklch(0.87 0.17 92 / 0.45);
+  --shadow-glow-pink: 0 10px 40px -8px oklch(0.66 0.27 0 / 0.4);
+  --shadow-glow-jungle: 0 10px 40px -8px oklch(0.35 0.09 158 / 0.5);
+  --shadow-card: 0 8px 24px -10px oklch(0 0 0 / 0.4);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html, body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+}
+
+@utility text-gradient-gold {
+  background: var(--gradient-gold);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@utility bg-gradient-hero {
+  background: var(--gradient-hero);
+}
+@utility bg-gradient-gold {
+  background: var(--gradient-gold);
+}
+@utility bg-gradient-pink {
+  background: var(--gradient-pink);
+}
+@utility bg-gradient-cyan {
+  background: var(--gradient-cyan);
+}
+@utility bg-gradient-card {
+  background: var(--gradient-card);
+}
+
+@utility shadow-glow-gold { box-shadow: var(--shadow-glow-gold); }
+@utility shadow-glow-pink { box-shadow: var(--shadow-glow-pink); }
+@utility shadow-glow-jungle { box-shadow: var(--shadow-glow-jungle); }
+@utility shadow-card { box-shadow: var(--shadow-card); }
+
+@utility scrollbar-hide {
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 oklch(0.88 0.17 180 / 0.6); }
+  70% { box-shadow: 0 0 0 12px oklch(0.88 0.17 180 / 0); }
+  100% { box-shadow: 0 0 0 0 oklch(0.88 0.17 180 / 0); }
+}
+@utility pulse-ring {
+  animation: pulse-ring 1.8s cubic-bezier(0.66, 0, 0, 1) infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@utility shimmer-gold {
+  background: linear-gradient(90deg, var(--gold) 0%, oklch(0.95 0.1 92) 50%, var(--gold) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 2.5s linear infinite;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
