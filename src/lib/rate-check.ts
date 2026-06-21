@@ -230,35 +230,42 @@ export async function handleRateCheckReply(
     const newRate  = Math.round(numeric * 100) / 100;
     const oldRate  = Number(vendor.telegram_bot_state_data?.old_rate ?? null) || null;
 
-    // Save the new rate
-    await db.from("vendors").update({
-      preferred_rate_ngn_per_usd: newRate,
-      rate_last_updated_at:       new Date().toISOString(),
-      telegram_bot_state:         null,
-      telegram_bot_state_at:      null,
-      telegram_bot_state_data:    null,
-    }).eq("id", vendor.id);
-
-    // Write to immutable rate history
+    // Save as PENDING — admin must approve before it affects live trades.
+    // Write the history row first so we can link vendor → history row.
     const { data: histRow } = await db.from("vendor_rate_history").insert({
-      vendor_id:  vendor.id,
-      old_rate:   oldRate,
-      new_rate:   newRate,
+      vendor_id:   vendor.id,
+      old_rate:    oldRate,
+      new_rate:    newRate,
       changed_via: "telegram",
+      status:      "pending",       // ← pending until admin approves
     }).select("id").single() as { data: { id: string } | null };
 
-    // Confirm to vendor
+    // Stage the pending rate on the vendor row; clear the FSM state.
+    await db.from("vendors").update({
+      pending_rate_ngn_per_usd:  newRate,
+      pending_rate_submitted_at: new Date().toISOString(),
+      pending_rate_history_id:   histRow?.id ?? null,
+      // NOTE: preferred_rate_ngn_per_usd is NOT updated here.
+      // It is only updated when an admin approves via adminApproveVendorRate().
+      telegram_bot_state:        null,
+      telegram_bot_state_at:     null,
+      telegram_bot_state_data:   null,
+    }).eq("id", vendor.id);
+
+    // Confirm to vendor — make it clear the rate is pending review
     await sendTelegramMessage(
       chatId,
       [
-        `✅ <b>Rate Updated!</b>`,
+        `✅ <b>Rate Submitted for Review!</b>`,
         ``,
-        `Your new rate: <b>₦${newRate.toLocaleString("en-NG")}/$1</b>`,
+        `Your requested rate: <b>₦${newRate.toLocaleString("en-NG")}/$1</b>`,
         oldRate
           ? `Previous rate: ₦${Number(oldRate).toLocaleString("en-NG")}/$1`
-          : `This is your first rate on record.`,
+          : `This is your first rate submission.`,
         ``,
-        `Admin has been notified and will review shortly.`,
+        `⏳ <b>Your rate is pending admin approval.</b>`,
+        `It will not affect trade assignments until approved.`,
+        `You will be notified once it goes live.`,
         ``,
         `<i>Next rate check in ~6 hours.</i>`,
       ].join("\n"),

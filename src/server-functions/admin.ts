@@ -524,6 +524,171 @@ export const queryDisputes = createServerFn({ method: "GET" })
     return { disputes: disputes ?? [] };
   });
 
+// ─── Vendor Rate Comparison Dashboard ────────────────────────────────────────
+// Returns all active vendors with their current approved rate, any pending rate
+// submission, and the last 10 rate history entries per vendor.
+export const adminGetVendorRates = createServerFn({ method: "GET" })
+  .validator((d: Record<string, never>) => d)
+  .handler(async () => {
+    const { requireAdmin } = await import("../lib/auth-server");
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    const { data: vendors, error } = await db
+      .from("vendors")
+      .select(`
+        id, business_name, contact_name, tier, status,
+        preferred_rate_ngn_per_usd,
+        pending_rate_ngn_per_usd,
+        pending_rate_submitted_at,
+        pending_rate_history_id,
+        rate_last_updated_at,
+        last_rate_check_sent_at
+      `)
+      .eq("status", "active")
+      .order("preferred_rate_ngn_per_usd", { ascending: false, nullsLast: true }) as {
+        data: Array<{
+          id: string; business_name: string; contact_name: string | null;
+          tier: string; status: string;
+          preferred_rate_ngn_per_usd: number | null;
+          pending_rate_ngn_per_usd: number | null;
+          pending_rate_submitted_at: string | null;
+          pending_rate_history_id: string | null;
+          rate_last_updated_at: string | null;
+          last_rate_check_sent_at: string | null;
+        }> | null;
+        error: unknown;
+      };
+
+    if (error) throw new Error((error as Error).message);
+    if (!vendors?.length) return { vendors: [] };
+
+    // Fetch last 10 history entries for each vendor in one query
+    const vendorIds = vendors.map(v => v.id);
+    const { data: allHistory } = await db
+      .from("vendor_rate_history")
+      .select("id, vendor_id, old_rate, new_rate, changed_via, status, admin_notes, actioned_at, created_at")
+      .in("vendor_id", vendorIds)
+      .order("created_at", { ascending: false }) as {
+        data: Array<{
+          id: string; vendor_id: string; old_rate: number | null; new_rate: number;
+          changed_via: string; status: string; admin_notes: string | null;
+          actioned_at: string | null; created_at: string;
+        }> | null;
+      };
+
+    // Group history by vendor (keep last 10 per vendor)
+    const historyByVendor: Record<string, typeof allHistory> = {};
+    for (const h of (allHistory ?? [])) {
+      if (!historyByVendor[h.vendor_id]) historyByVendor[h.vendor_id] = [];
+      if ((historyByVendor[h.vendor_id]?.length ?? 0) < 10) {
+        historyByVendor[h.vendor_id]!.push(h);
+      }
+    }
+
+    return {
+      vendors: vendors.map(v => ({
+        ...v,
+        history: (historyByVendor[v.id] ?? []) as Array<{
+          id: string; old_rate: number | null; new_rate: number;
+          changed_via: string; status: string; admin_notes: string | null;
+          actioned_at: string | null; created_at: string;
+        }>,
+      })),
+    };
+  });
+
+// ─── Approve a pending vendor rate ───────────────────────────────────────────
+export const adminApproveVendorRate = createServerFn({ method: "POST" })
+  .validator((d: { vendorId: string; notes?: string }) => d)
+  .handler(async ({ data }) => {
+    const { requireAdmin } = await import("../lib/auth-server");
+    const adminId = await requireAdmin();
+    const db = getServerSupabase();
+
+    const { error } = await db.rpc("approve_vendor_rate", {
+      p_vendor_id: data.vendorId,
+      p_admin_id:  adminId,
+      p_notes:     data.notes ?? null,
+    });
+    if (error) throw new Error(error.message);
+    return { success: true };
+  });
+
+// ─── Reject a pending vendor rate ────────────────────────────────────────────
+export const adminRejectVendorRate = createServerFn({ method: "POST" })
+  .validator((d: { vendorId: string; notes?: string }) => d)
+  .handler(async ({ data }) => {
+    const { requireAdmin } = await import("../lib/auth-server");
+    const adminId = await requireAdmin();
+    const db = getServerSupabase();
+
+    const { error } = await db.rpc("reject_vendor_rate", {
+      p_vendor_id: data.vendorId,
+      p_admin_id:  adminId,
+      p_notes:     data.notes ?? null,
+    });
+    if (error) throw new Error(error.message);
+    return { success: true };
+  });
+
+// ─── Admin override: force-set a vendor's rate ───────────────────────────────
+// Bypasses the pending queue — the rate is applied immediately.
+// Creates a new vendor_rate_history row with changed_via='admin' and status='overridden'.
+export const adminOverrideVendorRate = createServerFn({ method: "POST" })
+  .validator((d: { vendorId: string; newRate: number; notes?: string }) => d)
+  .handler(async ({ data }) => {
+    const { requireAdmin } = await import("../lib/auth-server");
+    const adminId = await requireAdmin();
+    const db = getServerSupabase();
+
+    // Fetch current rate for the history delta
+    const { data: vendor } = await db
+      .from("vendors")
+      .select("preferred_rate_ngn_per_usd, pending_rate_ngn_per_usd, pending_rate_history_id")
+      .eq("id", data.vendorId)
+      .single() as {
+        data: {
+          preferred_rate_ngn_per_usd: number | null;
+          pending_rate_ngn_per_usd: number | null;
+          pending_rate_history_id: string | null;
+        } | null;
+      };
+
+    const oldRate = vendor?.preferred_rate_ngn_per_usd ?? null;
+
+    // Mark any pending history row as overridden
+    if (vendor?.pending_rate_history_id) {
+      await db
+        .from("vendor_rate_history")
+        .update({ status: "overridden", approved_by: adminId, actioned_at: new Date().toISOString(), admin_notes: "(superseded by admin override)" })
+        .eq("id", vendor.pending_rate_history_id);
+    }
+
+    // Apply rate and clear any pending submission
+    await db.from("vendors").update({
+      preferred_rate_ngn_per_usd: data.newRate,
+      rate_last_updated_at:       new Date().toISOString(),
+      pending_rate_ngn_per_usd:   null,
+      pending_rate_submitted_at:  null,
+      pending_rate_history_id:    null,
+    }).eq("id", data.vendorId);
+
+    // Write approved override to history
+    await db.from("vendor_rate_history").insert({
+      vendor_id:   data.vendorId,
+      old_rate:    oldRate,
+      new_rate:    data.newRate,
+      changed_via: "admin",
+      status:      "approved",
+      approved_by: adminId,
+      actioned_at: new Date().toISOString(),
+      admin_notes: data.notes ?? null,
+    });
+
+    return { success: true, newRate: data.newRate };
+  });
+
 // ─── Spread Revenue ───────────────────────────────────────────────────────────
 export const getSpreadRevenue = createServerFn({ method: "GET" })
   .inputValidator((d: { days?: number }) => d)

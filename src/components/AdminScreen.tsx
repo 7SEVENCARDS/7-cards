@@ -50,6 +50,7 @@ import {
   processEscrowTrade,
 } from "../server-functions/admin";
 import { AuditLogViewer } from "./AuditLogViewer";
+import { VendorRatePanel } from "./VendorRatePanel";
 import {
   adminGetVendors,
   adminUpdateVendorStatus,
@@ -1330,7 +1331,7 @@ function VendorsTab({ adminId }: { adminId: string }) {
   const [assignForm, setAssignForm] = useState({ brand: "Apple", amountUsd: "", amountNgn: "", cardCode: "", cardPin: "", tradeId: "", notifyTelegram: true });
   const [assigning, setAssigning] = useState(false);
   const [filterStatus, setFilterStatus] = useState<"all" | "pending" | "active" | "suspended">("all");
-  const [vendorSubTab, setVendorSubTab] = useState<"vendors" | "withdrawals" | "leaderboard">("vendors");
+  const [vendorSubTab, setVendorSubTab] = useState<"vendors" | "withdrawals" | "leaderboard" | "rates">("vendors");
 
   // ── Add Vendor modal ──────────────────────────────────────────────────────
   const [addVendorOpen, setAddVendorOpen] = useState(false);
@@ -1503,6 +1504,9 @@ function VendorsTab({ adminId }: { adminId: string }) {
     <>
       {/* Sub-tab toggle */}
       <div className="flex gap-1 p-1 bg-secondary rounded-2xl mx-4 mt-4 mb-2">
+        <button onClick={() => setVendorSubTab("rates")} className={`flex-1 text-xs font-bold py-2 rounded-xl transition-colors ${vendorSubTab === "rates" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}>
+          Rates
+        </button>
         <button onClick={() => setVendorSubTab("vendors")} className={`flex-1 text-xs font-bold py-2 rounded-xl transition-colors ${vendorSubTab === "vendors" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}>
           Vendors ({vendors.length})
         </button>
@@ -1514,6 +1518,11 @@ function VendorsTab({ adminId }: { adminId: string }) {
         </button>
       </div>
 
+      {vendorSubTab === "rates" && (
+        <div className="px-4 pb-6 pt-2">
+          <VendorRatePanel />
+        </div>
+      )}
       {vendorSubTab === "withdrawals" && (
         <div className="p-4 space-y-3">
           {loadingWithdrawals && <CenterLoader />}
