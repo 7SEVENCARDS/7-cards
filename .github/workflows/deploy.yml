@@ -89,7 +89,7 @@ jobs:
           VITE_ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
 
       - name: Deploy to Cloudflare Workers
-        run: pnpm exec wrangler deploy --env production
+        run: pnpm exec wrangler deploy --config wrangler.toml --env production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
