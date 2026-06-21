@@ -49,7 +49,7 @@ export const createPremiumCheckout = createServerFn({ method: "POST" })
       .eq("id", userId)
       .single();
 
-    const email = profile?.email ?? `${userId}@7sevencards.app`;
+    const email = profile?.email ?? `${userId}@7evencards.xyz`;
     const name  = profile?.full_name ?? "7SEVEN User";
 
     const transactionRef = `7SC-PREM-${userId.slice(0, 8)}-${Date.now()}`;
@@ -75,7 +75,7 @@ export const createPremiumCheckout = createServerFn({ method: "POST" })
         email,
         name,
         description: "7SEVEN Premium — Monthly",
-        redirectUrl: `${process.env.VITE_APP_URL ?? "https://7sevencards.app"}/premium/success`,
+        redirectUrl: `${process.env.VITE_APP_URL ?? "https://7evencards.xyz"}/premium/success`,
       });
 
       return { success: true, demo: false, checkoutUrl: result.checkoutUrl, transactionRef };

@@ -135,7 +135,7 @@ export async function handleTelegramReply(opts: {
         `When a new card is available, you'll get a message here.`,
         `Reply <b>YES</b> to claim it first!`,
         ``,
-        `🔗 Vendor portal: https://7sevencards.com/vendor`,
+        `🔗 Vendor portal: https://7evencards.xyz/vendor`,
       ].join("\n"),
       "HTML"
     );
@@ -169,7 +169,7 @@ export async function handleTelegramReply(opts: {
         `Your Telegram account is not linked to any 7SEVEN vendor profile.`,
         `Please update your Telegram username in the vendor portal and try again.`,
         ``,
-        `🔗 https://7sevencards.com/vendor`,
+        `🔗 https://7evencards.xyz/vendor`,
       ].join("\n"),
       "HTML"
     );
@@ -284,7 +284,7 @@ export async function handleTelegramReply(opts: {
       cardCode: trade?.card_code ?? "(contact admin)",
       cardPin: trade?.card_pin ?? null,
       assignmentId,
-      portalUrl: "https://7sevencards.com",
+      portalUrl: "https://7evencards.xyz",
     }),
     "HTML"
   );
@@ -365,7 +365,7 @@ async function provisionAssignmentVAN(
       amount: Math.round(opts.amountNgn),
       preferred_bank: "wema-bank",
       expiry_date: expiresAt.slice(0, 10).replace(/-/g, "/"),
-      callback_url: `${process.env.APP_URL ?? "https://7sevencards.com"}/api/webhooks/squadco/payment`,
+      callback_url: `${process.env.APP_URL ?? "https://7evencards.xyz"}/api/webhooks/squadco/payment`,
       is_permanent: false,
       beneficiary_account: "0000000000",
       meta_data: JSON.stringify({

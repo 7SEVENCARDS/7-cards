@@ -1,26 +1,45 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Cloudflare Workers — 7SEVEN CARDS
+# Production domain: https://7evencards.xyz
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
 #
 # SETUP STEPS:
-#   1. Install Wrangler:    bun add -g wrangler
-#   2. Login:               wrangler login
-#   3. Add secrets:         wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env production
-#                           (repeat for each secret below)
-#   4. Deploy manually:     wrangler deploy --env production
-#      OR push to `main` and GitHub Actions deploys automatically.
+#   1. Set all GitHub Secrets below in repo Settings → Secrets → Actions
+#   2. Push to `main` — GitHub Actions builds and deploys automatically.
+#   OR deploy manually:
+#   1. Install Wrangler:  bun add -g wrangler
+#   2. Login:            wrangler login
+#   3. Deploy:           wrangler deploy --env production
 #
-# Required GitHub Secrets (add in repo Settings → Secrets):
-#   CLOUDFLARE_API_TOKEN   — Cloudflare dashboard → My Profile → API Tokens
-#   CLOUDFLARE_ACCOUNT_ID  — Cloudflare dashboard → right sidebar
-#   VITE_SUPABASE_URL      — Supabase → Settings → API
-#   VITE_SUPABASE_ANON_KEY — Supabase → Settings → API
+# Required GitHub Secrets:
+#   CLOUDFLARE_API_TOKEN      — Cloudflare dashboard → My Profile → API Tokens
+#   CLOUDFLARE_ACCOUNT_ID     — Cloudflare dashboard → right sidebar
+#   VITE_SUPABASE_URL         — Supabase → Settings → API
+#   VITE_SUPABASE_ANON_KEY    — Supabase → Settings → API
 #   SUPABASE_SERVICE_ROLE_KEY — Supabase → Settings → API (keep secret!)
+#   SQUADCO_SECRET_KEY        — Squadco dashboard → API keys
+#   BUSHA_API_KEY             — Busha dashboard
+#   ONESIGNAL_APP_ID          — OneSignal dashboard
+#   ONESIGNAL_REST_API_KEY    — OneSignal dashboard
+#   RELOADLY_CLIENT_ID        — Reloadly dashboard
+#   RELOADLY_CLIENT_SECRET    — Reloadly dashboard
+#   APP_SECRET                — Any strong random string (session signing)
+#   ADMIN_TELEGRAM_BOT_TOKEN  — BotFather
+#   ADMIN_TELEGRAM_BOT_USERNAME — BotFather (without @)
+#   ADMIN_TELEGRAM_CHAT_ID    — Your admin Telegram chat ID
+#   ADMIN_TELEGRAM_WEBHOOK_SECRET — Random string for webhook auth
+#   TELEGRAM_BOT_TOKEN        — BotFather (vendor bot)
+#   TELEGRAM_WEBHOOK_SECRET   — Random string for vendor webhook auth
+#   CRON_SECRET               — Random string for cron auth
+#   ONESIGNAL_ANDROID_CHANNEL_ID — OneSignal → Android channel
+#   SUPPORT_EMAIL             — Override support@7evencards.xyz if needed
+#   SUPPORT_TELEGRAM_CHAT_ID  — Telegram chat for user support
+#   SUPPORT_WHATSAPP          — WhatsApp number (digits only, e.g. 2348012345678)
 # ─────────────────────────────────────────────────────────────────────────────
 
-name            = "seven-cards"
-main            = ".output/server/index.mjs"
-compatibility_date  = "2024-09-23"
+name               = "seven-cards"
+main               = ".output/server/index.mjs"
+compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
 # Static assets (built by Vite)
@@ -33,40 +52,37 @@ binding   = "ASSETS"
 name = "seven-cards-dev"
 
 [env.development.vars]
-SQUADCO_ENV   = "sandbox"
-RELOADLY_ENV  = "sandbox"
-VITE_APP_URL  = "http://localhost:8787"
+SQUADCO_ENV  = "sandbox"
+RELOADLY_ENV = "sandbox"
+VITE_APP_URL = "http://localhost:8787"
+APP_URL      = "http://localhost:8787"
+NODE_ENV     = "development"
 
 # ─── Production (wrangler deploy --env production) ───────────────────────────
 [env.production]
 name = "seven-cards"
 
+# Non-secret runtime config baked into the Worker at deploy time.
+# Secrets (keys, tokens) are injected by GitHub Actions via `wrangler secret put`.
 [env.production.vars]
-SQUADCO_ENV    = "production"
-RELOADLY_ENV   = "production"
-NODE_ENV       = "production"
-IS_DEMO_MODE   = "false"
-# VITE_APP_URL — set this in Cloudflare dashboard after first deploy (your *.workers.dev URL)
-# or add VITE_APP_URL to GitHub Secrets and it is injected at build time
+SQUADCO_ENV  = "production"
+RELOADLY_ENV = "production"
+NODE_ENV     = "production"
+IS_DEMO_MODE = "false"
+VITE_APP_URL = "https://7evencards.xyz"
+APP_URL      = "https://7evencards.xyz"
 
-# Secrets — set via `wrangler secret put <NAME> --env production` or GitHub Actions:
-#   VITE_SUPABASE_URL
-#   VITE_SUPABASE_ANON_KEY
-#   SUPABASE_SERVICE_ROLE_KEY
-#   SQUADCO_SECRET_KEY
-#   BUSHA_API_KEY
-#   ONESIGNAL_APP_ID
-#   ONESIGNAL_REST_API_KEY
-#   RELOADLY_CLIENT_ID
-#   RELOADLY_CLIENT_SECRET
-#   DOJAH_APP_ID
-#   DOJAH_SECRET_KEY
-#   APP_SECRET
+# ─── Custom domain routing (Cloudflare dashboard → Workers → Triggers) ───────
+# After deploying, add a route in the Cloudflare dashboard:
+#   Route: 7evencards.xyz/*
+#   Worker: seven-cards (production)
+# This routes your custom domain to the Worker automatically.
+# DNS: ensure an A record or CNAME for 7evencards.xyz points to Cloudflare (proxied).
 
 # ─── Workers Rate Limiting (distributed, edge-level) ─────────────────────────
 # The app currently uses per-isolate in-process rate limiting (src/lib/rate-limiter.ts).
 # To upgrade to true distributed rate limiting that spans all Worker instances,
-# uncomment the blocks below and update server.ts / server functions to use the bindings
+# uncomment the blocks below and update server.ts to use the bindings
 # (pass `env` down and call `await env.RATE_LIMITER_LOGIN.limit({ key: ip })`).
 #
 # Requires Workers Paid plan. Create namespaces via:

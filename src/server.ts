@@ -150,7 +150,7 @@ export default {
       }
 
       // ── Cron: vendor rate-check (every 6 hours via external scheduler) ──────
-      // Trigger: curl -X POST https://7sevencards.com/api/cron/rate-check \
+      // Trigger: curl -X POST https://7evencards.xyz/api/cron/rate-check \
       //            -H "x-cron-secret: $CRON_SECRET"
       // Cloudflare Workers scheduled handler can hit this instead of its own
       // scheduled() export so the logic stays in one place.

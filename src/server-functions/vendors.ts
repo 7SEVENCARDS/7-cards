@@ -694,7 +694,7 @@ export const provisionVirtualAccount = createServerFn({ method: "POST" })
             first_name: vendor.business_name.split(" ")[0] ?? vendor.business_name,
             last_name: vendor.business_name.split(" ").slice(1).join(" ") || "Vendor",
             mobile_num: vendor.phone ?? "",
-            email: vendor.email ?? `${vendor.id}@vendor.7sevencards.com`,
+            email: vendor.email ?? `${vendor.id}@vendor.7evencards.xyz`,
           }),
         });
         const json = (await res.json()) as {
@@ -1447,7 +1447,7 @@ export async function checkReferralBonus(db: ReturnType<typeof getServerSupabase
           `<b>+₦${bonusNgn.toLocaleString()}</b> has been credited to your vendor wallet! 💰`,
           ``,
           `Keep referring vendors to earn more bonuses.`,
-          `🔗 https://7sevencards.com/vendor`,
+          `🔗 https://7evencards.xyz/vendor`,
         ].join("\n"), "HTML");
       }
     } catch { /* non-fatal */ }
@@ -1482,7 +1482,7 @@ export const getMyReferralInfo = createServerFn({ method: "GET" })
 
     return {
       referralCode: v?.referral_code ?? null,
-      referralLink: `https://7sevencards.com/vendor?ref=${v?.referral_code ?? ""}`,
+      referralLink: `https://7evencards.xyz/vendor?ref=${v?.referral_code ?? ""}`,
       totalReferred,
       bonusesPaid,
       totalEarnedNgn,

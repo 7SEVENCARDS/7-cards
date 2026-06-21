@@ -356,7 +356,7 @@ async function autoEnforceFraudVerdict(
         ``,
         `<b>Evidence Reference:</b> <code>${opts.disputeId?.slice(0,8) ?? "N/A"}</code>`,
         ``,
-        `To appeal, email <b>disputes@7sevencards.com</b> with this reference within 48 hours.`,
+        `To appeal, email <b>disputes@7evencards.xyz</b> with this reference within 48 hours.`,
       ].join("\n"), "HTML");
     }
 
@@ -371,7 +371,7 @@ async function autoEnforceFraudVerdict(
       await db.from("notifications").insert({
         user_id: vendorProfile.user_id,
         title:   "Account Suspended — Fraud Detected ⛔",
-        message: `Automated fraud detection confirmed a card was redeemed after delivery. Deposit forfeited: ₦${forfeitedNgn.toLocaleString()}. Ref: ${opts.disputeId?.slice(0,8) ?? "N/A"}. Email disputes@7sevencards.com to appeal.`,
+        message: `Automated fraud detection confirmed a card was redeemed after delivery. Deposit forfeited: ₦${forfeitedNgn.toLocaleString()}. Ref: ${opts.disputeId?.slice(0,8) ?? "N/A"}. Email disputes@7evencards.xyz to appeal.`,
         type:    "error",
       });
     }

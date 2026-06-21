@@ -41,7 +41,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
   });
 
   const referralLink = stats?.referralCode
-    ? `https://7sevencards.app/join?ref=${stats.referralCode}`
+    ? `https://7evencards.xyz/join?ref=${stats.referralCode}`
     : "";
 
   const handleCopy = async () => {

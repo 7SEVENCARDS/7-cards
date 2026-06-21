@@ -152,7 +152,7 @@ function SupportLanding({
         <div className="space-y-2">
           {process.env.SUPPORT_EMAIL || true ? (
             <a
-              href={`mailto:${process.env.SUPPORT_EMAIL ?? "support@7sevencards.com"}`}
+              href={`mailto:${process.env.SUPPORT_EMAIL ?? "support@7evencards.xyz"}`}
               className="flex items-center gap-3 bg-card border border-border/60 rounded-2xl px-4 py-3 transition-colors hover:border-cyan/30"
             >
               <div className="size-9 rounded-xl bg-cyan/10 grid place-items-center shrink-0">
@@ -161,7 +161,7 @@ function SupportLanding({
               <div className="flex-1">
                 <p className="text-sm font-bold">Email Support</p>
                 <p className="text-xs text-muted-foreground">
-                  support@7sevencards.com
+                  support@7evencards.xyz
                 </p>
               </div>
               <ExternalLink className="size-3.5 text-muted-foreground" />

@@ -10,6 +10,51 @@ concurrency:
   cancel-in-progress: false # Never cancel an in-flight deploy
 
 jobs:
+  build-and-lint:
+    name: Build, Lint & Type-check (deploy gate)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Type-check
+        run: bun run build --mode development
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_APP_URL: https://7evencards.xyz
+          APP_URL: https://7evencards.xyz
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BUSHA_API_KEY: ${{ secrets.BUSHA_API_KEY }}
+          ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
+          RELOADLY_CLIENT_ID: ${{ secrets.RELOADLY_CLIENT_ID }}
+          SQUADCO_SECRET_KEY: ${{ secrets.SQUADCO_SECRET_KEY }}
+          APP_SECRET: ${{ secrets.APP_SECRET }}
+
+      - name: Test
+        run: bun run test
+
+      - name: Lint
+        run: bun run lint
+        continue-on-error: true
+
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
@@ -40,9 +85,11 @@ jobs:
         run: bun run build
         env:
           NODE_ENV: production
+          # Domain is a known constant — no secret needed
+          VITE_APP_URL: https://7evencards.xyz
+          APP_URL: https://7evencards.xyz
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          VITE_APP_URL: ${{ secrets.VITE_APP_URL }}
           ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
 
       - name: Deploy to Cloudflare Workers
@@ -51,68 +98,77 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --env production
+          secrets: |
+            SUPABASE_SERVICE_ROLE_KEY
+            VITE_SUPABASE_URL
+            VITE_SUPABASE_ANON_KEY
+            SQUADCO_SECRET_KEY
+            BUSHA_API_KEY
+            ONESIGNAL_APP_ID
+            ONESIGNAL_REST_API_KEY
+            ONESIGNAL_ANDROID_CHANNEL_ID
+            RELOADLY_CLIENT_ID
+            RELOADLY_CLIENT_SECRET
+            APP_SECRET
+            ADMIN_TELEGRAM_BOT_TOKEN
+            ADMIN_TELEGRAM_BOT_USERNAME
+            ADMIN_TELEGRAM_CHAT_ID
+            ADMIN_TELEGRAM_WEBHOOK_SECRET
+            TELEGRAM_BOT_TOKEN
+            TELEGRAM_WEBHOOK_SECRET
+            CRON_SECRET
+            SUPPORT_EMAIL
+            SUPPORT_TELEGRAM_CHAT_ID
+            SUPPORT_WHATSAPP
         env:
-          # All runtime secrets are bound via wrangler.toml [env.production.vars]
-          # Sensitive values must be set via `wrangler secret put` or Cloudflare dashboard
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           SQUADCO_SECRET_KEY: ${{ secrets.SQUADCO_SECRET_KEY }}
           BUSHA_API_KEY: ${{ secrets.BUSHA_API_KEY }}
+          ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
           ONESIGNAL_REST_API_KEY: ${{ secrets.ONESIGNAL_REST_API_KEY }}
+          ONESIGNAL_ANDROID_CHANNEL_ID: ${{ secrets.ONESIGNAL_ANDROID_CHANNEL_ID }}
           RELOADLY_CLIENT_ID: ${{ secrets.RELOADLY_CLIENT_ID }}
           RELOADLY_CLIENT_SECRET: ${{ secrets.RELOADLY_CLIENT_SECRET }}
-          DOJAH_APP_ID: ${{ secrets.DOJAH_APP_ID }}
-          DOJAH_SECRET_KEY: ${{ secrets.DOJAH_SECRET_KEY }}
           APP_SECRET: ${{ secrets.APP_SECRET }}
+          ADMIN_TELEGRAM_BOT_TOKEN: ${{ secrets.ADMIN_TELEGRAM_BOT_TOKEN }}
+          ADMIN_TELEGRAM_BOT_USERNAME: ${{ secrets.ADMIN_TELEGRAM_BOT_USERNAME }}
+          ADMIN_TELEGRAM_CHAT_ID: ${{ secrets.ADMIN_TELEGRAM_CHAT_ID }}
+          ADMIN_TELEGRAM_WEBHOOK_SECRET: ${{ secrets.ADMIN_TELEGRAM_WEBHOOK_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SUPPORT_EMAIL: ${{ secrets.SUPPORT_EMAIL }}
+          SUPPORT_TELEGRAM_CHAT_ID: ${{ secrets.SUPPORT_TELEGRAM_CHAT_ID }}
+          SUPPORT_WHATSAPP: ${{ secrets.SUPPORT_WHATSAPP }}
+
+      - name: Register Telegram Webhooks
+        run: |
+          echo "Registering vendor bot webhook..."
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+            -H "Content-Type: application/json" \
+            -d "{\"url\":\"https://7evencards.xyz/api/webhooks/telegram\",\"allowed_updates\":[\"message\"],\"secret_token\":\"${TELEGRAM_WEBHOOK_SECRET}\"}" \
+            | jq -r '"Vendor webhook: " + (.description // "ok")'
+
+          echo "Registering admin bot webhook..."
+          curl -s -X POST "https://api.telegram.org/bot${ADMIN_TELEGRAM_BOT_TOKEN}/setWebhook" \
+            -H "Content-Type: application/json" \
+            -d "{\"url\":\"https://7evencards.xyz/api/webhooks/telegram-admin\",\"allowed_updates\":[\"message\",\"callback_query\"],\"secret_token\":\"${ADMIN_TELEGRAM_WEBHOOK_SECRET}\"}" \
+            | jq -r '"Admin webhook: " + (.description // "ok")'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          ADMIN_TELEGRAM_BOT_TOKEN: ${{ secrets.ADMIN_TELEGRAM_BOT_TOKEN }}
+          ADMIN_TELEGRAM_WEBHOOK_SECRET: ${{ secrets.ADMIN_TELEGRAM_WEBHOOK_SECRET }}
+        continue-on-error: true   # Don't fail deploy if bot tokens not set yet
 
       - name: Post-deploy health check
         run: |
-          sleep 5
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.VITE_APP_URL }}/api/health")
+          sleep 8
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://7evencards.xyz/api/health")
           echo "Health check → HTTP $STATUS"
           if [ "$STATUS" != "200" ]; then
             echo "::warning::Health check returned $STATUS — check the deployment"
           fi
-        continue-on-error: true
-
-  build-and-lint:
-    name: Build, Lint & Type-check (deploy gate)
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Type-check
-        run: bun run build --mode development
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          BUSHA_API_KEY: ${{ secrets.BUSHA_API_KEY }}
-          ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
-          RELOADLY_CLIENT_ID: ${{ secrets.RELOADLY_CLIENT_ID }}
-          SQUADCO_SECRET_KEY: ${{ secrets.SQUADCO_SECRET_KEY }}
-          APP_SECRET: ${{ secrets.APP_SECRET }}
-
-      - name: Test
-        run: bun run test
-
-      - name: Lint
-        run: bun run lint
         continue-on-error: true

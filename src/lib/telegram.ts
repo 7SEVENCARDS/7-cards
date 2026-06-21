@@ -286,7 +286,7 @@ export function buildAlreadyClaimedMessage(): string {
     `Another vendor already claimed this card.`,
     `Stay tuned — the next one could be yours!`,
     ``,
-    `🔗 7SEVEN Vendor Portal: https://7sevencards.com/vendor`,
+    `🔗 7SEVEN Vendor Portal: https://7evencards.xyz/vendor`,
   ].join("\n");
 }
 
@@ -303,7 +303,7 @@ export async function sendVendorCardNotification(opts: {
 }): Promise<{ ok: boolean; error?: string }> {
   const text = buildCardAssignmentMessage({
     ...opts,
-    portalUrl: opts.portalUrl ?? "https://7sevencards.com",
+    portalUrl: opts.portalUrl ?? "https://7evencards.xyz",
   });
   return sendTelegramMessage(opts.telegramChatId, text, "HTML");
 }
@@ -353,7 +353,7 @@ export async function sendTierPromotionNotification(opts: {
     `• Early access to high-value cards`,
     ``,
     `Keep up the great work! 🚀`,
-    `🔗 https://7sevencards.com/vendor`,
+    `🔗 https://7evencards.xyz/vendor`,
   ].join("\n");
   return sendTelegramMessage(opts.telegramChatId, text, "HTML");
 }
@@ -374,7 +374,7 @@ export async function sendWithdrawalRejectedNotification(opts: {
     ``,
     `If you think this is a mistake, please contact support or submit a new request with correct bank details.`,
     ``,
-    `🔗 Vendor portal: https://7sevencards.com/vendor`,
+    `🔗 Vendor portal: https://7evencards.xyz/vendor`,
   ].join("\n");
   return sendTelegramMessage(opts.telegramChatId, text, "HTML");
 }

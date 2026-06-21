@@ -274,7 +274,7 @@ function StatusGate({ status, onLogout }: { status: VendorStatus; onLogout: () =
         <p className="text-sm text-muted-foreground leading-relaxed mb-6">
           {status === "pending"
             ? "Your vendor application is under review. You'll be notified when your account is activated. This usually takes 1–2 business days."
-            : "Your vendor account has been suspended. Please contact support@7sevencards.com for assistance."}
+            : "Your vendor account has been suspended. Please contact support@7evencards.xyz for assistance."}
         </p>
         <button onClick={onLogout} className="text-sm text-muted-foreground underline">Sign out</button>
       </div>
