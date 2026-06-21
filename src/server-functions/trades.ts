@@ -38,6 +38,22 @@ export const submitCardBatch = createServerFn({ method: "POST" })
 
     const strategy    = getDispatchStrategy(vendors.length, data.cards.length);
     const assignments = assignVendorsToCards(vendors, data.cards.length, strategy);
+    // §4.1 fix: cross-check client-supplied exchangeRate against the server's live rate
+    // to prevent a client inflating the rate and receiving an overpaid payout.
+    {
+      const { data: rateRow } = await db
+        .from("exchange_rates")
+        .select("rate_per_dollar")
+        .ilike("brand", data.brand)
+        .maybeSingle();
+      if (rateRow?.rate_per_dollar) {
+        const serverRate = Number(rateRow.rate_per_dollar);
+        // Reject if client rate exceeds server rate by more than 10% (covers live-rate lag)
+        if (data.exchangeRate > serverRate * 1.10) {
+          throw new Error(`Exchange rate ${data.exchangeRate} exceeds server rate ${serverRate} by more than 10%. Please refresh rates and retry.`);
+        }
+      }
+    }
     const amountNgn   = Math.round(data.amountUsd * data.exchangeRate);
 
     // Create the batch tracking record
@@ -119,6 +135,16 @@ export const submitCardBatch = createServerFn({ method: "POST" })
         });
 
         if (result.success) {
+          // §4.1 fix: if Reloadly returned the real card balance, reject amount inflation
+          if (
+            result.balance != null &&
+            !(result.requiresManualReview) &&
+            data.amountUsd > result.balance * 1.10
+          ) {
+            await db.from("trades").update({ status: "invalid", failure_reason: "Amount mismatch" }).eq("id", trade.id);
+            results.push({ position, tradeId: trade.id, status: "failed", failureReason: `Card balance (${result.balance}) is less than submitted amount (${data.amountUsd})`, amountNgn });
+            continue;
+          }
           // P0-1 fix: Set pending_review status when Reloadly flags manual review needed.
           const needsReview = result.requiresManualReview ?? false;
           await db.from("trades").update({
@@ -163,7 +189,8 @@ export const submitCardBatch = createServerFn({ method: "POST" })
           results.push({
             position,
             tradeId:            trade.id,
-            status:             needsReview ? "verified" : (queued ? "queued" : "verified"),
+            // §4.4 fix: pending_review must be reported truthfully — was incorrectly set to "verified"
+            status:             needsReview ? "pending_review" : (queued ? "queued" : "verified"),
             assignedVendorName: vendor.business_name,
             assignedVendorId:   vendor.id,
             amountNgn,

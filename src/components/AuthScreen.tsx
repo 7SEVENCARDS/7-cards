@@ -260,7 +260,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           )}
 
           <p className="text-center text-[11px] text-muted-foreground mt-auto pt-4">
-            By continuing you agree to our Terms of Service and Privacy Policy.
+            By continuing you agree to our <a href="/terms" className="underline underline-offset-2">Terms of Service</a> and <a href="/privacy" className="underline underline-offset-2">Privacy Policy</a>.
             <br />7SEVEN CARDS · Built for Africa 🌍
           </p>
         </div>

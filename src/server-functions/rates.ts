@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { DEFAULT_NGN_RATE } from "../lib/constants";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireAdmin } from "../lib/auth-server";
 import { getCryptoRates, COMPANY_SPREAD } from "../lib/busha";
@@ -16,7 +17,7 @@ export const getExchangeRates = createServerFn({ method: "GET" }).handler(async 
     return data ?? [];
   } catch {
     return [
-      { brand: "Apple",       region: "USA", rate_per_dollar: 1485, trend: "+2.1%", updated_at: new Date().toISOString() },
+      { brand: "Apple",       region: "USA", rate_per_dollar: DEFAULT_NGN_RATE, trend: "+2.1%", updated_at: new Date().toISOString() },
       { brand: "Amazon",      region: "USA", rate_per_dollar: 1420, trend: "+1.5%", updated_at: new Date().toISOString() },
       { brand: "Steam",       region: "USA", rate_per_dollar: 1380, trend: "-0.3%", updated_at: new Date().toISOString() },
       { brand: "Google Play", region: "USA", rate_per_dollar: 1460, trend: "+0.8%", updated_at: new Date().toISOString() },
@@ -62,7 +63,7 @@ export const refreshExchangeRates = createServerFn({ method: "POST" }).handler(a
       const ratePerDollar =
         product.recipientCurrencyCode === "NGN" && product.minRecipientDenomination > 0
           ? Math.round(product.minRecipientDenomination / product.senderUnitPrice)
-          : 1485;
+          : DEFAULT_NGN_RATE;
 
       const { error } = await db.from("exchange_rates").upsert(
         { brand, region: "USA", rate_per_dollar: ratePerDollar, source: "reloadly", updated_at: new Date().toISOString() },

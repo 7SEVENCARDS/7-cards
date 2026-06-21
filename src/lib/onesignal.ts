@@ -9,6 +9,8 @@
 //   This links their device to their Supabase user ID so server-side pushes work.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { fetchWithTimeout } from "./fetch-with-timeout";
+
 const ONESIGNAL_API = "https://onesignal.com/api/v1";
 
 function getOneSignalHeaders() {
@@ -44,7 +46,7 @@ export async function sendPushToUser(
   payload: PushPayload
 ): Promise<{ success: boolean; id?: string; errors?: string[] }> {
   try {
-    const res = await fetch(`${ONESIGNAL_API}/notifications`, {
+    const res = await fetchWithTimeout(`${ONESIGNAL_API}/notifications`, {
       method: "POST",
       headers: getOneSignalHeaders(),
       body: JSON.stringify({
@@ -86,7 +88,7 @@ export async function sendPushToUsers(
   payload: PushPayload
 ): Promise<{ success: boolean }> {
   try {
-    const res = await fetch(`${ONESIGNAL_API}/notifications`, {
+    const res = await fetchWithTimeout(`${ONESIGNAL_API}/notifications`, {
       method: "POST",
       headers: getOneSignalHeaders(),
       body: JSON.stringify({
@@ -109,7 +111,7 @@ export async function broadcastPush(
   payload: PushPayload
 ): Promise<{ success: boolean }> {
   try {
-    const res = await fetch(`${ONESIGNAL_API}/notifications`, {
+    const res = await fetchWithTimeout(`${ONESIGNAL_API}/notifications`, {
       method: "POST",
       headers: getOneSignalHeaders(),
       body: JSON.stringify({

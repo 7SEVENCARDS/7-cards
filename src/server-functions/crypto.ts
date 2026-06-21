@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
+import { assertAmount } from "../lib/validate";
 import { DEMO_DEPOSIT_ADDRESSES, COMPANY_SPREAD } from "../lib/busha";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -49,6 +50,11 @@ export const initiateCryptoSwap = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const userId = await requireUser();
     const db = getServerSupabase();
+
+    // §4.3 fix: negative/zero amounts bypass the RPC balance check (the RPC checks
+    // current_balance < p_amount — always false when p_amount is negative — so
+    // deduction silently "succeeds" and can inflate balances)
+    assertAmount(data.amount, 1_000_000, "swap amount");
 
     const sufficient = await db.rpc("deduct_wallet_balance", {
       p_user_id: userId,
@@ -196,7 +202,10 @@ export const initiateCryptoSend = createServerFn({ method: "POST" })
     const userId = await requireUser();
     const db = getServerSupabase();
 
-    const MINIMUMS: Record<string, number> = {
+    // §4.3 fix: must validate before deduct_wallet_balance (same RPC negative-amount bypass risk)
+  assertAmount(data.amount, 1_000_000, "send amount");
+
+  const MINIMUMS: Record<string, number> = {
       BTC: 0.00001, ETH: 0.001, USDT: 1, USDC: 1, BNB: 0.001, SOL: 0.01,
     };
     const min = MINIMUMS[data.currency.toUpperCase()] ?? 0;

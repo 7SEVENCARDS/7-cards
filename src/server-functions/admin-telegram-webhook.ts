@@ -253,8 +253,13 @@ async function handleWithdrawalApprove(
     return;
   }
 
-  const { adminApproveWithdrawal } = await import("./vendors");
-  await adminApproveWithdrawal({ data: { withdrawalId } });
+  // §4.2 fix: use approveWithdrawalImpl (plain function, no session cookie required)
+  // instead of calling adminApproveWithdrawal createServerFn directly, which would
+  // crash because requireAdmin() → getWebRequest() reads a Supabase auth cookie that
+  // doesn't exist in the Telegram webhook context. The impl function accepts an
+  // explicit adminId derived from the linked-chat lookup already performed above.
+  const { approveWithdrawalImpl } = await import("./vendors");
+  await approveWithdrawalImpl(db as ReturnType<typeof import("../lib/supabase.server").getServerSupabase>, adminId, withdrawalId);
   await db.from("admin_audit_log").insert({
     admin_id: adminId,
     action: "approve_withdrawal",
@@ -401,8 +406,12 @@ async function handleTextCommand(
     const eventKey = `tg_admin_cmd:wd_reject:${withdrawalId}`;
     if (!await isAlreadyProcessed(db, eventKey)) {
       try {
-        const { adminRejectWithdrawal } = await import("./vendors");
-        await adminRejectWithdrawal({ data: { withdrawalId, reason } });
+        // §4.2 fix: use rejectWithdrawalImpl (no session cookie) instead of
+        // adminRejectWithdrawal createServerFn (would crash — requires auth cookie).
+        // Also fixes the field-name mismatch: original passed { withdrawalId } but
+        // the createServerFn validator expected { requestId }.
+        const { rejectWithdrawalImpl } = await import("./vendors");
+        await rejectWithdrawalImpl(db as ReturnType<typeof import("../lib/supabase.server").getServerSupabase>, adminId, withdrawalId, reason);
         await db.from("admin_audit_log").insert({ admin_id: adminId, action: "reject_withdrawal", target_id: withdrawalId, meta: { reason, via: "telegram_bot" } }).catch(() => {});
         await resolveAdminNotifications("withdrawal", withdrawalId, `❌ <b>Withdrawal — Rejected</b>\n\nWithdrawal <code>${withdrawalId.slice(0, 8)}</code> rejected. Reason: ${reason}`);
         await markProcessed(db, eventKey);

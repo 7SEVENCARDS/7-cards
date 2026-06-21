@@ -1031,172 +1031,180 @@ export const adminGetWithdrawalRequests = createServerFn({ method: "GET" })
   });
 
 // ─── Admin: Approve & Pay Withdrawal ──────────────────────────────────────────
+// ─── Plain impl — callable without a session cookie (e.g. Telegram webhook) ────
+// §4.2 fix: the original createServerFn called requireAdmin() → requireUser() →
+// getWebRequest() which reads a Supabase auth cookie. The Telegram webhook handler
+// has no session cookie, so the call crashed. Extracting the logic here lets both
+// the HTTP handler (which derives adminId from the cookie) and the Telegram handler
+// (which derives adminId from the linked-chat lookup) share one implementation.
+export async function approveWithdrawalImpl(
+  db: ReturnType<typeof getServerSupabase>,
+  adminId: string,
+  withdrawalId: string,
+): Promise<{ ok: boolean; squadcoRef?: string; error?: string }> {
+  const { data: req } = await db
+    .from("vendor_withdrawal_requests")
+    .select("*")
+    .eq("id", withdrawalId)
+    .eq("status", "pending")
+    .single();
+  if (!req) throw new Error("Request not found or already processed");
+
+  const squadcoKey = process.env.SQUADCO_SECRET_KEY ?? "";
+  const env = process.env.SQUADCO_ENV === "production" ? "api" : "sandbox";
+  const uniqueId = `7S-WD-${req.id.slice(0, 8)}-${Date.now()}`;
+
+  const { fetchWithTimeout } = await import("../lib/fetch-with-timeout");
+  const payoutRes = await fetchWithTimeout(`https://${env}.squadco.com/payout/initiate`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${squadcoKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      currency_id: "NGN",
+      transactions: [{
+        amount: Math.round(Number(req.amount) * 100), // Squadco expects kobo
+        bank_code: req.bank_code,
+        account_number: req.account_number,
+        account_name: req.account_name,
+        narration: `7SEVEN Vendor Withdrawal`,
+        unique_id: uniqueId,
+      }],
+    }),
+  });
+
+  const payoutData = await payoutRes.json() as {
+    success?: boolean;
+    message?: string;
+    data?: { transaction_reference?: string };
+  };
+
+  const squadcoRef = payoutData?.data?.transaction_reference ?? uniqueId;
+  const paidSuccessfully = payoutData?.success === true || payoutRes.status === 200;
+
+  await db
+    .from("vendor_withdrawal_requests")
+    .update({
+      status: paidSuccessfully ? "paid" : "failed",
+      squadco_ref: squadcoRef,
+      processed_by: adminId,
+      processed_at: new Date().toISOString(),
+      admin_note: paidSuccessfully ? null : `Payout failed: ${payoutData?.message ?? "unknown"}`,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", withdrawalId);
+
+  if (!paidSuccessfully) {
+    await db.rpc("increment_vendor_wallet_balance", {
+      p_vendor_id: req.vendor_id,
+      p_amount: Number(req.amount),
+    });
+    throw new Error(payoutData?.message ?? "Payout failed — balance restored");
+  }
+
+  try {
+    const { data: vendor } = await db
+      .from("vendors")
+      .select("contact_name, business_name, telegram_chat_id, telegram_username")
+      .eq("id", req.vendor_id)
+      .single() as { data: { contact_name?: string | null; business_name?: string | null; telegram_chat_id?: number | null; telegram_username?: string | null } | null };
+    const chatId = vendor?.telegram_chat_id ?? vendor?.telegram_username;
+    if (chatId) {
+      const { sendWithdrawalApprovedNotification } = await import("../lib/telegram");
+      await sendWithdrawalApprovedNotification({
+        telegramChatId: chatId,
+        vendorName: vendor?.contact_name ?? vendor?.business_name ?? "Vendor",
+        amountNgn: Number(req.amount),
+        bankName: req.bank_name,
+        accountNumber: req.account_number,
+        squadcoRef,
+      });
+    }
+  } catch { /* non-fatal */ }
+
+  return { ok: true, squadcoRef };
+}
+
+// ─── Admin: Approve Withdrawal (HTTP handler) ─────────────────────────────────
 export const adminApproveWithdrawal = createServerFn({ method: "POST" })
   .validator((d: unknown) => d as { requestId: string })
   .handler(async ({ data }) => {
     const userId = await requireAdmin();
     const db = getServerSupabase();
-    const { data: profile } = await db
-      .from("profiles")
-      .select("role")
-      .eq("id", userId)
-      .single();
-    if (profile?.role !== "admin") throw new Error("Forbidden");
-
-    const { data: req } = await db
-      .from("vendor_withdrawal_requests")
-      .select("*")
-      .eq("id", data.requestId)
-      .eq("status", "pending")
-      .single();
-    if (!req) throw new Error("Request not found or already processed");
-
-    const squadcoKey = process.env.SQUADCO_SECRET_KEY ?? "";
-    const env = process.env.SQUADCO_ENV === "production" ? "api" : "sandbox";
-    const uniqueId = `7S-WD-${req.id.slice(0, 8)}-${Date.now()}`;
-
-    // Trigger Squadco payout
-    const payoutRes = await fetch(`https://${env}.squadco.com/payout/initiate`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${squadcoKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        currency_id: "NGN",
-        transactions: [{
-          amount: Math.round(Number(req.amount) * 100), // Squadco expects kobo
-          bank_code: req.bank_code,
-          account_number: req.account_number,
-          account_name: req.account_name,
-          narration: `7SEVEN Vendor Withdrawal`,
-          unique_id: uniqueId,
-        }],
-      }),
-    });
-
-    const payoutData = await payoutRes.json() as {
-      success?: boolean;
-      message?: string;
-      data?: { transaction_reference?: string };
-    };
-
-    const squadcoRef = payoutData?.data?.transaction_reference ?? uniqueId;
-    const paidSuccessfully = payoutData?.success === true || payoutRes.status === 200;
-
-    await db
-      .from("vendor_withdrawal_requests")
-      .update({
-        status: paidSuccessfully ? "paid" : "failed",
-        squadco_ref: squadcoRef,
-        processed_by: userId,
-        processed_at: new Date().toISOString(),
-        admin_note: paidSuccessfully ? null : `Payout failed: ${payoutData?.message ?? "unknown"}`,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", data.requestId);
-
-    if (!paidSuccessfully) {
-      // Atomically restore the deducted balance
-      await db.rpc("increment_vendor_wallet_balance", {
-        p_vendor_id: req.vendor_id,
-        p_amount: Number(req.amount),
-      });
-      throw new Error(payoutData?.message ?? "Payout failed — balance restored");
-    }
-
-    // Notify vendor via Telegram (fire-and-forget — don't fail the response if this fails)
-    try {
-      const { data: vendor } = await db
-        .from("vendors")
-        .select("contact_name, business_name, telegram_chat_id, telegram_username")
-        .eq("id", req.vendor_id)
-        .single() as { data: { contact_name?: string | null; business_name?: string | null; telegram_chat_id?: number | null; telegram_username?: string | null } | null };
-      const chatId = vendor?.telegram_chat_id ?? vendor?.telegram_username;
-      if (chatId) {
-        const { sendWithdrawalApprovedNotification } = await import("../lib/telegram");
-        await sendWithdrawalApprovedNotification({
-          telegramChatId: chatId,
-          vendorName: vendor?.contact_name ?? vendor?.business_name ?? "Vendor",
-          amountNgn: Number(req.amount),
-          bankName: req.bank_name,
-          accountNumber: req.account_number,
-          squadcoRef,
-        });
-      }
-    } catch { /* non-fatal */ }
-
-    return { ok: true, squadcoRef };
+    return approveWithdrawalImpl(db, userId, data.requestId);
   });
 
-// ─── Admin: Reject Withdrawal ──────────────────────────────────────────────────
+// ─── Plain impl — callable without a session cookie (e.g. Telegram webhook) ────
+// §4.2 fix: same pattern as approveWithdrawalImpl
+export async function rejectWithdrawalImpl(
+  db: ReturnType<typeof getServerSupabase>,
+  adminId: string,
+  withdrawalId: string,
+  reason?: string,
+): Promise<{ ok: boolean }> {
+  const { data: req } = await db
+    .from("vendor_withdrawal_requests")
+    .select("*")
+    .eq("id", withdrawalId)
+    .eq("status", "pending")
+    .single();
+  if (!req) throw new Error("Request not found or already processed");
+
+  await db.rpc("increment_vendor_wallet_balance", {
+    p_vendor_id: req.vendor_id,
+    p_amount: Number(req.amount),
+  });
+  const { data: rstWallet } = await db
+    .from("vendor_wallets").select("balance").eq("vendor_id", req.vendor_id).single();
+  await db.from("vendor_transactions").insert({
+    vendor_id: req.vendor_id,
+    type: "credit",
+    amount: Number(req.amount),
+    balance_after: rstWallet?.balance ?? null,
+    description: `Withdrawal rejected — balance restored: ${reason ?? "Admin decision"}`,
+    reference: withdrawalId,
+  });
+
+  await db
+    .from("vendor_withdrawal_requests")
+    .update({
+      status: "rejected",
+      admin_note: reason ?? "Rejected by admin",
+      processed_by: adminId,
+      processed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", withdrawalId);
+
+  try {
+    const { data: vendor } = await db
+      .from("vendors")
+      .select("contact_name, business_name, telegram_chat_id, telegram_username")
+      .eq("id", req.vendor_id)
+      .single() as { data: { contact_name?: string | null; business_name?: string | null; telegram_chat_id?: number | null; telegram_username?: string | null } | null };
+    const chatId = vendor?.telegram_chat_id ?? vendor?.telegram_username;
+    if (chatId) {
+      const { sendWithdrawalRejectedNotification } = await import("../lib/telegram");
+      await sendWithdrawalRejectedNotification({
+        telegramChatId: chatId,
+        vendorName: vendor?.contact_name ?? vendor?.business_name ?? "Vendor",
+        amountNgn: Number(req.amount),
+        reason,
+      });
+    }
+  } catch { /* non-fatal */ }
+
+  return { ok: true };
+}
+
+// ─── Admin: Reject Withdrawal (HTTP handler) ───────────────────────────────────
 export const adminRejectWithdrawal = createServerFn({ method: "POST" })
   .validator((d: unknown) => d as { requestId: string; reason?: string })
   .handler(async ({ data }) => {
     const userId = await requireAdmin();
     const db = getServerSupabase();
-    const { data: profile } = await db
-      .from("profiles")
-      .select("role")
-      .eq("id", userId)
-      .single();
-    if (profile?.role !== "admin") throw new Error("Forbidden");
-
-    const { data: req } = await db
-      .from("vendor_withdrawal_requests")
-      .select("*")
-      .eq("id", data.requestId)
-      .eq("status", "pending")
-      .single();
-    if (!req) throw new Error("Request not found or already processed");
-
-    // Atomically restore the locked balance
-    await db.rpc("increment_vendor_wallet_balance", {
-      p_vendor_id: req.vendor_id,
-      p_amount: Number(req.amount),
-    });
-    const { data: rstWallet } = await db
-      .from("vendor_wallets").select("balance").eq("vendor_id", req.vendor_id).single();
-    await db.from("vendor_transactions").insert({
-      vendor_id: req.vendor_id,
-      type: "credit",
-      amount: Number(req.amount),
-      balance_after: rstWallet?.balance ?? null,
-      description: `Withdrawal rejected — balance restored: ${data.reason ?? "Admin decision"}`,
-      reference: req.id,
-    });
-
-    await db
-      .from("vendor_withdrawal_requests")
-      .update({
-        status: "rejected",
-        admin_note: data.reason ?? "Rejected by admin",
-        processed_by: userId,
-        processed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", data.requestId);
-
-    // Notify vendor via Telegram (fire-and-forget)
-    try {
-      const { data: vendor } = await db
-        .from("vendors")
-        .select("contact_name, business_name, telegram_chat_id, telegram_username")
-        .eq("id", req.vendor_id)
-        .single() as { data: { contact_name?: string | null; business_name?: string | null; telegram_chat_id?: number | null; telegram_username?: string | null } | null };
-      const chatId = vendor?.telegram_chat_id ?? vendor?.telegram_username;
-      if (chatId) {
-        const { sendWithdrawalRejectedNotification } = await import("../lib/telegram");
-        await sendWithdrawalRejectedNotification({
-          telegramChatId: chatId,
-          vendorName: vendor?.contact_name ?? vendor?.business_name ?? "Vendor",
-          amountNgn: Number(req.amount),
-          reason: data.reason,
-        });
-      }
-    } catch { /* non-fatal */ }
-
-    return { ok: true };
+    return rejectWithdrawalImpl(db, userId, data.requestId, data.reason);
   });
 
 // ─── Admin: Vendor Leaderboard ─────────────────────────────────────────────────

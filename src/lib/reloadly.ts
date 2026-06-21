@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { fetchWithTimeout } from "./fetch-with-timeout";
+import { DEFAULT_NGN_RATE } from "./constants";
 
 const RELOADLY_ENV = process.env.RELOADLY_ENV || "sandbox";
 
@@ -121,13 +122,13 @@ export async function getNairaRateForBrand(brand: string, amountUsd: number): Pr
     if (product && product.recipientCurrencyCode === "NGN") {
       // rate = NGN recipient value / USD sender price
       return Math.round(product.senderUnitPrice > 0
-        ? (product.minRecipientDenomination / product.senderUnitPrice)
-        : 1485);
+        ? Math.round(product.minRecipientDenomination / product.senderUnitPrice)
+        : DEFAULT_NGN_RATE);
     }
 
-    return 1485; // fallback default rate
+    return DEFAULT_NGN_RATE; // fallback default rate
   } catch {
-    return 1485;
+    return DEFAULT_NGN_RATE;
   }
 }
 
