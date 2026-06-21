@@ -101,6 +101,47 @@ export default {
     const url = new URL(request.url);
     const ip = clientIp(request);
 
+    // ── Subdomain routing ────────────────────────────────────────────────────
+    // www.7evencards.xyz → 301 to apex
+    if (url.hostname === "www.7evencards.xyz") {
+      const apex = new URL(request.url);
+      apex.hostname = "7evencards.xyz";
+      return Response.redirect(apex.toString(), 301);
+    }
+
+    // vendor.7evencards.xyz → rewrite pathname to /vendor/*
+    if (url.hostname === "vendor.7evencards.xyz") {
+      const rewritten = new URL(request.url);
+      rewritten.hostname = "7evencards.xyz";
+      if (!rewritten.pathname.startsWith("/vendor")) {
+        rewritten.pathname =
+          "/vendor" + (rewritten.pathname === "/" ? "" : rewritten.pathname);
+      }
+      const rewrittenReq = new Request(rewritten.toString(), {
+        method: request.method,
+        headers: request.headers,
+        body: request.body ?? undefined,
+        redirect: "manual",
+      });
+      if (!allow(rlKey("global", ip), 300, 60_000)) {
+        return addSecurityHeaders(tooManyRequests(60));
+      }
+      try {
+        const handler = await getServerEntry();
+        const response = await handler.fetch(rewrittenReq, env, ctx);
+        const normalized = await normalizeCatastrophicSsrResponse(response);
+        return addSecurityHeaders(normalized);
+      } catch (error) {
+        console.error(error);
+        return addSecurityHeaders(
+          new Response(renderErrorPage(), {
+            status: 500,
+            headers: { "content-type": "text/html; charset=utf-8" },
+          }),
+        );
+      }
+    }
+
     if (!allow(rlKey("global", ip), 300, 60_000)) {
       return addSecurityHeaders(tooManyRequests(60));
     }
