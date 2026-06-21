@@ -49,6 +49,7 @@ import {
   getEscrowQueue,
   processEscrowTrade,
 } from "../server-functions/admin";
+import { AuditLogViewer } from "./AuditLogViewer";
 import {
   adminGetVendors,
   adminUpdateVendorStatus,
@@ -62,7 +63,7 @@ import {
   adminRegisterVendor,
 } from "../server-functions/vendors";
 
-type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors";
+type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors" | "audit";
 
 type Props = {
   adminId: string;
@@ -1957,6 +1958,7 @@ export function AdminScreen({ adminId, onBack }: Props) {
     { key: "rates",   label: "Rates",   icon: DollarSign },
     { key: "credit",  label: "Credit",  icon: Wallet },
     { key: "vendors", label: "Vendors", icon: Building2 },
+    { key: "audit",   label: "Audit",   icon: Zap },
   ];
 
   return (
@@ -2003,6 +2005,11 @@ export function AdminScreen({ adminId, onBack }: Props) {
         {tab === "rates"   && <RatesTab   adminId={adminId} />}
         {tab === "credit"  && <CreditTab  adminId={adminId} />}
         {tab === "vendors" && <VendorsTab adminId={adminId} />}
+        {tab === "audit"   && (
+          <div className="p-5">
+            <AuditLogViewer />
+          </div>
+        )}
       </div>
     </div>
   );

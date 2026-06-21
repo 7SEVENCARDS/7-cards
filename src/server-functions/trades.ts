@@ -2,6 +2,204 @@ import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
 
+// ─── Submit a batch of cards (multi-card risk distribution) ──────────────────
+// Each card is an independent trade. Cards are distributed across different
+// vendors using round-robin rotation so no single vendor sees more than one
+// card from the same batch — reducing single-vendor exposure risk.
+//
+// When only 1 vendor is available: sequential mode — only the first card is
+// dispatched immediately. The rest are queued (batch_queued = true) and
+// dispatched one at a time as each preceding card is processed.
+export const submitCardBatch = createServerFn({ method: "POST" })
+  .validator((d: {
+    cards:        Array<{ cardCode: string; cardPin?: string }>;
+    brand:        string;
+    amountUsd:    number;
+    exchangeRate: number;
+    payoutMethod?: "bank" | "wallet";
+  }) => d)
+  .handler(async ({ data }) => {
+    if (!data.cards.length || data.cards.length > 10) {
+      throw new Error("Batch must have 1–10 cards");
+    }
+
+    const userId = await requireUser();
+    const db     = getServerSupabase();
+
+    const {
+      getEligibleVendors,
+      getDispatchStrategy,
+      assignVendorsToCards,
+      recordVendorAssignment,
+    } = await import("../lib/batch-dispatch");
+
+    const vendors  = await getEligibleVendors(db);
+    if (vendors.length === 0) throw new Error("No active vendors available. Please try again shortly.");
+
+    const strategy    = getDispatchStrategy(vendors.length, data.cards.length);
+    const assignments = assignVendorsToCards(vendors, data.cards.length, strategy);
+    const amountNgn   = Math.round(data.amountUsd * data.exchangeRate);
+
+    // Create the batch tracking record
+    const { data: batch, error: batchErr } = await db
+      .from("card_submission_batches")
+      .insert({
+        user_id:           userId,
+        brand:             data.brand,
+        amount_usd:        data.amountUsd,
+        exchange_rate:     data.exchangeRate,
+        total_cards:       data.cards.length,
+        payout_method:     data.payoutMethod ?? "bank",
+        dispatch_strategy: strategy,
+        vendor_count:      vendors.length,
+      })
+      .select("id")
+      .single() as { data: { id: string } | null; error: unknown };
+
+    if (batchErr || !batch) throw new Error("Failed to create batch record");
+
+    // Verify allowance — check once for the whole batch
+    const { checkVerificationAllowance } = await import("../lib/db-helpers");
+    const allowance = await checkVerificationAllowance(db, userId);
+    if (!allowance.allowed) {
+      throw new Error(`Daily verification limit reached. Trade $25+ this week for unlimited access.`);
+    }
+
+    // ── Process each card sequentially (avoid Reloadly rate-limiting) ──────
+    const results: Array<{
+      position:            number;
+      tradeId:             string | null;
+      status:              "verified" | "queued" | "failed";
+      failureReason?:      string;
+      assignedVendorName?: string;
+      assignedVendorId?:   string;
+      amountNgn:           number;
+    }> = [];
+
+    const { logTradeEvent } = await import("../lib/audit-log");
+    const { verifyUserGiftCard } = await import("../lib/reloadly");
+    const { directDispatchToVendor } = await import("./vendor-broadcast");
+
+    for (let i = 0; i < data.cards.length; i++) {
+      const card    = data.cards[i];
+      const { vendor, queued } = assignments[i];
+      const position = i + 1;
+
+      // Create trade row
+      const { data: trade } = await db
+        .from("trades")
+        .insert({
+          user_id:           userId,
+          type:              "gift_card",
+          brand:             data.brand,
+          amount_usd:        data.amountUsd,
+          amount_ngn:        amountNgn,
+          exchange_rate:     data.exchangeRate,
+          status:            "scanning",
+          batch_id:          batch.id,
+          batch_position:    position,
+          batch_queued:      queued,
+          direct_vendor_id:  vendor.id,
+        })
+        .select("id")
+        .single() as { data: { id: string } | null };
+
+      if (!trade) {
+        results.push({ position, tradeId: null, status: "failed", failureReason: "Trade creation failed", amountNgn });
+        continue;
+      }
+
+      // Verify via Reloadly
+      try {
+        const result = await verifyUserGiftCard({
+          brand:     data.brand,
+          cardCode:  card.cardCode,
+          cardPin:   card.cardPin,
+          amountUsd: data.amountUsd,
+        });
+
+        if (result.success) {
+          await db.from("trades").update({
+            status:    "verified",
+            card_code: result.cardCode,
+            card_pin:  card.cardPin ?? null,
+          }).eq("id", trade.id);
+
+          // Audit log — Pillar 1
+          await logTradeEvent(db, {
+            tradeId:   trade.id,
+            event:     "card_verified",
+            actorType: "user",
+            actorId:   userId,
+            payload: {
+              brand:          data.brand,
+              amount_usd:     data.amountUsd,
+              batch_id:       batch.id,
+              batch_position: position,
+              strategy,
+            },
+          }).catch(() => {});
+
+          if (!queued) {
+            // Dispatch to assigned vendor immediately
+            const dispatchResult = await directDispatchToVendor({
+              tradeId:       trade.id,
+              vendorId:      vendor.id,
+              brand:         data.brand,
+              amountUsd:     data.amountUsd,
+              amountNgn,
+              batchPosition: position,
+              batchTotal:    data.cards.length,
+            }).catch(() => ({ ok: false, error: "dispatch failed" }));
+
+            if (dispatchResult.ok) {
+              await recordVendorAssignment(db, vendor.id).catch(() => {});
+            }
+          }
+
+          results.push({
+            position,
+            tradeId:            trade.id,
+            status:             queued ? "queued" : "verified",
+            assignedVendorName: vendor.business_name,
+            assignedVendorId:   vendor.id,
+            amountNgn,
+          });
+        } else {
+          await db.from("trades").update({
+            status:         "invalid",
+            failure_reason: result.failureReason,
+          }).eq("id", trade.id);
+
+          results.push({
+            position,
+            tradeId:       trade.id,
+            status:        "failed",
+            failureReason: result.failureReason ?? "Card verification failed",
+            amountNgn,
+          });
+        }
+      } catch (e) {
+        const errMsg = e instanceof Error ? e.message : "Verification service error";
+        await db.from("trades").update({ status: "invalid", failure_reason: errMsg }).eq("id", trade.id).catch(() => {});
+        results.push({ position, tradeId: trade.id, status: "failed", failureReason: errMsg, amountNgn });
+      }
+    }
+
+    // Sync batch counts
+    await db.rpc("sync_batch_status", { p_batch_id: batch.id }).catch(() => {});
+
+    return {
+      batchId:       batch.id,
+      strategy,
+      vendorCount:   vendors.length,
+      cards:         results,
+      verifiedCount: results.filter(r => r.status === "verified").length,
+      failedCount:   results.filter(r => r.status === "failed").length,
+      queuedCount:   results.filter(r => r.status === "queued").length,
+    };
+  });
+
 // ─── Get own trade history (recent) ──────────────────────────────────────────
 export const getUserTrades = createServerFn({ method: "GET" })
   .validator((d: { userId?: string; limit?: number }) => d)

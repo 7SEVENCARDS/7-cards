@@ -595,7 +595,99 @@ export const getMyRateHistory = createServerFn({ method: "GET" })
     };
   });
 
-// ── 7. Admin endpoint: register the Telegram bot webhook ─────────────────────
+// ── 8. Direct dispatch: send a card to one specific vendor (no broadcast) ────
+// Used by submitCardBatch when multiple cards are submitted.
+// Each batch card goes to a DIFFERENT vendor to reduce single-vendor exposure.
+// Unlike broadcastTradeToVendors (first claim wins), this assigns the card
+// immediately and reveals the code directly in Telegram.
+export async function directDispatchToVendor(opts: {
+  tradeId:       string;
+  vendorId:      string;
+  brand:         string;
+  amountUsd:     number;
+  amountNgn:     number;
+  batchPosition?: number;
+  batchTotal?:    number;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { createClient } = await import("@supabase/supabase-js");
+    const db = createClient(
+      process.env.VITE_SUPABASE_URL ?? "",
+      process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    );
+    const { sendTelegramMessage, isTelegramConfigured } = await import("../lib/telegram");
+
+    if (!isTelegramConfigured()) {
+      return { ok: false, error: "TELEGRAM_BOT_TOKEN not set" };
+    }
+
+    const [{ data: vendor }, { data: trade }] = await Promise.all([
+      db.from("vendors").select("id, business_name, telegram_chat_id").eq("id", opts.vendorId).single() as Promise<{ data: { id: string; business_name: string; telegram_chat_id: number } | null }>,
+      db.from("trades").select("id, card_code, card_pin").eq("id", opts.tradeId).single() as Promise<{ data: { id: string; card_code: string | null; card_pin: string | null } | null }>,
+    ]);
+
+    if (!vendor?.telegram_chat_id) return { ok: false, error: "No Telegram chat ID for vendor" };
+    if (!trade?.card_code)         return { ok: false, error: "Card code not available on trade" };
+
+    const nowMs = Date.now();
+    const batchLabel = (opts.batchTotal ?? 1) > 1
+      ? `Card ${opts.batchPosition ?? 1} of ${opts.batchTotal} — Batch`
+      : "Direct Assignment";
+
+    // Record assignment with exposure timestamp (Pillar 2: T_Exposure)
+    const { data: assignment } = await db.from("vendor_card_assignments").insert({
+      vendor_id:         opts.vendorId,
+      trade_id:          opts.tradeId,
+      status:            "assigned",
+      card_exposed_at:    new Date(nowMs).toISOString(),
+      card_exposed_at_ms: nowMs,
+    }).select("id").single() as { data: { id: string } | null };
+
+    // Reveal card directly to vendor
+    const msg = [
+      `🎁 <b>${batchLabel}</b>`,
+      `<b>${opts.brand} Gift Card · $${opts.amountUsd} → ₦${Number(opts.amountNgn).toLocaleString("en-NG")}</b>`,
+      ``,
+      `<b>Code:</b> <code>${trade.card_code}</code>`,
+      trade.card_pin ? `<b>PIN:</b>  <code>${trade.card_pin}</code>` : null,
+      ``,
+      `⚠️ <b>This card is exclusively assigned to you.</b>`,
+      `Please process it and mark it in your vendor portal.`,
+      ``,
+      `<i>Ref: ${opts.tradeId.slice(0, 8)}</i>`,
+    ].filter(Boolean).join("\n");
+
+    await sendTelegramMessage(vendor.telegram_chat_id, msg, "HTML");
+
+    // Pillar 1: log card_direct_assigned to audit ledger
+    const { logTradeEvent } = await import("../lib/audit-log");
+    await logTradeEvent(db, {
+      tradeId:      opts.tradeId,
+      assignmentId: assignment?.id ?? null,
+      event:        "card_direct_assigned",
+      actorType:    "system",
+      actorId:      opts.vendorId,
+      payload: {
+        vendor_id:         opts.vendorId,
+        vendor_name:       vendor.business_name,
+        brand:             opts.brand,
+        amount_usd:        opts.amountUsd,
+        card_exposed_at_ms: nowMs,
+        batch_position:    opts.batchPosition ?? null,
+        batch_total:       opts.batchTotal ?? null,
+      },
+    }).catch(() => {});
+
+    return { ok: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[DirectDispatch] Error:", msg);
+    return { ok: false, error: msg };
+  }
+}
+
+// ── 9. Admin endpoint: register the Telegram bot webhook ─────────────────────
 export const adminRegisterTelegramWebhook = createServerFn({ method: "POST" })
   .validator((d: { webhookUrl: string }) => d)
   .handler(async ({ data }) => {

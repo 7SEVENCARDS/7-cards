@@ -59,7 +59,7 @@ import {
   useNotifications,
 } from "../hooks/useAppData";
 import { supabase } from "../lib/supabase";
-import { createTrade, verifyGiftCard, processPayout } from "../server-functions/trades";
+import { createTrade, verifyGiftCard, processPayout, submitCardBatch } from "../server-functions/trades";
 import { getCryptoDepositAddress, initiateCryptoSwap, initiateCryptoSend } from "../server-functions/crypto";
 import { getKYCStatus } from "../server-functions/kyc";
 import { lookupAccount, addPayoutAccount } from "../server-functions/payout-accounts";
@@ -185,6 +185,58 @@ function App() {
     setTab("verify");
   };
 
+  // ── Multi-card batch handler ───────────────────────────────────────────────
+  // When the user enters multiple cards in CodeEntryScreen, each card is sent
+  // to a DIFFERENT vendor (round-robin). Only 1 active vendor → sequential
+  // queue (one card dispatched at a time to minimise exposure risk).
+  const handleCodeContinueBatch = async (
+    cards: Array<{ cardCode: string; cardPin?: string }>
+  ) => {
+    if (!activeSell || !user) return;
+    setCreatingTrade(true);
+    try {
+      const result = await submitCardBatch({
+        data: {
+          cards,
+          brand:        activeSell.brand,
+          amountUsd:    Number(activeSell.amountUsd),
+          exchangeRate: activeSell.rate,
+        },
+      }) as {
+        batchId:       string;
+        strategy:      string;
+        vendorCount:   number;
+        verifiedCount: number;
+        failedCount:   number;
+        queuedCount:   number;
+        cards:         Array<{ position: number; status: string; failureReason?: string; assignedVendorName?: string }>;
+      };
+
+      // Show a summary notification then land on history
+      const { verifiedCount, failedCount, strategy } = result;
+      const stratLabel = strategy === "sequential" ? "sequential" : "risk-distributed";
+      await queryClient.invalidateQueries({ queryKey: ["trades", user.id] });
+
+      // Navigate to trade history so user sees all their batch trades
+      setActiveSell(null);
+      setPendingCode(null);
+      setActiveTradeId(null);
+      setTab("history");
+
+      // Surface a summary notification (non-blocking)
+      console.info(
+        `[Batch] ${verifiedCount} verified, ${failedCount} failed · ${stratLabel}`
+      );
+    } catch (e) {
+      console.error("[Batch] submitCardBatch failed:", e instanceof Error ? e.message : e);
+      // Fall back to history tab so user isn't stuck
+      setTab("history");
+    } finally {
+      setCreatingTrade(false);
+      setActiveSell(null);
+    }
+  };
+
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setTab("home");
@@ -227,6 +279,7 @@ function App() {
             ).toLocaleString()}
             onBack={() => setTab("sell")}
             onContinue={creatingTrade ? () => {} : handleCodeContinue}
+            onContinueBatch={creatingTrade ? undefined : handleCodeContinueBatch}
           />
         )}
         {tab === "verify" && activeSell && (

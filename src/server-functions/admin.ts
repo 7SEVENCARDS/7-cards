@@ -459,6 +459,72 @@ export const processEscrowTrade = createServerFn({ method: "POST" })
   });
 
 // ─── Spread revenue aggregation (admin only) ──────────────────────────────────
+// ─── Audit Log Query ──────────────────────────────────────────────────────────
+export const queryAuditLog = createServerFn({ method: "GET" })
+  .validator((d: {
+    tradeId?:   string;
+    actorId?:   string;
+    eventType?: string;
+    limit?:     number;
+    offset?:    number;
+  }) => d)
+  .handler(async ({ data }) => {
+    const { requireAdmin } = await import("../lib/auth-server");
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    let q = db
+      .from("trade_audit_log")
+      .select("id, trade_id, assignment_id, event, actor_type, actor_id, server_ts_ms, payload_hash, payload");
+
+    if (data.tradeId)   q = (q as ReturnType<typeof q.eq>).eq("trade_id", data.tradeId);
+    if (data.actorId)   q = (q as ReturnType<typeof q.eq>).eq("actor_id", data.actorId);
+    if (data.eventType) q = (q as ReturnType<typeof q.eq>).eq("event", data.eventType);
+
+    const limit  = Math.min(data.limit ?? 50, 200);
+    const offset = data.offset ?? 0;
+    q = (q as ReturnType<typeof q.order>)
+      .order("server_ts_ms", { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    const { data: entries, error } = await q;
+    if (error) throw new Error(error.message);
+    return { entries: entries ?? [] };
+  });
+
+// ─── Disputes Query ───────────────────────────────────────────────────────────
+export const queryDisputes = createServerFn({ method: "GET" })
+  .validator((d: {
+    verdict?:  string;
+    vendorId?: string;
+    limit?:    number;
+  }) => d)
+  .handler(async ({ data }) => {
+    const { requireAdmin } = await import("../lib/auth-server");
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    let q = db.from("vendor_disputes").select(`
+      id, vendor_id, trade_id, failure_reason,
+      t_exposure_ms, t_redeemed_ms, t_audit_ms,
+      verdict, verdict_at, auto_actioned,
+      deposit_forfeited_ngn, auto_suspended,
+      created_at,
+      vendors(business_name, contact_name)
+    `);
+
+    if (data.verdict)  q = (q as ReturnType<typeof q.eq>).eq("verdict", data.verdict);
+    if (data.vendorId) q = (q as ReturnType<typeof q.eq>).eq("vendor_id", data.vendorId);
+    q = (q as ReturnType<typeof q.order>)
+      .order("created_at", { ascending: false })
+      .limit(Math.min(data.limit ?? 50, 100));
+
+    const { data: disputes, error } = await q;
+    if (error) throw new Error(error.message);
+    return { disputes: disputes ?? [] };
+  });
+
+// ─── Spread Revenue ───────────────────────────────────────────────────────────
 export const getSpreadRevenue = createServerFn({ method: "GET" })
   .inputValidator((d: { days?: number }) => d)
   .handler(async ({ data }) => {
