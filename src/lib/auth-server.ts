@@ -3,7 +3,7 @@
 // Import only in server functions / server-only code.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { getWebRequest } from "@tanstack/react-start/server";
+import { getRequest } from "@tanstack/react-start/server";
 import { getServerSupabase } from "./supabase.server";
 
 // ─── Error types ──────────────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ function extractAccessToken(cookieHeader: string): string | null {
 // Throws AuthError (401) if the session is missing or invalid.
 
 export async function requireUser(): Promise<string> {
-  const request = getWebRequest();
+  const request = getRequest();
   const cookieHeader = request?.headers.get("cookie") ?? "";
   const accessToken = extractAccessToken(cookieHeader);
 
