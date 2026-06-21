@@ -74,12 +74,21 @@ IS_DEMO_MODE = "false"
 VITE_APP_URL = "https://7evencards.xyz"
 APP_URL      = "https://7evencards.xyz"
 
-# ─── Custom domain routing (Cloudflare dashboard → Workers → Triggers) ───────
-# After deploying, add a route in the Cloudflare dashboard:
-#   Route: 7evencards.xyz/*
-#   Worker: seven-cards (production)
-# This routes your custom domain to the Worker automatically.
-# DNS: ensure an A record or CNAME for 7evencards.xyz points to Cloudflare (proxied).
+# ─── Subdomain routing ────────────────────────────────────────────────────────
+# Apex domain — all consumer traffic
+[[env.production.routes]]
+pattern   = "7evencards.xyz/*"
+zone_name = "7evencards.xyz"
+
+# www → apex redirect (handled in server.ts)
+[[env.production.routes]]
+pattern   = "www.7evencards.xyz/*"
+zone_name = "7evencards.xyz"
+
+# vendor.7evencards.xyz → rewrites to /vendor/* (handled in server.ts)
+[[env.production.routes]]
+pattern   = "vendor.7evencards.xyz/*"
+zone_name = "7evencards.xyz"
 
 # ─── Workers Rate Limiting (distributed, edge-level) ─────────────────────────
 # The app currently uses per-isolate in-process rate limiting (src/lib/rate-limiter.ts).
