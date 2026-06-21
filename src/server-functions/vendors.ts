@@ -449,10 +449,14 @@ export const markAssignmentRedeemed = createServerFn({ method: "POST" })
       .eq("user_id", userId);
 
     // Reset consecutive-failure counter — clean redemption streak is good standing
-    db.rpc("record_vendor_success", { p_vendor_id: vendor.id }).catch(() => {});
+    db.rpc("record_vendor_success", { p_vendor_id: vendor.id }).catch(e =>
+      console.error("[Vendor] record_vendor_success RPC failed:", e instanceof Error ? e.message : e)
+    );
 
     // Check and pay referral bonus (non-fatal, fire-and-forget)
-    checkReferralBonus(db, vendor.id, newTotalRedeemed).catch(() => {});
+    checkReferralBonus(db, vendor.id, newTotalRedeemed).catch(e =>
+      console.error("[Vendor] checkReferralBonus failed:", e instanceof Error ? e.message : e)
+    );
 
     return { success: true };
   });
@@ -554,10 +558,14 @@ export const markAssignmentFailed = createServerFn({ method: "POST" })
       title: autoSuspended ? "Account Suspended ⛔" : "Assignment Failed ⚠️",
       message: `Your ${assignment.brand} $${assignment.amount_usd} assignment was marked failed: "${data.reason}".${forfeitStr} ${remainingStr}`,
       type: autoSuspended ? "error" : "warning",
-    }).catch(() => {});
+    }).catch(e =>
+      console.error("[Vendor] failure notification insert failed:", e instanceof Error ? e.message : e)
+    );
 
     // Telegram notification to vendor (non-fatal, fire-and-forget)
-    notifyVendorFailure(db, vendor.id, assignment, forfeitedAmount, consecutive, threshold, autoSuspended).catch(() => {});
+    notifyVendorFailure(db, vendor.id, assignment, forfeitedAmount, consecutive, threshold, autoSuspended).catch(e =>
+      console.error("[Vendor] notifyVendorFailure failed:", e instanceof Error ? e.message : e)
+    );
 
     // ── PILLAR 1: Log 'vendor_marked_failed' to the immutable ledger ─────────
     try {
