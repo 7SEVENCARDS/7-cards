@@ -206,11 +206,14 @@ export default {
             })
           );
         }
-        // Fire-and-forget — respond immediately so the scheduler doesn't time out
+        // waitUntil keeps the Worker alive until cronWork settles even after we respond.
+        // Without it, Cloudflare may terminate the isolate as soon as the Response is
+        // returned, cutting off the async Telegram sends mid-flight.
         const { sendRateCheckToAllVendors } = await import("./lib/rate-check");
-        sendRateCheckToAllVendors()
+        const cronWork = sendRateCheckToAllVendors()
           .then(r => console.info("[Cron] Rate-check complete:", r))
           .catch(e => console.error("[Cron] Rate-check failed:", e instanceof Error ? e.message : e));
+        (ctx as { waitUntil?: (p: Promise<unknown>) => void }).waitUntil?.(cronWork);
         return addSecurityHeaders(
           new Response(JSON.stringify({ ok: true, started: true }), {
             headers: { "Content-Type": "application/json" },
@@ -219,10 +222,26 @@ export default {
       }
     }
 
-    // ── Health check ────────────────────────────────────────────────────────
+    // ── Health check — shows config status without exposing secret values ──
     if (url.pathname === "/api/health") {
+      const cfg = {
+        supabase:   !!(process.env.VITE_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
+        squadco:    !!process.env.SQUADCO_SECRET_KEY,
+        reloadly:   !!(process.env.RELOADLY_CLIENT_ID && process.env.RELOADLY_CLIENT_SECRET),
+        busha:      !!process.env.BUSHA_API_KEY,
+        onesignal:  !!(process.env.ONESIGNAL_APP_ID && process.env.ONESIGNAL_REST_API_KEY),
+        telegram:   !!process.env.TELEGRAM_BOT_TOKEN,
+        app_secret: !!process.env.APP_SECRET,
+        cron:       !!process.env.CRON_SECRET,
+      };
+      const allOk = Object.values(cfg).every(Boolean);
+      if (!allOk) {
+        const missing = Object.entries(cfg).filter(([, v]) => !v).map(([k]) => k);
+        console.warn("[Health] Missing secrets:", missing.join(", "));
+      }
       return addSecurityHeaders(
-        new Response(JSON.stringify({ ok: true, ts: Date.now() }), {
+        new Response(JSON.stringify({ ok: allOk, ts: Date.now(), config: cfg }), {
+          status: allOk ? 200 : 503,
           headers: { "Content-Type": "application/json" },
         }),
       );
