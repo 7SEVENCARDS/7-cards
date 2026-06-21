@@ -153,12 +153,29 @@ jobs:
           ADMIN_TELEGRAM_WEBHOOK_SECRET: ${{ secrets.ADMIN_TELEGRAM_WEBHOOK_SECRET }}
         continue-on-error: true   # Don't fail deploy if bot tokens not set yet
 
+      - name: Build API Worker (api.7evencards.xyz)
+        run: node build-worker.mjs
+        working-directory: artifacts/api-server
+
+      - name: Deploy API Worker to Cloudflare (api.7evencards.xyz)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: artifacts/api-server
+          command: deploy --env production
+
       - name: Post-deploy health check
         run: |
           sleep 8
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://7evencards.xyz/api/health")
-          echo "Health check → HTTP $STATUS"
+          echo "Main app health check → HTTP $STATUS"
           if [ "$STATUS" != "200" ]; then
-            echo "::warning::Health check returned $STATUS — check the deployment"
+            echo "::warning::Main app health check returned $STATUS — check the deployment"
+          fi
+          API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://api.7evencards.xyz/api/healthz")
+          echo "API worker health check → HTTP $API_STATUS"
+          if [ "$API_STATUS" != "200" ]; then
+            echo "::warning::API worker health check returned $API_STATUS — check the deployment"
           fi
         continue-on-error: true
