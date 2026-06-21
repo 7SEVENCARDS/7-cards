@@ -23,6 +23,8 @@
 #   ONESIGNAL_REST_API_KEY    — OneSignal dashboard
 #   RELOADLY_CLIENT_ID        — Reloadly dashboard
 #   RELOADLY_CLIENT_SECRET    — Reloadly dashboard
+#   DOJAH_APP_ID              — Dojah dashboard → Apps → API Keys
+#   DOJAH_SECRET_KEY          — Dojah dashboard → Apps → API Keys
 #   APP_SECRET                — Any strong random string (session signing)
 #   ADMIN_TELEGRAM_BOT_TOKEN  — BotFather
 #   ADMIN_TELEGRAM_BOT_USERNAME — BotFather (without @)
