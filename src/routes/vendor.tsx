@@ -23,7 +23,8 @@ import {
   getMyBadges,
   getMyReferralInfo,
 } from "../server-functions/vendors";
-import { getMyBroadcastClaims } from "../server-functions/vendor-broadcast";
+import { getMyBroadcastClaims, getActiveBroadcasts } from "../server-functions/vendor-broadcast";
+import type { ActiveBroadcastRow } from "../server-functions/vendor-broadcast";
 
 export const Route = createFileRoute("/vendor")({
   component: VendorPortal,
@@ -64,6 +65,119 @@ const BRAND_EMOJI: Record<string, string> = {
   Apple: "🍎", Amazon: "📦", Steam: "🎮", "Google Play": "▶️",
   Xbox: "🟢", PlayStation: "🎯", Netflix: "🎬", Spotify: "🎵",
 };
+
+// ─── Countdown hook — ticks every second, client-side only ────────────────────
+function useBroadcastCountdown(expiresAt: string): number {
+  const getRemaining = () =>
+    Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
+  const [sec, setSec] = useState(getRemaining);
+  useEffect(() => {
+    const id = setInterval(() => setSec(getRemaining()), 1000);
+    return () => clearInterval(id);
+  }, [expiresAt]);
+  return sec;
+}
+
+function fmtCountdown(sec: number): string {
+  if (sec <= 0) return "Expired";
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return m > 0 ? `${m}m ${String(s).padStart(2, "0")}s left` : `${s}s left`;
+}
+
+// ─── Single broadcast countdown card ─────────────────────────────────────────
+function BroadcastCountdownBanner({ b }: { b: ActiveBroadcastRow }) {
+  const sec = useBroadcastCountdown(b.expires_at);
+  const expired = sec <= 0 || b.status !== "pending";
+  const urgent  = sec > 0 && sec <= 60;
+  const warning = sec > 60 && sec <= 300;
+
+  const borderColor = b.claimed_by_me
+    ? "border-green-500/30 bg-green-500/5"
+    : expired
+    ? "border-border/40 bg-secondary/40"
+    : urgent
+    ? "border-red-500/40 bg-red-500/5"
+    : warning
+    ? "border-gold/40 bg-gold/5"
+    : "border-cyan/30 bg-cyan/5";
+
+  const countdownColor = b.claimed_by_me
+    ? "text-green-400"
+    : expired
+    ? "text-muted-foreground"
+    : urgent
+    ? "text-red-400"
+    : warning
+    ? "text-gold"
+    : "text-cyan";
+
+  return (
+    <div className={`rounded-2xl border px-4 py-3 flex items-center gap-3 transition-colors ${borderColor} ${urgent && !b.claimed_by_me && !expired ? "animate-pulse" : ""}`}>
+      <span className="text-2xl shrink-0">{BRAND_EMOJI[b.brand] ?? "🎁"}</span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="text-sm font-extrabold">{b.brand} <span className="text-muted-foreground font-normal">${Number(b.amount_usd).toFixed(0)}</span></p>
+          {b.claimed_by_me && (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-green-500/20 text-green-400 border border-green-500/25">
+              ✓ You claimed it
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          {b.claimed_by_me
+            ? `₦${Number(b.amount_ngn).toLocaleString("en-NG")} — check your Telegram for the card code`
+            : expired
+            ? "This offer has closed"
+            : "Reply YES in Telegram to claim"}
+        </p>
+      </div>
+      <div className="text-right shrink-0">
+        <p className={`text-xs font-extrabold tabular-nums ${countdownColor}`}>
+          {b.claimed_by_me ? "🎉 Won" : expired ? "⏰ Closed" : `⏳ ${fmtCountdown(sec)}`}
+        </p>
+        {!b.claimed_by_me && !expired && (
+          <p className="text-[10px] text-muted-foreground mt-0.5">
+            ₦{Number(b.amount_ngn).toLocaleString("en-NG")}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Live broadcast section — polls every 30s ─────────────────────────────────
+function LiveBroadcastSection() {
+  const [broadcasts, setBroadcasts] = useState<ActiveBroadcastRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  const fetch = useCallback(async () => {
+    try {
+      const rows = await getActiveBroadcasts({ data: {} }) as ActiveBroadcastRow[];
+      setBroadcasts(rows);
+    } catch { /* non-fatal */ }
+    setLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    fetch();
+    const id = setInterval(fetch, 30_000);
+    return () => clearInterval(id);
+  }, [fetch]);
+
+  if (!loaded || broadcasts.length === 0) return null;
+
+  return (
+    <div>
+      <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
+        Live Offers
+      </p>
+      <div className="space-y-2">
+        {broadcasts.map(b => <BroadcastCountdownBanner key={b.id} b={b} />)}
+      </div>
+    </div>
+  );
+}
 
 const STATUS_COLORS: Record<string, string> = {
   assigned: "text-gold bg-gold/10 border-gold/20",
@@ -227,6 +341,9 @@ function DashboardTab({ vendor }: { vendor: VendorSession }) {
         </div>
       </div>
 
+      {/* Live Broadcast Countdown */}
+      <LiveBroadcastSection />
+
       {/* Telegram Setup Reminder */}
       {!vendor.telegram_username && (
         <div className="bg-blue-500/10 border border-blue-500/20 rounded-2xl p-4 flex items-start gap-3">
@@ -314,8 +431,11 @@ function CardsTab() {
 
   return (
     <div className="p-6">
+      {/* Live broadcast countdown — always visible at top of Cards tab */}
+      <LiveBroadcastSection />
+
       {/* Filter tabs */}
-      <div className="flex gap-2 mb-4">
+      <div className="flex gap-2 mb-4 mt-2">
         {(["all", "assigned", "redeemed"] as const).map(f => (
           <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1.5 rounded-full text-xs font-bold transition-colors capitalize ${filter === f ? "bg-gold text-jungle-deep" : "bg-secondary text-muted-foreground"}`}>
             {f}

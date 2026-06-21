@@ -450,6 +450,90 @@ export const getMyBroadcastClaims = createServerFn({ method: "GET" })
     return data ?? [];
   });
 
+// ── 5. Active broadcasts — live countdown feed ────────────────────────────────
+// Returns all broadcasts that are still open (pending + not expired) so the
+// vendor dashboard can render a live countdown without polling the Telegram bot.
+// Also returns any broadcast claimed by this vendor in the last 2 hours so
+// the "You claimed this" banner stays visible after winning the race.
+export type ActiveBroadcastRow = {
+  id: string;
+  brand: string;
+  amount_usd: number;
+  amount_ngn: number;
+  status: string;          // 'pending' | 'claimed' | 'expired'
+  expires_at: string;      // ISO — client ticks down from this
+  created_at: string;
+  claimed_at: string | null;
+  claimed_by_me: boolean;  // true when this vendor won the race
+};
+
+export const getActiveBroadcasts = createServerFn({ method: "GET" })
+  .handler(async (): Promise<ActiveBroadcastRow[]> => {
+    const userId = await requireVendorAuth();
+    const db = getServerSupabase();
+
+    const { data: vendor } = await db
+      .from("vendors")
+      .select("id")
+      .eq("user_id", userId)
+      .single() as { data: { id: string } | null };
+
+    if (!vendor) return [];
+
+    // All pending (open window) broadcasts
+    const { data: pending } = await db
+      .from("vendor_trade_broadcasts")
+      .select("id, brand, amount_usd, amount_ngn, status, expires_at, created_at, claimed_at, claimed_by_vendor_id")
+      .eq("status", "pending")
+      .gt("expires_at", new Date().toISOString())
+      .order("created_at", { ascending: false })
+      .limit(5) as {
+        data: Array<{
+          id: string; brand: string; amount_usd: number; amount_ngn: number;
+          status: string; expires_at: string; created_at: string;
+          claimed_at: string | null; claimed_by_vendor_id: string | null;
+        }> | null;
+      };
+
+    // Broadcasts this vendor claimed in the last 2 hours (show "You got it!" banner)
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const { data: mine } = await db
+      .from("vendor_trade_broadcasts")
+      .select("id, brand, amount_usd, amount_ngn, status, expires_at, created_at, claimed_at, claimed_by_vendor_id")
+      .eq("claimed_by_vendor_id", vendor.id)
+      .gte("claimed_at", twoHoursAgo)
+      .order("claimed_at", { ascending: false })
+      .limit(3) as {
+        data: Array<{
+          id: string; brand: string; amount_usd: number; amount_ngn: number;
+          status: string; expires_at: string; created_at: string;
+          claimed_at: string | null; claimed_by_vendor_id: string | null;
+        }> | null;
+      };
+
+    // Merge, de-duplicate by id, annotate claimed_by_me
+    const seen = new Set<string>();
+    const all: ActiveBroadcastRow[] = [];
+
+    for (const row of [...(pending ?? []), ...(mine ?? [])]) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      all.push({
+        id:            row.id,
+        brand:         row.brand,
+        amount_usd:    Number(row.amount_usd),
+        amount_ngn:    Number(row.amount_ngn),
+        status:        row.status,
+        expires_at:    row.expires_at,
+        created_at:    row.created_at,
+        claimed_at:    row.claimed_at,
+        claimed_by_me: row.claimed_by_vendor_id === vendor.id,
+      });
+    }
+
+    return all;
+  });
+
 // ── 5. Admin endpoint: register the Telegram bot webhook ─────────────────────
 export const adminRegisterTelegramWebhook = createServerFn({ method: "POST" })
   .validator((d: { webhookUrl: string }) => d)
