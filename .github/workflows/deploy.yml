@@ -18,74 +18,72 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
-          bun-version: latest
+          version: 10
 
-      - name: Cache dependencies
-        uses: actions/cache@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
+          node-version: '20'
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: bun install --ignore-scripts
+        run: pnpm install
 
       - name: Type-check
-        run: bun run build --mode development
+        run: pnpm run build:dev
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          VITE_APP_URL: https://7evencards.xyz
-          APP_URL: https://7evencards.xyz
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           BUSHA_API_KEY: ${{ secrets.BUSHA_API_KEY }}
           ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
           RELOADLY_CLIENT_ID: ${{ secrets.RELOADLY_CLIENT_ID }}
+          RELOADLY_CLIENT_SECRET: ${{ secrets.RELOADLY_CLIENT_SECRET }}
           SQUADCO_SECRET_KEY: ${{ secrets.SQUADCO_SECRET_KEY }}
+          DOJAH_APP_ID: ${{ secrets.DOJAH_APP_ID }}
+          DOJAH_SECRET_KEY: ${{ secrets.DOJAH_SECRET_KEY }}
           APP_SECRET: ${{ secrets.APP_SECRET }}
+          VITE_APP_URL: https://7evencards.xyz
+          APP_URL: https://7evencards.xyz
 
       - name: Test
-        run: bun run test
+        run: pnpm run test
 
       - name: Lint
-        run: bun run lint
+        run: pnpm run lint
         continue-on-error: true
 
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
     environment: production
-    needs: build-and-lint    # §4.5 fix: never deploy when CI fails
+    needs: build-and-lint    # Never deploy when CI fails
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
-          bun-version: latest
+          version: 10
 
-      - name: Cache dependencies
-        uses: actions/cache@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
+          node-version: '20'
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: bun install --ignore-scripts
+        run: pnpm install
 
       - name: Build (production)
-        run: bun run build
+        run: pnpm run build
         env:
           NODE_ENV: production
-          # Domain is a known constant — no secret needed
           VITE_APP_URL: https://7evencards.xyz
           APP_URL: https://7evencards.xyz
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
