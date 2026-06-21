@@ -184,7 +184,9 @@ export const submitCardBatch = createServerFn({ method: "POST" })
               batch_position: position,
               strategy,
             },
-          }).catch(() => {});
+          }).catch(e =>
+            console.error("[Trade] logTradeEvent (card_verified) failed:", e instanceof Error ? e.message : e)
+          );
 
           if (!queued && !needsReview) {
             // P0-1 fix: Only dispatch when verified — never dispatch pending_review trades.
@@ -199,7 +201,9 @@ export const submitCardBatch = createServerFn({ method: "POST" })
             }).catch(() => ({ ok: false, error: "dispatch failed" }));
 
             if (dispatchResult.ok) {
-              await recordVendorAssignment(db, vendor.id).catch(() => {});
+              await recordVendorAssignment(db, vendor.id).catch(e =>
+                console.error("[Trade] recordVendorAssignment failed:", e instanceof Error ? e.message : e)
+              );
             }
           }
 
@@ -228,13 +232,17 @@ export const submitCardBatch = createServerFn({ method: "POST" })
         }
       } catch (e) {
         const errMsg = e instanceof Error ? e.message : "Verification service error";
-        await db.from("trades").update({ status: "invalid", failure_reason: errMsg }).eq("id", trade.id).catch(() => {});
+        await db.from("trades").update({ status: "invalid", failure_reason: errMsg }).eq("id", trade.id).catch(e =>
+          console.error("[Trade] status update (invalid) failed:", e instanceof Error ? e.message : e)
+        );
         results.push({ position, tradeId: trade.id, status: "failed", failureReason: errMsg, amountNgn });
       }
     }
 
     // Sync batch counts
-    await db.rpc("sync_batch_status", { p_batch_id: batch.id }).catch(() => {});
+    await db.rpc("sync_batch_status", { p_batch_id: batch.id }).catch(e =>
+      console.error("[Trade] sync_batch_status RPC failed:", e instanceof Error ? e.message : e)
+    );
 
     return {
       batchId:       batch.id,
