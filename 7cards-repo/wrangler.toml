@@ -62,6 +62,25 @@ IS_DEMO_MODE   = "false"
 #   DOJAH_APP_ID
 #   DOJAH_SECRET_KEY
 #   APP_SECRET
+#
+# ── Admin Telegram Bot (migration 020) ───────────────────────────────────────
+#   ADMIN_TELEGRAM_BOT_TOKEN     — BotFather token for the admin/support bot
+#   ADMIN_TELEGRAM_WEBHOOK_SECRET — random string to validate Telegram POSTs
+#   ADMIN_TELEGRAM_BOT_USERNAME  — bot username (without @)
+#   SUPPORT_TELEGRAM_CHAT_ID     — group chat ID for support escalations
+#
+# ── Third-party API Infrastructure (migration 021) ───────────────────────────
+# These are set on the api-server (Express/Node), NOT on the CF Worker.
+# Set them in the api-server's .env or deployment environment:
+#   API_GATEWAY_USER_ID  — UUID of a dedicated Supabase auth user created once
+#                          for all API-submitted trades.
+#                          Steps:
+#                            1. In Supabase dashboard → Auth → Users → Add User
+#                               (use e.g. api-gateway@internal.7sevencards.com)
+#                            2. Copy the generated UUID
+#                            3. Run: INSERT INTO public.profiles (id, full_name, role)
+#                               VALUES ('<uuid>', 'API Gateway', 'api');
+#                            4. Set API_GATEWAY_USER_ID=<uuid> on api-server
 
 # ─── Workers Rate Limiting (distributed, edge-level) ─────────────────────────
 # The app currently uses per-isolate in-process rate limiting (src/lib/rate-limiter.ts).
