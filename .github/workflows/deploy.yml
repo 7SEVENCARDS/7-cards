@@ -199,7 +199,9 @@ jobs:
         working-directory: artifacts/api-server
 
       - name: Deploy API Worker to Cloudflare (api.7evencards.xyz)
-        run: pnpm exec wrangler deploy --env production
+        run: |
+          rm -rf ../../.wrangler/deploy
+          pnpm exec wrangler deploy --config wrangler.toml --env production
         working-directory: artifacts/api-server
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
