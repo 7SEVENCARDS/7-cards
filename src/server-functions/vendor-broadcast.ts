@@ -142,10 +142,10 @@ export async function handleTelegramReply(opts: {
     return;
   }
 
-  // Find the vendor by telegram_chat_id
+  // Find the vendor by telegram_chat_id — include bot-state fields for FSM routing
   const { data: vendor } = await db
     .from("vendors")
-    .select("id, status, contact_name, business_name")
+    .select("id, status, contact_name, business_name, telegram_bot_state, telegram_bot_state_data")
     .eq("telegram_chat_id", opts.chatId)
     .maybeSingle() as {
       data: {
@@ -153,6 +153,8 @@ export async function handleTelegramReply(opts: {
         status: string;
         contact_name: string | null;
         business_name: string;
+        telegram_bot_state: string | null;
+        telegram_bot_state_data: Record<string, unknown> | null;
       } | null;
     };
 
@@ -181,6 +183,29 @@ export async function handleTelegramReply(opts: {
       "HTML"
     );
     return;
+  }
+
+  // ── Rate-check FSM: intercept BEFORE broadcast-claim logic ──────────────────
+  // If this vendor is mid-conversation with the rate-check bot, route the
+  // message there first so "YES" during a rate-check doesn't accidentally
+  // claim a card broadcast.
+  if (
+    vendor.telegram_bot_state === "rate_check_pending" ||
+    vendor.telegram_bot_state === "awaiting_new_rate"
+  ) {
+    try {
+      const { handleRateCheckReply } = await import("../lib/rate-check");
+      const consumed = await handleRateCheckReply(opts.chatId, opts.messageText, vendor as {
+        id: string;
+        contact_name: string | null;
+        business_name: string;
+        telegram_bot_state: string | null;
+        telegram_bot_state_data: Record<string, unknown> | null;
+      });
+      if (consumed) return; // message handled — don't fall through to broadcast logic
+    } catch (e) {
+      console.error("[RateCheck] handleRateCheckReply threw:", e instanceof Error ? e.message : e);
+    }
   }
 
   // Find the most recent pending broadcast not yet claimed
@@ -534,7 +559,43 @@ export const getActiveBroadcasts = createServerFn({ method: "GET" })
     return all;
   });
 
-// ── 5. Admin endpoint: register the Telegram bot webhook ─────────────────────
+// ── 6. Rate history for the vendor portal ProfileTab ─────────────────────────
+export type RateHistoryRow = {
+  id: string;
+  old_rate: number | null;
+  new_rate: number;
+  changed_via: string;
+  admin_notified_at: string | null;
+  created_at: string;
+};
+
+export const getMyRateHistory = createServerFn({ method: "GET" })
+  .handler(async (): Promise<{ currentRate: number | null; history: RateHistoryRow[] }> => {
+    const userId = await requireVendorAuth();
+    const db = getServerSupabase();
+
+    const { data: vendor } = await db
+      .from("vendors")
+      .select("id, preferred_rate_ngn_per_usd")
+      .eq("user_id", userId)
+      .single() as { data: { id: string; preferred_rate_ngn_per_usd: number | null } | null };
+
+    if (!vendor) return { currentRate: null, history: [] };
+
+    const { data: history } = await db
+      .from("vendor_rate_history")
+      .select("id, old_rate, new_rate, changed_via, admin_notified_at, created_at")
+      .eq("vendor_id", vendor.id)
+      .order("created_at", { ascending: false })
+      .limit(10) as { data: RateHistoryRow[] | null };
+
+    return {
+      currentRate: vendor.preferred_rate_ngn_per_usd,
+      history: history ?? [],
+    };
+  });
+
+// ── 7. Admin endpoint: register the Telegram bot webhook ─────────────────────
 export const adminRegisterTelegramWebhook = createServerFn({ method: "POST" })
   .validator((d: { webhookUrl: string }) => d)
   .handler(async ({ data }) => {

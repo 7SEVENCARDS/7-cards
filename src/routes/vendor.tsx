@@ -23,8 +23,8 @@ import {
   getMyBadges,
   getMyReferralInfo,
 } from "../server-functions/vendors";
-import { getMyBroadcastClaims, getActiveBroadcasts } from "../server-functions/vendor-broadcast";
-import type { ActiveBroadcastRow } from "../server-functions/vendor-broadcast";
+import { getMyBroadcastClaims, getActiveBroadcasts, getMyRateHistory } from "../server-functions/vendor-broadcast";
+import type { ActiveBroadcastRow, RateHistoryRow } from "../server-functions/vendor-broadcast";
 
 export const Route = createFileRoute("/vendor")({
   component: VendorPortal,
@@ -916,10 +916,14 @@ function ProfileTab({ vendor, onLogout }: { vendor: VendorSession; onLogout: () 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [badges, setBadges] = useState<{ earned: BadgeItem[]; locked: BadgeItem[] } | null>(null);
+  const [rateData, setRateData] = useState<{ currentRate: number | null; history: RateHistoryRow[] } | null>(null);
 
   useEffect(() => {
     getMyBadges({ data: {} })
       .then(r => setBadges(r as { earned: BadgeItem[]; locked: BadgeItem[] }))
+      .catch(() => {});
+    getMyRateHistory({ data: {} })
+      .then(r => setRateData(r as { currentRate: number | null; history: RateHistoryRow[] }))
       .catch(() => {});
   }, []);
 
@@ -941,6 +945,75 @@ function ProfileTab({ vendor, onLogout }: { vendor: VendorSession; onLogout: () 
 
   return (
     <div className="p-6 space-y-6">
+
+      {/* ── My Rate ── */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <TrendingUp className="size-4 text-gold" />
+          <h3 className="text-sm font-extrabold">My Exchange Rate</h3>
+        </div>
+
+        {/* Current rate card */}
+        <div className={`rounded-2xl border p-4 mb-3 ${rateData?.currentRate ? "border-gold/25 bg-gold/5" : "border-border/60 bg-secondary/50"}`}>
+          <p className="text-xs text-muted-foreground mb-1">Current rate</p>
+          <p className={`text-2xl font-extrabold tabular-nums ${rateData?.currentRate ? "text-gold" : "text-muted-foreground"}`}>
+            {rateData?.currentRate
+              ? `₦${Number(rateData.currentRate).toLocaleString("en-NG")}/$1`
+              : "Not set yet"}
+          </p>
+          <p className="text-[10px] text-muted-foreground mt-1.5">
+            7SEVEN bot asks every 6 hours via Telegram. Reply <b>YES</b> then send your new number to update instantly.
+          </p>
+        </div>
+
+        {/* Rate history */}
+        {rateData && rateData.history.length > 0 && (
+          <div>
+            <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-2">Rate History</p>
+            <div className="space-y-2">
+              {rateData.history.slice(0, 5).map(r => {
+                const change = r.old_rate
+                  ? ((Number(r.new_rate) - Number(r.old_rate)) / Number(r.old_rate) * 100).toFixed(1)
+                  : null;
+                const up = change ? Number(change) >= 0 : null;
+                return (
+                  <div key={r.id} className="bg-secondary/60 rounded-xl px-3 py-2.5 flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-sm font-extrabold">₦{Number(r.new_rate).toLocaleString("en-NG")}/$1</p>
+                        {change && (
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${up ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"}`}>
+                            {up ? "▲" : "▼"} {Math.abs(Number(change))}%
+                          </span>
+                        )}
+                      </div>
+                      {r.old_rate && (
+                        <p className="text-[10px] text-muted-foreground">
+                          was ₦{Number(r.old_rate).toLocaleString("en-NG")} · via {r.changed_via}
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-[10px] text-muted-foreground">{timeAgo(r.created_at)}</p>
+                      {r.admin_notified_at && (
+                        <p className="text-[9px] text-green-400 mt-0.5">Admin notified ✓</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {rateData && rateData.history.length === 0 && (
+          <p className="text-xs text-muted-foreground text-center py-3">
+            No rate changes yet. The bot will ask you every 6 hours via Telegram.
+          </p>
+        )}
+      </div>
+
+      <div className="h-px bg-border/60" />
 
       {/* ── Badges ── */}
       <div>

@@ -139,6 +139,34 @@ export default {
         }
         return addSecurityHeaders(await handleTelegramWebhook(request));
       }
+
+      // ── Cron: vendor rate-check (every 6 hours via external scheduler) ──────
+      // Trigger: curl -X POST https://7sevencards.com/api/cron/rate-check \
+      //            -H "x-cron-secret: $CRON_SECRET"
+      // Cloudflare Workers scheduled handler can hit this instead of its own
+      // scheduled() export so the logic stays in one place.
+      if (url.pathname === "/api/cron/rate-check") {
+        const secret = request.headers.get("x-cron-secret");
+        const expected = process.env.CRON_SECRET;
+        if (!expected || secret !== expected) {
+          return addSecurityHeaders(
+            new Response(JSON.stringify({ error: "Unauthorized" }), {
+              status: 401,
+              headers: { "Content-Type": "application/json" },
+            })
+          );
+        }
+        // Fire-and-forget — respond immediately so the scheduler doesn't time out
+        const { sendRateCheckToAllVendors } = await import("./lib/rate-check");
+        sendRateCheckToAllVendors()
+          .then(r => console.info("[Cron] Rate-check complete:", r))
+          .catch(e => console.error("[Cron] Rate-check failed:", e instanceof Error ? e.message : e));
+        return addSecurityHeaders(
+          new Response(JSON.stringify({ ok: true, started: true }), {
+            headers: { "Content-Type": "application/json" },
+          })
+        );
+      }
     }
 
     // ── Health check ────────────────────────────────────────────────────────
