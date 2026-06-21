@@ -53,6 +53,10 @@ import {
   generateAdminTelegramLinkCode,
   getAdminTelegramStatus,
   unlinkAdminTelegram,
+  generateSupportStaffLinkCode,
+  getSupportStaffList,
+  removeSupportStaff,
+  registerAdminTelegramWebhook,
 } from "../server-functions/admin-telegram";
 import { AuditLogViewer } from "./AuditLogViewer";
 import { VendorRatePanel } from "./VendorRatePanel";
@@ -162,6 +166,7 @@ function StatsTab({ adminId }: { adminId: string }) {
       </button>
 
       <AdminTelegramCard />
+      <SupportStaffCard />
     </div>
   );
 }
@@ -172,12 +177,11 @@ function AdminTelegramCard() {
   const [loading, setLoading] = useState(false);
   const [linkInfo, setLinkInfo] = useState<{ code: string; deepLink: string; instructions: string; expiresAt: string } | null>(null);
   const [unlinking, setUnlinking] = useState(false);
+  const [registerResult, setRegisterResult] = useState<string | null>(null);
+  const [registering, setRegistering] = useState(false);
 
   const loadStatus = useCallback(async () => {
-    try {
-      const s = await getAdminTelegramStatus({ data: {} });
-      setStatus(s);
-    } catch { /* ignore */ }
+    try { setStatus(await getAdminTelegramStatus({ data: {} })); } catch { /* ignore */ }
   }, []);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
@@ -185,13 +189,9 @@ function AdminTelegramCard() {
   const handleGenerate = async () => {
     setLoading(true);
     try {
-      const result = await generateAdminTelegramLinkCode({ data: {} });
-      if (result.success) {
-        setLinkInfo({ code: result.code!, deepLink: result.deepLink!, instructions: result.instructions!, expiresAt: result.expiresAt! });
-      }
-    } catch { /* ignore */ } finally {
-      setLoading(false);
-    }
+      const r = await generateAdminTelegramLinkCode({ data: {} });
+      if (r.success) setLinkInfo({ code: r.code!, deepLink: r.deepLink!, instructions: r.instructions!, expiresAt: r.expiresAt! });
+    } catch { /* ignore */ } finally { setLoading(false); }
   };
 
   const handleUnlink = async () => {
@@ -200,9 +200,18 @@ function AdminTelegramCard() {
       await unlinkAdminTelegram({ data: {} });
       setStatus({ linked: false, telegramUsername: null, linkedAt: null });
       setLinkInfo(null);
-    } catch { /* ignore */ } finally {
-      setUnlinking(false);
-    }
+    } catch { /* ignore */ } finally { setUnlinking(false); }
+  };
+
+  const handleRegisterWebhook = async () => {
+    setRegistering(true);
+    setRegisterResult(null);
+    try {
+      const r = await registerAdminTelegramWebhook({ data: {} });
+      setRegisterResult(r.success ? `✅ Webhook registered: ${r.webhookUrl}` : `❌ ${r.error ?? "Failed"}`);
+    } catch (e) {
+      setRegisterResult(`❌ ${String(e)}`);
+    } finally { setRegistering(false); }
   };
 
   return (
@@ -214,9 +223,7 @@ function AdminTelegramCard() {
         <div className="flex-1 min-w-0">
           <p className="text-sm font-bold">Admin Telegram Bot</p>
           <p className="text-[11px] text-muted-foreground">
-            {status?.linked
-              ? `Linked as @${status.telegramUsername ?? "unknown"}`
-              : "Get real-time alerts and inline approve/reject buttons"}
+            {status?.linked ? `Linked as @${status.telegramUsername ?? "unknown"}` : "Get real-time alerts and inline approve/reject buttons"}
           </p>
         </div>
         {status?.linked && (
@@ -226,14 +233,9 @@ function AdminTelegramCard() {
 
       {status?.linked ? (
         <div className="space-y-2">
-          <p className="text-[11px] text-muted-foreground">
-            You receive push notifications for manual reviews, withdrawals, KYC, and vendor rates — with inline ✅/❌ buttons.
-          </p>
-          <button
-            onClick={handleUnlink}
-            disabled={unlinking}
-            className="w-full py-2.5 rounded-xl border border-border/60 text-xs font-semibold text-muted-foreground flex items-center justify-center gap-1.5"
-          >
+          <p className="text-[11px] text-muted-foreground">You receive push notifications for manual reviews, withdrawals, KYC, and vendor rates — with inline ✅/❌ buttons.</p>
+          <button onClick={handleUnlink} disabled={unlinking}
+            className="w-full py-2.5 rounded-xl border border-border/60 text-xs font-semibold text-muted-foreground flex items-center justify-center gap-1.5">
             {unlinking ? <Loader2 className="size-3.5 animate-spin" /> : <X className="size-3.5" />}
             Unlink Telegram
           </button>
@@ -248,31 +250,183 @@ function AdminTelegramCard() {
                 <p className="text-[10px] text-muted-foreground mt-1">Expires {new Date(linkInfo.expiresAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</p>
               </div>
               <p className="text-[11px] text-muted-foreground">{linkInfo.instructions}</p>
-              <a
-                href={linkInfo.deepLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-cyan/10 border border-cyan/20 text-xs font-bold text-cyan"
-              >
+              <a href={linkInfo.deepLink} target="_blank" rel="noopener noreferrer"
+                className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-cyan/10 border border-cyan/20 text-xs font-bold text-cyan">
                 <Send className="size-3.5" /> Open Telegram Bot
               </a>
-              <button
-                onClick={() => { setLinkInfo(null); loadStatus(); }}
-                className="w-full py-2.5 rounded-xl bg-secondary text-xs font-semibold text-muted-foreground"
-              >
+              <button onClick={() => { setLinkInfo(null); loadStatus(); }}
+                className="w-full py-2.5 rounded-xl bg-secondary text-xs font-semibold text-muted-foreground">
                 Done — Refresh Status
               </button>
             </div>
           ) : (
-            <button
-              onClick={handleGenerate}
-              disabled={loading}
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-cyan/10 border border-cyan/20 text-xs font-bold text-cyan"
-            >
+            <button onClick={handleGenerate} disabled={loading}
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-cyan/10 border border-cyan/20 text-xs font-bold text-cyan">
               {loading ? <Loader2 className="size-3.5 animate-spin" /> : <Zap className="size-3.5" />}
-              Connect Telegram Bot
+              Connect My Telegram
             </button>
           )}
+        </div>
+      )}
+
+      {/* Webhook registration — one-click setup */}
+      <div className="border-t border-border/40 pt-3 space-y-2">
+        <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest">Bot Webhook</p>
+        <p className="text-[11px] text-muted-foreground">Register the admin bot webhook with Telegram (do this once after deployment or if the URL changes).</p>
+        <button onClick={handleRegisterWebhook} disabled={registering}
+          className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-secondary border border-border/40 text-xs font-semibold text-muted-foreground">
+          {registering ? <Loader2 className="size-3.5 animate-spin" /> : <Zap className="size-3.5" />}
+          Register Webhook
+        </button>
+        {registerResult && (
+          <p className={`text-[11px] break-all ${registerResult.startsWith("✅") ? "text-cyan" : "text-red-400"}`}>
+            {registerResult}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Support Staff Management Card ────────────────────────────────────────────
+// Only admins can view and manage support staff.
+// Support staff are linked via the admin bot — they can ONLY reply to tickets.
+function SupportStaffCard() {
+  type StaffMember = {
+    id: string;
+    staff_name: string;
+    telegram_username: string | null;
+    linked_at: string;
+    is_active: boolean;
+    added_by_admin_id: string;
+  };
+  type NewStaffCode = { code: string; deepLink: string; instructions: string; expiresAt: string; staffName: string };
+
+  const [staff, setStaff] = useState<StaffMember[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [newCode, setNewCode] = useState<NewStaffCode | null>(null);
+  const [staffNameInput, setStaffNameInput] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadStaff = useCallback(async () => {
+    setLoading(true);
+    try {
+      const list = await getSupportStaffList({ data: {} });
+      setStaff(list);
+    } catch { setStaff([]); } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { loadStaff(); }, [loadStaff]);
+
+  const handleGenerate = async () => {
+    setError(null);
+    const name = staffNameInput.trim();
+    if (!name) { setError("Enter a name for the staff member."); return; }
+    setGenerating(true);
+    try {
+      const r = await generateSupportStaffLinkCode({ data: { staffName: name } });
+      if (r.success) {
+        setNewCode({ code: r.code!, deepLink: r.deepLink!, instructions: r.instructions!, expiresAt: r.expiresAt!, staffName: r.staffName! });
+        setStaffNameInput("");
+      } else {
+        setError(r.error ?? "Failed to generate code.");
+      }
+    } catch { setError("Failed. Try again."); } finally { setGenerating(false); }
+  };
+
+  const handleRemove = async (linkId: string) => {
+    setRemoving(linkId);
+    try {
+      await removeSupportStaff({ data: { linkId } });
+      setStaff(prev => prev?.map(s => s.id === linkId ? { ...s, is_active: false } : s) ?? null);
+    } catch { /* ignore */ } finally { setRemoving(null); }
+  };
+
+  const activeStaff = staff?.filter(s => s.is_active) ?? [];
+
+  return (
+    <div className="bg-card border border-border/60 rounded-2xl p-4 space-y-4">
+      <div className="flex items-center gap-2.5">
+        <div className="size-9 rounded-xl bg-gold/10 grid place-items-center shrink-0">
+          <MessageCircle className="size-4 text-gold" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-bold">Support Staff</p>
+          <p className="text-[11px] text-muted-foreground">
+            {loading ? "Loading…" : `${activeStaff.length} active · can reply to tickets via Telegram`}
+          </p>
+        </div>
+      </div>
+
+      {/* Active staff list */}
+      {activeStaff.length > 0 && (
+        <div className="space-y-2">
+          {activeStaff.map(s => (
+            <div key={s.id} className="flex items-center gap-3 bg-secondary/50 rounded-xl px-3 py-2.5">
+              <UserCheck className="size-3.5 text-cyan shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold truncate">{s.staff_name}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {s.telegram_username ? `@${s.telegram_username}` : "no username"} · linked {timeAgo(s.linked_at)}
+                </p>
+              </div>
+              <button
+                onClick={() => handleRemove(s.id)}
+                disabled={removing === s.id}
+                className="shrink-0 p-1.5 rounded-lg text-muted-foreground hover:text-red-400 transition-colors"
+                title="Deactivate"
+              >
+                {removing === s.id ? <Loader2 className="size-3.5 animate-spin" /> : <UserX className="size-3.5" />}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add new staff */}
+      {newCode ? (
+        <div className="space-y-2">
+          <div className="bg-secondary/60 rounded-xl p-3">
+            <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest mb-1">
+              Link code for {newCode.staffName}
+            </p>
+            <p className="font-mono text-sm font-bold text-gold tracking-widest">{newCode.code}</p>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Expires {new Date(newCode.expiresAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} · 30 min window
+            </p>
+          </div>
+          <p className="text-[11px] text-muted-foreground">{newCode.instructions}</p>
+          <a href={newCode.deepLink} target="_blank" rel="noopener noreferrer"
+            className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-gold/10 border border-gold/20 text-xs font-bold text-gold">
+            <Send className="size-3.5" /> Open Bot Link for Staff
+          </a>
+          <button onClick={() => { setNewCode(null); loadStaff(); }}
+            className="w-full py-2.5 rounded-xl bg-secondary text-xs font-semibold text-muted-foreground">
+            Done — Refresh List
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest">Add Support Staff</p>
+          <input
+            type="text"
+            value={staffNameInput}
+            onChange={e => setStaffNameInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleGenerate()}
+            placeholder="Staff member's name"
+            className="w-full bg-secondary/60 border border-border/40 rounded-xl px-3 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:border-gold/40"
+          />
+          {error && <p className="text-[11px] text-red-400">{error}</p>}
+          <button onClick={handleGenerate} disabled={generating || !staffNameInput.trim()}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gold/10 border border-gold/20 text-xs font-bold text-gold disabled:opacity-50">
+            {generating ? <Loader2 className="size-3.5 animate-spin" /> : <Zap className="size-3.5" />}
+            Generate Link Code
+          </button>
+          <p className="text-[10px] text-muted-foreground">
+            The staff member uses this code to link their Telegram account. They can only reply to support tickets — no admin actions.
+          </p>
         </div>
       )}
     </div>

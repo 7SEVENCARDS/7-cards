@@ -1,36 +1,57 @@
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Admin Telegram Bot — Server Functions
-// Links admin accounts to Telegram, generates one-time link codes,
-// and sends fan-out notifications (manual review, withdrawals, KYC, disputes).
-// Uses ADMIN_TELEGRAM_BOT_TOKEN (separate from the vendor bot).
-// ─────────────────────────────────────────────────────────────────────────────
+//
+// Covers:
+//   • Admin account ↔ Telegram linking (one-time codes, admin-only)
+//   • Support staff Telegram linking (admin generates codes, staff links)
+//   • Fan-out notifications to all linked admins (inline keyboards)
+//   • Resolve notifications (edit all admin copies on action)
+//   • Typed push helpers: manual_review, withdrawal, KYC, vendor_rate
+//   • Webhook registration (admin-only)
+//
+// Bot separation:
+//   ADMIN_TELEGRAM_BOT_TOKEN   — admin bot (approve/reject actions)
+//   SUPPORT_TELEGRAM_CHAT_ID   — group/channel that receives support tickets
+//
+// Only admins (profiles.role = 'admin') can:
+//   - Generate admin link codes
+//   - Generate support staff link codes
+//   - View/remove support staff
+//   - Register webhooks
+// =============================================================================
 
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireAdmin } from "../lib/auth-server";
 import { isAdminBotConfigured, fanOutToAdmins } from "../lib/telegram";
 
-const CODE_TTL_MINUTES = 10;
+const ADMIN_CODE_TTL_MINUTES = 10;
+const STAFF_CODE_TTL_MINUTES = 30;
 
-// ─── Generate a one-time link code for the current admin ──────────────────────
-// The admin DMs /start <code> to the admin bot to link their Telegram.
+// =============================================================================
+// ADMIN TELEGRAM LINKING
+// =============================================================================
+
+// ─── Generate a one-time link code for the current admin ─────────────────────
 export const generateAdminTelegramLinkCode = createServerFn({ method: "POST" })
   .validator((d: Record<string, never>) => d)
   .handler(async () => {
     const adminId = await requireAdmin();
     if (!isAdminBotConfigured()) {
-      return { success: false, error: "Admin bot token not configured (ADMIN_TELEGRAM_BOT_TOKEN)." };
+      return { success: false, error: "Admin bot not configured (ADMIN_TELEGRAM_BOT_TOKEN missing)." };
     }
 
     const db = getServerSupabase();
     const code = crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase();
-    const expiresAt = new Date(Date.now() + CODE_TTL_MINUTES * 60_000).toISOString();
+    const expiresAt = new Date(Date.now() + ADMIN_CODE_TTL_MINUTES * 60_000).toISOString();
 
-    await db.from("admin_telegram_link_codes").insert({
+    const { error } = await db.from("admin_telegram_link_codes").insert({
       code,
       admin_id: adminId,
       expires_at: expiresAt,
     });
+
+    if (error) throw new Error(`Failed to create link code: ${error.message}`);
 
     const botUsername = process.env.ADMIN_TELEGRAM_BOT_USERNAME ?? "SevenCardsAdminBot";
     return {
@@ -38,7 +59,7 @@ export const generateAdminTelegramLinkCode = createServerFn({ method: "POST" })
       code,
       expiresAt,
       deepLink: `https://t.me/${botUsername}?start=${code}`,
-      instructions: `Open Telegram and start a chat with @${botUsername}, then send /start ${code} to link your account.`,
+      instructions: `Open Telegram → start a chat with @${botUsername} → send /start ${code}`,
     };
   });
 
@@ -62,7 +83,7 @@ export const getAdminTelegramStatus = createServerFn({ method: "GET" })
     };
   });
 
-// ─── Unlink admin Telegram ────────────────────────────────────────────────────
+// ─── Unlink current admin's Telegram ─────────────────────────────────────────
 export const unlinkAdminTelegram = createServerFn({ method: "POST" })
   .validator((d: Record<string, never>) => d)
   .handler(async () => {
@@ -72,7 +93,125 @@ export const unlinkAdminTelegram = createServerFn({ method: "POST" })
     return { success: true };
   });
 
-// ─── Internal: get all linked admin chat IDs ─────────────────────────────────
+// =============================================================================
+// SUPPORT STAFF TELEGRAM MANAGEMENT (admin-only)
+// =============================================================================
+
+// ─── Generate a link code for a support staff member ─────────────────────────
+// ONLY admins can call this. The code is given to the support staff member
+// who then DMs /start <code> to the admin bot. They are then registered as
+// support staff — able to use /reply but nothing else.
+export const generateSupportStaffLinkCode = createServerFn({ method: "POST" })
+  .validator((d: { staffName: string }) => d)
+  .handler(async ({ data }) => {
+    const adminId = await requireAdmin();
+    if (!isAdminBotConfigured()) {
+      return { success: false, error: "Admin bot not configured (ADMIN_TELEGRAM_BOT_TOKEN missing)." };
+    }
+    if (!data.staffName?.trim()) {
+      return { success: false, error: "Staff name is required." };
+    }
+
+    const db = getServerSupabase();
+    const code = "STAFF-" + crypto.randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase();
+    const expiresAt = new Date(Date.now() + STAFF_CODE_TTL_MINUTES * 60_000).toISOString();
+
+    const { error } = await db.from("support_staff_telegram_link_codes").insert({
+      code,
+      staff_name: data.staffName.trim(),
+      created_by: adminId,
+      expires_at: expiresAt,
+    });
+
+    if (error) throw new Error(`Failed to create staff link code: ${error.message}`);
+
+    const botUsername = process.env.ADMIN_TELEGRAM_BOT_USERNAME ?? "SevenCardsAdminBot";
+    return {
+      success: true,
+      code,
+      staffName: data.staffName.trim(),
+      expiresAt,
+      deepLink: `https://t.me/${botUsername}?start=${code}`,
+      instructions: `Give ${data.staffName.trim()} this code. They open Telegram → @${botUsername} → send /start ${code}`,
+    };
+  });
+
+// ─── List all linked support staff ───────────────────────────────────────────
+export const getSupportStaffList = createServerFn({ method: "GET" })
+  .validator((d: Record<string, never>) => d)
+  .handler(async () => {
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    const { data, error } = await db
+      .from("support_staff_telegram_links")
+      .select("id, staff_name, telegram_username, linked_at, is_active, added_by_admin_id")
+      .order("linked_at", { ascending: false });
+
+    if (error) throw error;
+    return (data ?? []) as Array<{
+      id: string;
+      staff_name: string;
+      telegram_username: string | null;
+      linked_at: string;
+      is_active: boolean;
+      added_by_admin_id: string;
+    }>;
+  });
+
+// ─── Deactivate / remove a support staff member ───────────────────────────────
+export const removeSupportStaff = createServerFn({ method: "POST" })
+  .validator((d: { linkId: string }) => d)
+  .handler(async ({ data }) => {
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    // Soft-delete: mark inactive (keeps audit trail)
+    const { error } = await db
+      .from("support_staff_telegram_links")
+      .update({ is_active: false })
+      .eq("id", data.linkId);
+
+    if (error) throw error;
+    return { success: true };
+  });
+
+// =============================================================================
+// WEBHOOK REGISTRATION (admin-only)
+// =============================================================================
+
+// ─── Register both bot webhooks with Telegram ─────────────────────────────────
+// Calls setWebhook on the Telegram Bot API for the admin bot.
+// The vendor bot webhook is unchanged (handled by existing registration flow).
+// Webhook URL: https://<VITE_PUBLIC_BASE_URL>/api/webhooks/telegram-admin
+export const registerAdminTelegramWebhook = createServerFn({ method: "POST" })
+  .validator((d: Record<string, never>) => d)
+  .handler(async () => {
+    await requireAdmin();
+
+    const adminBotToken = process.env.ADMIN_TELEGRAM_BOT_TOKEN;
+    const webhookSecret = process.env.ADMIN_TELEGRAM_WEBHOOK_SECRET;
+    const baseUrl = process.env.VITE_PUBLIC_BASE_URL;
+
+    if (!adminBotToken) return { success: false, error: "ADMIN_TELEGRAM_BOT_TOKEN not set." };
+    if (!baseUrl) return { success: false, error: "VITE_PUBLIC_BASE_URL not set." };
+
+    const webhookUrl = `${baseUrl.replace(/\/$/, "")}/api/webhooks/telegram-admin`;
+
+    try {
+      const { registerAdminTelegramWebhook: register } = await import("../lib/telegram");
+      const result = await register(webhookUrl, webhookSecret);
+      return { success: result.ok, webhookUrl, description: result.description ?? null };
+    } catch (e) {
+      return { success: false, error: String(e) };
+    }
+  });
+
+// =============================================================================
+// INTERNAL HELPERS (not exported as server functions — called server-side only)
+// =============================================================================
+
+// ─── Get all linked admin chat IDs ────────────────────────────────────────────
 export async function getAllLinkedAdminChatIds(): Promise<bigint[]> {
   try {
     const { createClient } = await import("@supabase/supabase-js");
@@ -81,14 +220,16 @@ export async function getAllLinkedAdminChatIds(): Promise<bigint[]> {
       process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
-    const { data } = await db.from("admin_telegram_links").select("telegram_chat_id");
+    const { data } = await db
+      .from("admin_telegram_links")
+      .select("telegram_chat_id");
     return (data ?? []).map((r: { telegram_chat_id: number }) => BigInt(r.telegram_chat_id));
   } catch {
     return [];
   }
 }
 
-// ─── Internal: send a fan-out notification + track in DB ─────────────────────
+// ─── Send a fan-out notification + track in DB ────────────────────────────────
 export async function sendAdminNotification(opts: {
   itemType: "manual_review" | "withdrawal" | "kyc" | "vendor_rate" | "dispute" | "fraud" | "payout_failed" | "support";
   itemId: string;
@@ -123,7 +264,7 @@ export async function sendAdminNotification(opts: {
   }
 }
 
-// ─── Internal: resolve all fan-out copies (edit all admin messages) ───────────
+// ─── Resolve all fan-out copies (edit all admin messages to show outcome) ─────
 export async function resolveAdminNotifications(
   itemType: string,
   itemId: string,
@@ -166,7 +307,10 @@ export async function resolveAdminNotifications(
   }
 }
 
-// ─── Push notification: new manual review trade ────────────────────────────────
+// =============================================================================
+// PUSH NOTIFICATION HELPERS
+// =============================================================================
+
 export async function notifyAdminManualReview(opts: {
   tradeId: string;
   brand: string;
@@ -192,12 +336,11 @@ export async function notifyAdminManualReview(opts: {
     text,
     inlineKeyboard: [[
       { text: "✅ Approve", callback_data: `mr_approve:${opts.tradeId}` },
-      { text: "❌ Reject", callback_data: `mr_reject:${opts.tradeId}` },
+      { text: "❌ Reject",  callback_data: `mr_reject:${opts.tradeId}` },
     ]],
   });
 }
 
-// ─── Push notification: new withdrawal request ────────────────────────────────
 export async function notifyAdminWithdrawal(opts: {
   withdrawalId: string;
   vendorMoniker: string;
@@ -221,12 +364,11 @@ export async function notifyAdminWithdrawal(opts: {
     text,
     inlineKeyboard: [[
       { text: "✅ Approve Payout", callback_data: `wd_approve:${opts.withdrawalId}` },
-      { text: "❌ Reject", callback_data: `wd_reject:${opts.withdrawalId}` },
+      { text: "❌ Reject",         callback_data: `wd_reject:${opts.withdrawalId}` },
     ]],
   });
 }
 
-// ─── Push notification: new KYC submission ────────────────────────────────────
 export async function notifyAdminKYC(opts: {
   userId: string;
   userName: string;
@@ -246,12 +388,11 @@ export async function notifyAdminKYC(opts: {
     text,
     inlineKeyboard: [[
       { text: "✅ Approve KYC", callback_data: `kyc_approve:${opts.userId}` },
-      { text: "❌ Reject KYC", callback_data: `kyc_reject:${opts.userId}` },
+      { text: "❌ Reject KYC",  callback_data: `kyc_reject:${opts.userId}` },
     ]],
   });
 }
 
-// ─── Push notification: new vendor rate submission ────────────────────────────
 export async function notifyAdminVendorRate(opts: {
   vendorId: string;
   vendorMoniker: string;
@@ -273,7 +414,7 @@ export async function notifyAdminVendorRate(opts: {
     text,
     inlineKeyboard: [[
       { text: "✅ Approve Rate", callback_data: `vr_approve:${opts.vendorId}` },
-      { text: "❌ Reject Rate", callback_data: `vr_reject:${opts.vendorId}` },
+      { text: "❌ Reject Rate",  callback_data: `vr_reject:${opts.vendorId}` },
     ]],
   });
 }

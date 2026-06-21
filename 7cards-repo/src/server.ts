@@ -8,6 +8,7 @@ import {
   handleTelegramWebhook,
 } from "./server-functions/webhooks";
 import { handleAdminTelegramWebhook } from "./server-functions/admin-telegram-webhook";
+import { registerAdminTelegramWebhook } from "./server-functions/admin-telegram";
 import { allow, clientIp, rlKey } from "./lib/rate-limiter";
 
 type ServerEntry = {
@@ -147,6 +148,30 @@ export default {
           return addSecurityHeaders(tooManyRequests(30));
         }
         return addSecurityHeaders(await handleAdminTelegramWebhook(request));
+      }
+
+      // Admin: one-click register admin bot webhook with Telegram
+      // Called from AdminScreen — requires admin auth (checked inside server fn)
+      if (url.pathname === "/api/admin/register-telegram-webhook" && request.method === "POST") {
+        if (!allow(rlKey("admin_register_webhook", ip), 5, 60_000)) {
+          return addSecurityHeaders(tooManyRequests(60));
+        }
+        try {
+          const result = await registerAdminTelegramWebhook({ data: {} });
+          return addSecurityHeaders(
+            new Response(JSON.stringify(result), {
+              status: result.success ? 200 : 400,
+              headers: { "Content-Type": "application/json" },
+            })
+          );
+        } catch (e) {
+          return addSecurityHeaders(
+            new Response(JSON.stringify({ success: false, error: String(e) }), {
+              status: 500,
+              headers: { "Content-Type": "application/json" },
+            })
+          );
+        }
       }
 
       // ── Cron: vendor rate-check (every 6 hours via external scheduler) ──────

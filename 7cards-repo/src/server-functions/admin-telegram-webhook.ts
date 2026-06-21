@@ -1,29 +1,40 @@
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Admin Telegram Bot Webhook Handler
 // Route: POST /api/webhooks/telegram-admin
-// Processes incoming updates from the admin bot (ADMIN_TELEGRAM_BOT_TOKEN).
 //
-// Supported interactions:
-//   /start <code>     — link admin Telegram account using a one-time code
-//   /reply <ticketId> <msg>  — reply to a support ticket from the support group
-//   /whoami           — show linked admin info
-//   callback_query    — inline button actions (approve/reject)
+// This handler processes all updates from the ADMIN_TELEGRAM_BOT_TOKEN bot.
+// It supports TWO classes of users:
 //
-// Inline button callback_data formats:
+//   1. ADMINS (linked via admin_telegram_links)
+//      Full access: approve/reject trades, KYC, withdrawals, vendor rates,
+//      reply to support tickets, /whoami, /start (link admin code),
+//      all /reject_reason commands.
+//
+//   2. SUPPORT STAFF (linked via support_staff_telegram_links)
+//      Restricted access: /reply <ticketId> <message> ONLY.
+//      Cannot approve/reject anything. Cannot see admin actions.
+//
+//   3. UNLINKED users
+//      Can only /start <code> to link as either admin or support staff.
+//
+// Inline button callbacks (admin-only):
 //   mr_approve:<tradeId>      — approve manual review trade
-//   mr_reject:<tradeId>       — reject manual review trade (prompts reason)
+//   mr_reject:<tradeId>       — prompts /mr_reject_reason command
 //   wd_approve:<withdrawalId> — approve vendor withdrawal
-//   wd_reject:<withdrawalId>  — reject vendor withdrawal
-//   kyc_approve:<userId>      — approve user KYC
-//   kyc_reject:<userId>       — reject user KYC
-//   vr_approve:<vendorId>     — approve vendor rate submission
-//   vr_reject:<vendorId>      — reject vendor rate submission
+//   wd_reject:<withdrawalId>  — prompts /wd_reject_reason command
+//   kyc_approve:<userId>      — approve KYC
+//   kyc_reject:<userId>       — prompts /kyc_reject_reason command
+//   vr_approve:<vendorId>     — approve vendor rate
+//   vr_reject:<vendorId>      — reject vendor rate
 //
 // Security:
-//   Validates ADMIN_TELEGRAM_WEBHOOK_SECRET header (X-Telegram-Bot-Api-Secret-Token).
-//   All DB writes use service-role key — never anon key.
-//   Idempotency: checks processed_webhook_events table (source='telegram_admin_callback').
-// ─────────────────────────────────────────────────────────────────────────────
+//   • X-Telegram-Bot-Api-Secret-Token header validated against
+//     ADMIN_TELEGRAM_WEBHOOK_SECRET env var
+//   • Callbacks require the chatId to be in admin_telegram_links
+//   • /reply works for both admin_telegram_links AND support_staff_telegram_links
+//   • All DB writes use SUPABASE_SERVICE_ROLE_KEY (bypasses RLS)
+//   • Idempotency: processed_webhook_events prevents double-processing
+// =============================================================================
 
 import { createClient } from "@supabase/supabase-js";
 import { answerCallbackQuery, sendAdminBotMessage } from "../lib/telegram";
@@ -46,7 +57,8 @@ type TelegramUpdate = {
   };
 };
 
-function getAdminDb() {
+// ─── DB client (service role — bypasses all RLS) ──────────────────────────────
+function getDb() {
   return createClient(
     process.env.VITE_SUPABASE_URL ?? "",
     process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
@@ -54,70 +66,139 @@ function getAdminDb() {
   );
 }
 
-// ─── Idempotency guard ────────────────────────────────────────────────────────
-async function isAlreadyProcessed(db: ReturnType<typeof getAdminDb>, eventKey: string): Promise<boolean> {
+// ─── Idempotency ──────────────────────────────────────────────────────────────
+async function isAlreadyProcessed(db: ReturnType<typeof getDb>, eventKey: string): Promise<boolean> {
   const { data } = await db
     .from("processed_webhook_events")
-    .select("id")
+    .select("event_key")
     .eq("event_key", eventKey)
     .maybeSingle();
   return !!data;
 }
 
-async function markProcessed(db: ReturnType<typeof getAdminDb>, eventKey: string): Promise<void> {
-  await db.from("processed_webhook_events").insert({
-    event_key: eventKey,
-    source: "telegram_admin_callback",
-    status: "done",
-  }).onConflict("event_key").ignore();
+async function markProcessed(db: ReturnType<typeof getDb>, eventKey: string): Promise<void> {
+  await db.from("processed_webhook_events")
+    .insert({ event_key: eventKey, source: "telegram_admin_callback", status: "done" })
+    .onConflict("event_key").ignore();
 }
 
-// ─── Auth: verify this chat belongs to a linked admin ─────────────────────────
-async function getLinkedAdminId(db: ReturnType<typeof getAdminDb>, chatId: number): Promise<string | null> {
-  const { data } = await db
+// ─── Identity resolution ──────────────────────────────────────────────────────
+type Identity =
+  | { role: "admin";   adminId: string }
+  | { role: "support"; staffId: string; staffName: string; isActive: boolean }
+  | { role: "none" };
+
+async function resolveIdentity(db: ReturnType<typeof getDb>, telegramUserId: number): Promise<Identity> {
+  // Check admin first
+  const { data: admin } = await db
     .from("admin_telegram_links")
     .select("admin_id")
-    .eq("telegram_chat_id", chatId)
+    .eq("telegram_chat_id", telegramUserId)
     .maybeSingle();
-  return data?.admin_id ?? null;
+  if (admin) return { role: "admin", adminId: admin.admin_id };
+
+  // Check support staff
+  const { data: staff } = await db
+    .from("support_staff_telegram_links")
+    .select("id, staff_name, is_active")
+    .eq("telegram_chat_id", telegramUserId)
+    .maybeSingle();
+  if (staff) return { role: "support", staffId: staff.id, staffName: staff.staff_name, isActive: staff.is_active };
+
+  return { role: "none" };
 }
 
-// ─── Link code flow ───────────────────────────────────────────────────────────
-async function handleLinkCode(
-  db: ReturnType<typeof getAdminDb>,
+// ─── /start <code> — link flow (works for both admin codes and staff codes) ───
+async function handleStartCode(
+  db: ReturnType<typeof getDb>,
   chatId: number,
+  telegramUserId: number,
   username: string | undefined,
   code: string,
 ): Promise<string> {
-  const { data: linkCode } = await db
-    .from("admin_telegram_link_codes")
-    .select("admin_id, expires_at, used_at")
-    .eq("code", code.toUpperCase().trim())
+  const upperCode = code.toUpperCase().trim();
+
+  // ── Admin link code ──
+  if (!upperCode.startsWith("STAFF-")) {
+    const { data: linkCode } = await db
+      .from("admin_telegram_link_codes")
+      .select("admin_id, expires_at, used_at")
+      .eq("code", upperCode)
+      .maybeSingle();
+
+    if (!linkCode) {
+      // Fall through to try staff codes
+    } else if (linkCode.used_at) {
+      return "⚠️ This admin code has already been used. Generate a new one from the admin panel.";
+    } else if (new Date(linkCode.expires_at) < new Date()) {
+      return "⏰ This admin code has expired. Generate a new one from the admin panel.";
+    } else {
+      // Consume code
+      await db.from("admin_telegram_link_codes")
+        .update({ used_at: new Date().toISOString() })
+        .eq("code", upperCode);
+
+      // Upsert link
+      await db.from("admin_telegram_links").upsert({
+        admin_id: linkCode.admin_id,
+        telegram_chat_id: chatId,
+        telegram_username: username ?? null,
+      }, { onConflict: "telegram_chat_id" });
+
+      return [
+        `✅ <b>Admin account linked!</b>`,
+        ``,
+        `You will now receive real-time notifications for:`,
+        `• 🔍 Manual review trades`,
+        `• 💸 Vendor withdrawals`,
+        `• 🪪 KYC submissions`,
+        `• 📈 Vendor rate requests`,
+        ``,
+        `Use /whoami to confirm your account.`,
+      ].join("\n");
+    }
+  }
+
+  // ── Support staff link code ──
+  const { data: staffCode } = await db
+    .from("support_staff_telegram_link_codes")
+    .select("staff_name, created_by, expires_at, used_at")
+    .eq("code", upperCode)
     .maybeSingle();
 
-  if (!linkCode) return "❌ Invalid link code. Generate a new one from the admin panel.";
-  if (linkCode.used_at) return "⚠️ This code has already been used. Generate a new one.";
-  if (new Date(linkCode.expires_at) < new Date()) return "⏰ This code has expired. Generate a new one.";
+  if (!staffCode) return "❌ Invalid code. Ask an admin to generate a new one.";
+  if (staffCode.used_at) return "⚠️ This code has already been used. Ask an admin for a new one.";
+  if (new Date(staffCode.expires_at) < new Date()) return "⏰ This code has expired. Ask an admin for a new one.";
 
-  // Mark code used
-  await db
-    .from("admin_telegram_link_codes")
+  // Consume code
+  await db.from("support_staff_telegram_link_codes")
     .update({ used_at: new Date().toISOString() })
-    .eq("code", code.toUpperCase().trim());
+    .eq("code", upperCode);
 
-  // Upsert link
-  await db.from("admin_telegram_links").upsert({
-    admin_id: linkCode.admin_id,
+  // Upsert staff link
+  await db.from("support_staff_telegram_links").upsert({
     telegram_chat_id: chatId,
     telegram_username: username ?? null,
+    staff_name: staffCode.staff_name,
+    added_by_admin_id: staffCode.created_by,
+    is_active: true,
   }, { onConflict: "telegram_chat_id" });
 
-  return `✅ <b>Admin Telegram linked successfully!</b>\n\nYou will now receive real-time notifications for:\n• 🔍 Manual review trades\n• 💸 Vendor withdrawals\n• 🪪 KYC submissions\n• 📈 Vendor rate requests\n\nUse /whoami to confirm your account.`;
+  return [
+    `✅ <b>Support staff account linked!</b>`,
+    ``,
+    `Welcome, <b>${staffCode.staff_name}</b>! 👋`,
+    ``,
+    `You can reply to customer support tickets with:`,
+    `<code>/reply &lt;ticketId&gt; your message here</code>`,
+    ``,
+    `You will see new support tickets posted in the support group.`,
+  ].join("\n");
 }
 
-// ─── Callback query handler ───────────────────────────────────────────────────
+// ─── Callback query handler (admin-only) ──────────────────────────────────────
 async function handleCallback(
-  db: ReturnType<typeof getAdminDb>,
+  db: ReturnType<typeof getDb>,
   callbackQueryId: string,
   callbackData: string,
   chatId: number,
@@ -130,57 +211,52 @@ async function handleCallback(
     return;
   }
 
-  const [action, itemId] = callbackData.split(":");
+  const colonIdx = callbackData.indexOf(":");
+  const action = callbackData.slice(0, colonIdx);
+  const itemId = callbackData.slice(colonIdx + 1);
 
   try {
     switch (action) {
-      case "mr_approve":
-        await handleManualReviewApprove(db, itemId, adminId, callbackQueryId, chatId);
-        break;
+      case "mr_approve": await handleManualReviewApprove(db, itemId, adminId, callbackQueryId); break;
       case "mr_reject":
-        await sendAdminBotMessage(chatId, `To reject trade <code>${itemId.slice(0, 8)}</code>, reply with:\n/mr_reject_reason ${itemId} your reason here`);
-        await answerCallbackQuery(callbackQueryId, "Send /mr_reject_reason command.");
-        break;
-      case "wd_approve":
-        await handleWithdrawalApprove(db, itemId, adminId, callbackQueryId, chatId);
-        break;
+        await sendAdminBotMessage(chatId,
+          `To reject trade <code>${itemId.slice(0, 8)}</code>, send:\n/mr_reject_reason ${itemId} your reason`);
+        await answerCallbackQuery(callbackQueryId, "Send /mr_reject_reason");
+        return;
+      case "wd_approve": await handleWithdrawalApprove(db, itemId, adminId, callbackQueryId); break;
       case "wd_reject":
-        await sendAdminBotMessage(chatId, `To reject withdrawal <code>${itemId.slice(0, 8)}</code>, reply with:\n/wd_reject_reason ${itemId} your reason here`);
-        await answerCallbackQuery(callbackQueryId, "Send /wd_reject_reason command.");
-        break;
-      case "kyc_approve":
-        await handleKYCApprove(db, itemId, adminId, callbackQueryId, chatId);
-        break;
+        await sendAdminBotMessage(chatId,
+          `To reject withdrawal <code>${itemId.slice(0, 8)}</code>, send:\n/wd_reject_reason ${itemId} your reason`);
+        await answerCallbackQuery(callbackQueryId, "Send /wd_reject_reason");
+        return;
+      case "kyc_approve": await handleKYCApprove(db, itemId, adminId, callbackQueryId); break;
       case "kyc_reject":
-        await sendAdminBotMessage(chatId, `To reject KYC for user <code>${itemId.slice(0, 8)}</code>, reply with:\n/kyc_reject_reason ${itemId} your reason here`);
-        await answerCallbackQuery(callbackQueryId, "Send /kyc_reject_reason command.");
-        break;
-      case "vr_approve":
-        await handleVendorRateApprove(db, itemId, adminId, callbackQueryId, chatId);
-        break;
-      case "vr_reject":
-        await handleVendorRateReject(db, itemId, adminId, callbackQueryId, chatId);
-        break;
+        await sendAdminBotMessage(chatId,
+          `To reject KYC <code>${itemId.slice(0, 8)}</code>, send:\n/kyc_reject_reason ${itemId} your reason`);
+        await answerCallbackQuery(callbackQueryId, "Send /kyc_reject_reason");
+        return;
+      case "vr_approve": await handleVendorRateApprove(db, itemId, adminId, callbackQueryId); break;
+      case "vr_reject":  await handleVendorRateReject(db, itemId, adminId, callbackQueryId);  break;
       default:
         await answerCallbackQuery(callbackQueryId, "Unknown action.", true);
         return;
     }
-
     await markProcessed(db, eventKey);
   } catch (e) {
     console.error("[AdminTelegramWebhook] Callback error:", e);
-    await answerCallbackQuery(callbackQueryId, "⚠️ Action failed. Check server logs.", true);
+    await answerCallbackQuery(callbackQueryId, "⚠️ Action failed. Check logs.", true);
   }
 }
 
+// ─── Action handlers ──────────────────────────────────────────────────────────
+
 async function handleManualReviewApprove(
-  db: ReturnType<typeof getAdminDb>,
+  db: ReturnType<typeof getDb>,
   tradeId: string,
   adminId: string,
-  callbackQueryId: string,
-  chatId: number,
+  cqId: string,
 ): Promise<void> {
-  const { data: updated } = await db
+  const { data: trade } = await db
     .from("trades")
     .update({ status: "verified", requires_manual_review: false })
     .eq("id", tradeId)
@@ -188,90 +264,71 @@ async function handleManualReviewApprove(
     .select("id, user_id, brand, amount_usd, amount_ngn, direct_vendor_id, batch_position")
     .maybeSingle();
 
-  if (!updated) {
-    await answerCallbackQuery(callbackQueryId, "Already handled.", true);
-    return;
-  }
+  if (!trade) { await answerCallbackQuery(cqId, "Already handled.", true); return; }
 
   await db.from("notifications").insert({
-    user_id: updated.user_id,
+    user_id: trade.user_id,
     title: "Card Verified ✅",
-    message: "Your gift card has been manually verified. Your payout is being processed.",
+    message: "Your gift card has been manually verified and your payout is being processed.",
     type: "success",
   });
-
   await db.from("admin_audit_log").insert({
-    admin_id: adminId,
-    action: "manual_trade_approve",
-    target_id: tradeId,
+    admin_id: adminId, action: "manual_trade_approve", target_id: tradeId,
     meta: { via: "telegram_bot" },
   }).catch(() => {});
 
-  if (updated.direct_vendor_id) {
+  // Deferred vendor dispatch
+  if (trade.direct_vendor_id) {
     Promise.resolve().then(async () => {
       try {
         const { directDispatchToVendor } = await import("./vendor-broadcast");
         await directDispatchToVendor({
-          tradeId: updated.id,
-          vendorId: updated.direct_vendor_id!,
-          brand: updated.brand,
-          amountUsd: Number(updated.amount_usd),
-          amountNgn: Number(updated.amount_ngn),
-          batchPosition: updated.batch_position ?? 1,
-          batchTotal: 1,
+          tradeId: trade.id, vendorId: trade.direct_vendor_id!,
+          brand: trade.brand, amountUsd: Number(trade.amount_usd),
+          amountNgn: Number(trade.amount_ngn),
+          batchPosition: trade.batch_position ?? 1, batchTotal: 1,
         });
-      } catch (e) {
-        console.error("[AdminTelegramWebhook] Deferred dispatch failed:", e);
-      }
+      } catch (e) { console.error("[AdminTelegramWebhook] Deferred dispatch:", e); }
     });
   }
 
-  await resolveAdminNotifications("manual_review", tradeId, `✅ <b>Manual Review — Approved</b>\n\nTrade <code>${tradeId.slice(0, 8)}</code> (${updated.brand} $${updated.amount_usd}) approved and dispatched.`);
-  await answerCallbackQuery(callbackQueryId, "✅ Approved and dispatched.");
+  await resolveAdminNotifications("manual_review", tradeId,
+    `✅ <b>Manual Review — Approved</b>\n\nTrade <code>${tradeId.slice(0, 8)}</code> (${trade.brand} $${trade.amount_usd}) approved.`);
+  await answerCallbackQuery(cqId, "✅ Approved and dispatched.");
 }
 
 async function handleWithdrawalApprove(
-  db: ReturnType<typeof getAdminDb>,
+  db: ReturnType<typeof getDb>,
   withdrawalId: string,
   adminId: string,
-  callbackQueryId: string,
-  chatId: number,
+  cqId: string,
 ): Promise<void> {
   const { data: wd } = await db
     .from("vendor_withdrawal_requests")
-    .select("*")
+    .select("status, amount_ngn")
     .eq("id", withdrawalId)
     .maybeSingle();
 
-  if (!wd) {
-    await answerCallbackQuery(callbackQueryId, "Withdrawal not found.", true);
-    return;
-  }
-
-  if (wd.status !== "pending") {
-    await answerCallbackQuery(callbackQueryId, "Already processed.", true);
-    return;
-  }
+  if (!wd) { await answerCallbackQuery(cqId, "Not found.", true); return; }
+  if (wd.status !== "pending") { await answerCallbackQuery(cqId, "Already processed.", true); return; }
 
   const { adminApproveWithdrawal } = await import("./vendors");
   await adminApproveWithdrawal({ data: { withdrawalId } });
   await db.from("admin_audit_log").insert({
-    admin_id: adminId,
-    action: "approve_withdrawal",
-    target_id: withdrawalId,
+    admin_id: adminId, action: "approve_withdrawal", target_id: withdrawalId,
     meta: { via: "telegram_bot" },
   }).catch(() => {});
 
-  await resolveAdminNotifications("withdrawal", withdrawalId, `✅ <b>Withdrawal — Approved</b>\n\nWithdrawal <code>${withdrawalId.slice(0, 8)}</code> of ₦${Number(wd.amount_ngn).toLocaleString()} approved.`);
-  await answerCallbackQuery(callbackQueryId, "✅ Withdrawal approved.");
+  await resolveAdminNotifications("withdrawal", withdrawalId,
+    `✅ <b>Withdrawal — Approved</b>\n\n<code>${withdrawalId.slice(0, 8)}</code> ₦${Number(wd.amount_ngn).toLocaleString()} approved.`);
+  await answerCallbackQuery(cqId, "✅ Withdrawal approved.");
 }
 
 async function handleKYCApprove(
-  db: ReturnType<typeof getAdminDb>,
+  db: ReturnType<typeof getDb>,
   userId: string,
   adminId: string,
-  callbackQueryId: string,
-  chatId: number,
+  cqId: string,
 ): Promise<void> {
   await db.from("profiles").update({ kyc_status: "verified" }).eq("id", userId);
   await db.from("notifications").insert({
@@ -281,185 +338,222 @@ async function handleKYCApprove(
     type: "success",
   });
   await db.from("admin_audit_log").insert({
-    admin_id: adminId,
-    action: "kyc_approve",
-    target_id: userId,
+    admin_id: adminId, action: "kyc_approve", target_id: userId,
     meta: { via: "telegram_bot" },
   }).catch(() => {});
-
-  await resolveAdminNotifications("kyc", userId, `✅ <b>KYC — Approved</b>\n\nUser <code>${userId.slice(0, 8)}</code> KYC approved.`);
-  await answerCallbackQuery(callbackQueryId, "✅ KYC approved.");
+  await resolveAdminNotifications("kyc", userId,
+    `✅ <b>KYC — Approved</b>\n\nUser <code>${userId.slice(0, 8)}</code> verified.`);
+  await answerCallbackQuery(cqId, "✅ KYC approved.");
 }
 
 async function handleVendorRateApprove(
-  db: ReturnType<typeof getAdminDb>,
+  db: ReturnType<typeof getDb>,
   vendorId: string,
   adminId: string,
-  callbackQueryId: string,
-  chatId: number,
+  cqId: string,
 ): Promise<void> {
   await db.rpc("approve_vendor_rate", { p_vendor_id: vendorId, p_admin_id: adminId });
   await db.from("admin_audit_log").insert({
-    admin_id: adminId,
-    action: "approve_vendor_rate",
-    target_id: vendorId,
+    admin_id: adminId, action: "approve_vendor_rate", target_id: vendorId,
     meta: { via: "telegram_bot" },
   }).catch(() => {});
-
-  await resolveAdminNotifications("vendor_rate", vendorId, `✅ <b>Vendor Rate — Approved</b>\n\nRate approved for vendor <code>${vendorId.slice(0, 8)}</code>.`);
-  await answerCallbackQuery(callbackQueryId, "✅ Rate approved.");
+  await resolveAdminNotifications("vendor_rate", vendorId,
+    `✅ <b>Vendor Rate — Approved</b>\n\nVendor <code>${vendorId.slice(0, 8)}</code> rate approved.`);
+  await answerCallbackQuery(cqId, "✅ Rate approved.");
 }
 
 async function handleVendorRateReject(
-  db: ReturnType<typeof getAdminDb>,
+  db: ReturnType<typeof getDb>,
   vendorId: string,
   adminId: string,
-  callbackQueryId: string,
-  chatId: number,
+  cqId: string,
 ): Promise<void> {
   await db.rpc("reject_vendor_rate", { p_vendor_id: vendorId, p_admin_id: adminId });
   await db.from("admin_audit_log").insert({
-    admin_id: adminId,
-    action: "reject_vendor_rate",
-    target_id: vendorId,
+    admin_id: adminId, action: "reject_vendor_rate", target_id: vendorId,
     meta: { via: "telegram_bot" },
   }).catch(() => {});
-
-  await resolveAdminNotifications("vendor_rate", vendorId, `❌ <b>Vendor Rate — Rejected</b>\n\nRate rejected for vendor <code>${vendorId.slice(0, 8)}</code>.`);
-  await answerCallbackQuery(callbackQueryId, "Rate rejected.");
+  await resolveAdminNotifications("vendor_rate", vendorId,
+    `❌ <b>Vendor Rate — Rejected</b>\n\nVendor <code>${vendorId.slice(0, 8)}</code> rate rejected.`);
+  await answerCallbackQuery(cqId, "Rate rejected.");
 }
 
-// ─── Text command handler ─────────────────────────────────────────────────────
+// ─── Text command router ──────────────────────────────────────────────────────
 async function handleTextCommand(
-  db: ReturnType<typeof getAdminDb>,
+  db: ReturnType<typeof getDb>,
   chatId: number,
+  telegramUserId: number,
   text: string,
   username: string | undefined,
-  adminId: string | null,
+  identity: Identity,
 ): Promise<void> {
   const parts = text.trim().split(/\s+/);
   const cmd = parts[0].toLowerCase();
 
-  // /start <code> — link flow
+  // /start <code> — works for anyone (links admin or support staff)
   if (cmd === "/start" && parts[1]) {
-    const reply = await handleLinkCode(db, chatId, username, parts[1]);
+    const reply = await handleStartCode(db, chatId, telegramUserId, username, parts[1]);
     await sendAdminBotMessage(chatId, reply);
     return;
   }
 
-  // All commands below require a linked admin
-  if (!adminId) {
-    await sendAdminBotMessage(chatId, "⚠️ Your Telegram is not linked to an admin account. Generate a link code from the admin panel.");
+  // Unlinked — can only /start
+  if (identity.role === "none") {
+    await sendAdminBotMessage(chatId,
+      "⚠️ Your Telegram is not linked. Ask an admin to generate a link code for you.");
     return;
   }
 
-  // /whoami
+  // Support staff — /reply only
+  if (identity.role === "support") {
+    if (!identity.isActive) {
+      await sendAdminBotMessage(chatId, "⚠️ Your support staff access has been deactivated. Contact an admin.");
+      return;
+    }
+
+    if (cmd === "/reply" && parts.length >= 3) {
+      const ticketId = parts[1];
+      const message = parts.slice(2).join(" ");
+      // Use staff's link ID as the "admin_id" in the audit log
+      const ok = await adminReplyToTicket(ticketId, message, identity.staffId);
+      await sendAdminBotMessage(chatId,
+        ok
+          ? `✅ Reply sent to ticket <code>${ticketId.slice(0, 8)}</code>.`
+          : `❌ Ticket not found: <code>${ticketId.slice(0, 8)}</code>.`
+      );
+    } else {
+      await sendAdminBotMessage(chatId,
+        `<b>Support Staff Commands:</b>\n\n/reply &lt;ticketId&gt; &lt;message&gt; — reply to a support ticket`);
+    }
+    return;
+  }
+
+  // ADMIN — full access
+  const { adminId } = identity as { role: "admin"; adminId: string };
+
   if (cmd === "/whoami") {
-    const { data: admin } = await db.from("profiles").select("full_name, role").eq("id", adminId).maybeSingle();
-    await sendAdminBotMessage(chatId, `👤 <b>Linked Admin</b>\nName: ${admin?.full_name ?? "Unknown"}\nRole: ${admin?.role ?? "admin"}\nAdmin ID: <code>${adminId.slice(0, 8)}</code>`);
+    const { data: admin } = await db.from("profiles")
+      .select("full_name, role").eq("id", adminId).maybeSingle();
+    await sendAdminBotMessage(chatId,
+      `👤 <b>Admin Account</b>\nName: ${admin?.full_name ?? "Unknown"}\nRole: ${admin?.role ?? "admin"}\nID: <code>${adminId.slice(0, 8)}</code>`);
     return;
   }
 
-  // /reply <ticketId> <message> — support reply
   if (cmd === "/reply" && parts.length >= 3) {
     const ticketId = parts[1];
     const message = parts.slice(2).join(" ");
     const ok = await adminReplyToTicket(ticketId, message, adminId);
-    await sendAdminBotMessage(chatId, ok ? `✅ Reply sent to ticket <code>${ticketId.slice(0, 8)}</code>.` : `❌ Ticket not found: <code>${ticketId.slice(0, 8)}</code>.`);
+    await sendAdminBotMessage(chatId,
+      ok
+        ? `✅ Reply sent to ticket <code>${ticketId.slice(0, 8)}</code>.`
+        : `❌ Ticket not found: <code>${ticketId.slice(0, 8)}</code>.`);
     return;
   }
 
-  // /mr_reject_reason <tradeId> <reason>
   if (cmd === "/mr_reject_reason" && parts.length >= 3) {
     const tradeId = parts[1];
     const reason = parts.slice(2).join(" ");
     const eventKey = `tg_admin_cmd:mr_reject:${tradeId}`;
-    if (!await isAlreadyProcessed(db, eventKey)) {
-      const { data: updated } = await db.from("trades")
-        .update({ status: "invalid", requires_manual_review: false, failure_reason: reason })
-        .eq("id", tradeId).eq("status", "pending_review")
-        .select("user_id").maybeSingle();
-      if (updated) {
-        await db.from("notifications").insert({ user_id: updated.user_id, title: "Card Rejected", message: `Your gift card was not accepted: ${reason}`, type: "error" });
-        await db.from("admin_audit_log").insert({ admin_id: adminId, action: "manual_trade_reject", target_id: tradeId, meta: { reason, via: "telegram_bot" } }).catch(() => {});
-        await resolveAdminNotifications("manual_review", tradeId, `❌ <b>Manual Review — Rejected</b>\n\nTrade <code>${tradeId.slice(0, 8)}</code> rejected. Reason: ${reason}`);
-        await markProcessed(db, eventKey);
-        await sendAdminBotMessage(chatId, `✅ Trade <code>${tradeId.slice(0, 8)}</code> rejected.`);
-      } else {
-        await sendAdminBotMessage(chatId, `❌ Trade not found or already handled.`);
-      }
+    if (await isAlreadyProcessed(db, eventKey)) {
+      await sendAdminBotMessage(chatId, "Already processed."); return;
+    }
+    const { data: updated } = await db.from("trades")
+      .update({ status: "invalid", requires_manual_review: false, failure_reason: reason })
+      .eq("id", tradeId).eq("status", "pending_review")
+      .select("user_id").maybeSingle();
+    if (updated) {
+      await db.from("notifications").insert({
+        user_id: updated.user_id, title: "Card Rejected",
+        message: `Your gift card was not accepted: ${reason}`, type: "error",
+      });
+      await db.from("admin_audit_log").insert({
+        admin_id: adminId, action: "manual_trade_reject", target_id: tradeId,
+        meta: { reason, via: "telegram_bot" },
+      }).catch(() => {});
+      await resolveAdminNotifications("manual_review", tradeId,
+        `❌ <b>Manual Review — Rejected</b>\n\nTrade <code>${tradeId.slice(0, 8)}</code> rejected.\nReason: ${reason}`);
+      await markProcessed(db, eventKey);
+      await sendAdminBotMessage(chatId, `✅ Trade <code>${tradeId.slice(0, 8)}</code> rejected.`);
     } else {
-      await sendAdminBotMessage(chatId, `Already processed.`);
+      await sendAdminBotMessage(chatId, `❌ Trade not found or already handled.`);
     }
     return;
   }
 
-  // /wd_reject_reason <withdrawalId> <reason>
   if (cmd === "/wd_reject_reason" && parts.length >= 3) {
     const withdrawalId = parts[1];
     const reason = parts.slice(2).join(" ");
     const eventKey = `tg_admin_cmd:wd_reject:${withdrawalId}`;
-    if (!await isAlreadyProcessed(db, eventKey)) {
-      try {
-        const { adminRejectWithdrawal } = await import("./vendors");
-        await adminRejectWithdrawal({ data: { withdrawalId, reason } });
-        await db.from("admin_audit_log").insert({ admin_id: adminId, action: "reject_withdrawal", target_id: withdrawalId, meta: { reason, via: "telegram_bot" } }).catch(() => {});
-        await resolveAdminNotifications("withdrawal", withdrawalId, `❌ <b>Withdrawal — Rejected</b>\n\nWithdrawal <code>${withdrawalId.slice(0, 8)}</code> rejected. Reason: ${reason}`);
-        await markProcessed(db, eventKey);
-        await sendAdminBotMessage(chatId, `✅ Withdrawal <code>${withdrawalId.slice(0, 8)}</code> rejected.`);
-      } catch {
-        await sendAdminBotMessage(chatId, `❌ Failed to reject withdrawal.`);
-      }
-    } else {
-      await sendAdminBotMessage(chatId, `Already processed.`);
+    if (await isAlreadyProcessed(db, eventKey)) {
+      await sendAdminBotMessage(chatId, "Already processed."); return;
+    }
+    try {
+      const { adminRejectWithdrawal } = await import("./vendors");
+      await adminRejectWithdrawal({ data: { withdrawalId, reason } });
+      await db.from("admin_audit_log").insert({
+        admin_id: adminId, action: "reject_withdrawal", target_id: withdrawalId,
+        meta: { reason, via: "telegram_bot" },
+      }).catch(() => {});
+      await resolveAdminNotifications("withdrawal", withdrawalId,
+        `❌ <b>Withdrawal — Rejected</b>\n\n<code>${withdrawalId.slice(0, 8)}</code> rejected.\nReason: ${reason}`);
+      await markProcessed(db, eventKey);
+      await sendAdminBotMessage(chatId, `✅ Withdrawal <code>${withdrawalId.slice(0, 8)}</code> rejected.`);
+    } catch {
+      await sendAdminBotMessage(chatId, `❌ Failed to reject withdrawal.`);
     }
     return;
   }
 
-  // /kyc_reject_reason <userId> <reason>
   if (cmd === "/kyc_reject_reason" && parts.length >= 3) {
     const userId = parts[1];
     const reason = parts.slice(2).join(" ");
     const eventKey = `tg_admin_cmd:kyc_reject:${userId}`;
-    if (!await isAlreadyProcessed(db, eventKey)) {
-      await db.from("profiles").update({ kyc_status: "rejected" }).eq("id", userId);
-      await db.from("notifications").insert({ user_id: userId, title: "KYC Needs Attention", message: `Your KYC was not approved: ${reason}. Please re-submit.`, type: "error" });
-      await db.from("admin_audit_log").insert({ admin_id: adminId, action: "kyc_reject", target_id: userId, meta: { reason, via: "telegram_bot" } }).catch(() => {});
-      await resolveAdminNotifications("kyc", userId, `❌ <b>KYC — Rejected</b>\n\nUser <code>${userId.slice(0, 8)}</code> KYC rejected. Reason: ${reason}`);
-      await markProcessed(db, eventKey);
-      await sendAdminBotMessage(chatId, `✅ KYC for <code>${userId.slice(0, 8)}</code> rejected.`);
-    } else {
-      await sendAdminBotMessage(chatId, `Already processed.`);
+    if (await isAlreadyProcessed(db, eventKey)) {
+      await sendAdminBotMessage(chatId, "Already processed."); return;
     }
+    await db.from("profiles").update({ kyc_status: "rejected" }).eq("id", userId);
+    await db.from("notifications").insert({
+      user_id: userId, title: "KYC Needs Attention",
+      message: `Your KYC was not approved: ${reason}. Please re-submit.`, type: "error",
+    });
+    await db.from("admin_audit_log").insert({
+      admin_id: adminId, action: "kyc_reject", target_id: userId,
+      meta: { reason, via: "telegram_bot" },
+    }).catch(() => {});
+    await resolveAdminNotifications("kyc", userId,
+      `❌ <b>KYC — Rejected</b>\n\nUser <code>${userId.slice(0, 8)}</code> rejected.\nReason: ${reason}`);
+    await markProcessed(db, eventKey);
+    await sendAdminBotMessage(chatId, `✅ KYC <code>${userId.slice(0, 8)}</code> rejected.`);
     return;
   }
 
-  // Unknown — show help
+  // Fallback: help
   await sendAdminBotMessage(chatId, [
     `<b>7SEVEN Admin Bot</b>`,
     ``,
     `<b>Commands:</b>`,
     `/start &lt;code&gt; — link your account`,
-    `/whoami — show linked admin info`,
+    `/whoami — show linked admin`,
     `/reply &lt;ticketId&gt; &lt;message&gt; — reply to support ticket`,
-    `/mr_reject_reason &lt;tradeId&gt; &lt;reason&gt; — reject a manual review trade`,
-    `/wd_reject_reason &lt;withdrawalId&gt; &lt;reason&gt; — reject a withdrawal`,
-    `/kyc_reject_reason &lt;userId&gt; &lt;reason&gt; — reject a KYC submission`,
+    `/mr_reject_reason &lt;tradeId&gt; &lt;reason&gt; — reject manual review trade`,
+    `/wd_reject_reason &lt;withdrawalId&gt; &lt;reason&gt; — reject withdrawal`,
+    `/kyc_reject_reason &lt;userId&gt; &lt;reason&gt; — reject KYC`,
   ].join("\n"));
 }
 
-// ─── Main webhook handler (exported, called from server.ts) ───────────────────
+// =============================================================================
+// Main webhook handler — exported, mounted in server.ts
+// =============================================================================
 export async function handleAdminTelegramWebhook(request: Request): Promise<Response> {
-  const ok = new Response(JSON.stringify({ ok: true }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
+  const ok200 = new Response(JSON.stringify({ ok: true }), {
+    status: 200, headers: { "Content-Type": "application/json" },
   });
 
-  // Validate secret token
+  // Validate secret header
   const webhookSecret = process.env.ADMIN_TELEGRAM_WEBHOOK_SECRET;
   if (webhookSecret) {
-    const incomingSecret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
-    if (incomingSecret !== webhookSecret) {
+    const incoming = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+    if (incoming !== webhookSecret) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
     }
   }
@@ -468,24 +562,26 @@ export async function handleAdminTelegramWebhook(request: Request): Promise<Resp
   try {
     update = (await request.json()) as TelegramUpdate;
   } catch {
-    return ok;
+    return ok200;
   }
 
-  // Process async — return 200 immediately (Telegram timeout is 5s)
+  // Return 200 immediately — process async (Telegram retries if we time out)
   Promise.resolve().then(async () => {
     try {
-      const db = getAdminDb();
+      const db = getDb();
 
       if (update.callback_query) {
         const cq = update.callback_query;
         const chatId = cq.message?.chat.id ?? cq.from.id;
-        const adminId = await getLinkedAdminId(db, cq.from.id);
-        if (!adminId) {
-          await answerCallbackQuery(cq.id, "⚠️ Not linked to an admin account.", true);
+        const identity = await resolveIdentity(db, cq.from.id);
+
+        // Callbacks are admin-only
+        if (identity.role !== "admin") {
+          await answerCallbackQuery(cq.id, "⚠️ Admin access required.", true);
           return;
         }
         if (cq.data) {
-          await handleCallback(db, cq.id, cq.data, chatId, adminId);
+          await handleCallback(db, cq.id, cq.data, chatId, identity.adminId);
         }
         return;
       }
@@ -493,13 +589,14 @@ export async function handleAdminTelegramWebhook(request: Request): Promise<Resp
       if (update.message?.text) {
         const msg = update.message;
         const chatId = msg.chat.id;
-        const adminId = await getLinkedAdminId(db, msg.from?.id ?? chatId);
-        await handleTextCommand(db, chatId, msg.text, msg.from?.username, adminId);
+        const telegramUserId = msg.from?.id ?? chatId;
+        const identity = await resolveIdentity(db, telegramUserId);
+        await handleTextCommand(db, chatId, telegramUserId, msg.text, msg.from?.username, identity);
       }
     } catch (e) {
       console.error("[AdminTelegramWebhook] Unhandled error:", e);
     }
   });
 
-  return ok;
+  return ok200;
 }
