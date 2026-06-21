@@ -38,6 +38,7 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           BUSHA_API_KEY: ${{ secrets.BUSHA_API_KEY }}
           ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
+          VITE_ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
           RELOADLY_CLIENT_ID: ${{ secrets.RELOADLY_CLIENT_ID }}
           RELOADLY_CLIENT_SECRET: ${{ secrets.RELOADLY_CLIENT_SECRET }}
           SQUADCO_SECRET_KEY: ${{ secrets.SQUADCO_SECRET_KEY }}
@@ -85,12 +86,93 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
+          VITE_ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
 
       - name: Deploy to Cloudflare Workers
         run: pnpm exec wrangler deploy --env production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # ── Upload runtime secrets to the production Worker ────────────────────
+      # These are never baked into the build — they are injected at runtime by
+      # Cloudflare Workers. Must be re-uploaded on every deploy so new secrets
+      # take effect without manual intervention in the dashboard.
+      - name: Upload secrets to Cloudflare Workers (main app)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          _SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          _SQUADCO_SECRET_KEY: ${{ secrets.SQUADCO_SECRET_KEY }}
+          _RELOADLY_CLIENT_ID: ${{ secrets.RELOADLY_CLIENT_ID }}
+          _RELOADLY_CLIENT_SECRET: ${{ secrets.RELOADLY_CLIENT_SECRET }}
+          _BUSHA_API_KEY: ${{ secrets.BUSHA_API_KEY }}
+          _APP_SECRET: ${{ secrets.APP_SECRET }}
+          _ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
+          _ONESIGNAL_REST_API_KEY: ${{ secrets.ONESIGNAL_REST_API_KEY }}
+          _CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          _ONESIGNAL_ANDROID_CHANNEL_ID: ${{ secrets.ONESIGNAL_ANDROID_CHANNEL_ID }}
+          _SUPPORT_EMAIL: ${{ secrets.SUPPORT_EMAIL }}
+          _SUPPORT_TELEGRAM_CHAT_ID: ${{ secrets.SUPPORT_TELEGRAM_CHAT_ID }}
+          _SUPPORT_WHATSAPP: ${{ secrets.SUPPORT_WHATSAPP }}
+        run: |
+          upload_secret() {
+            local name="$1"
+            local val="$2"
+            if [ -n "$val" ]; then
+              printf '%s' "$val" | pnpm exec wrangler secret put "$name" --env production
+              echo "✓ Uploaded: $name"
+            else
+              echo "– Skipped (not set): $name"
+            fi
+          }
+          upload_secret SUPABASE_SERVICE_ROLE_KEY "$_SUPABASE_SERVICE_ROLE_KEY"
+          upload_secret SQUADCO_SECRET_KEY        "$_SQUADCO_SECRET_KEY"
+          upload_secret RELOADLY_CLIENT_ID        "$_RELOADLY_CLIENT_ID"
+          upload_secret RELOADLY_CLIENT_SECRET    "$_RELOADLY_CLIENT_SECRET"
+          upload_secret BUSHA_API_KEY             "$_BUSHA_API_KEY"
+          upload_secret APP_SECRET                "$_APP_SECRET"
+          upload_secret ONESIGNAL_APP_ID          "$_ONESIGNAL_APP_ID"
+          upload_secret ONESIGNAL_REST_API_KEY    "$_ONESIGNAL_REST_API_KEY"
+          upload_secret CRON_SECRET               "$_CRON_SECRET"
+          upload_secret ONESIGNAL_ANDROID_CHANNEL_ID "$_ONESIGNAL_ANDROID_CHANNEL_ID"
+          upload_secret SUPPORT_EMAIL             "$_SUPPORT_EMAIL"
+          upload_secret SUPPORT_TELEGRAM_CHAT_ID  "$_SUPPORT_TELEGRAM_CHAT_ID"
+          upload_secret SUPPORT_WHATSAPP          "$_SUPPORT_WHATSAPP"
+
+      # ── Telegram & Dojah — placeholder until credentials are ready ─────────
+      - name: Upload Telegram & Dojah secrets to Cloudflare Workers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          _TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          _TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          _ADMIN_TELEGRAM_BOT_TOKEN: ${{ secrets.ADMIN_TELEGRAM_BOT_TOKEN }}
+          _ADMIN_TELEGRAM_BOT_USERNAME: ${{ secrets.ADMIN_TELEGRAM_BOT_USERNAME }}
+          _ADMIN_TELEGRAM_CHAT_ID: ${{ secrets.ADMIN_TELEGRAM_CHAT_ID }}
+          _ADMIN_TELEGRAM_WEBHOOK_SECRET: ${{ secrets.ADMIN_TELEGRAM_WEBHOOK_SECRET }}
+          _DOJAH_APP_ID: ${{ secrets.DOJAH_APP_ID }}
+          _DOJAH_SECRET_KEY: ${{ secrets.DOJAH_SECRET_KEY }}
+        run: |
+          upload_secret() {
+            local name="$1"
+            local val="$2"
+            if [ -n "$val" ]; then
+              printf '%s' "$val" | pnpm exec wrangler secret put "$name" --env production
+              echo "✓ Uploaded: $name"
+            else
+              echo "– Skipped (not set): $name"
+            fi
+          }
+          upload_secret TELEGRAM_BOT_TOKEN             "$_TELEGRAM_BOT_TOKEN"
+          upload_secret TELEGRAM_WEBHOOK_SECRET         "$_TELEGRAM_WEBHOOK_SECRET"
+          upload_secret ADMIN_TELEGRAM_BOT_TOKEN        "$_ADMIN_TELEGRAM_BOT_TOKEN"
+          upload_secret ADMIN_TELEGRAM_BOT_USERNAME     "$_ADMIN_TELEGRAM_BOT_USERNAME"
+          upload_secret ADMIN_TELEGRAM_CHAT_ID          "$_ADMIN_TELEGRAM_CHAT_ID"
+          upload_secret ADMIN_TELEGRAM_WEBHOOK_SECRET   "$_ADMIN_TELEGRAM_WEBHOOK_SECRET"
+          upload_secret DOJAH_APP_ID                    "$_DOJAH_APP_ID"
+          upload_secret DOJAH_SECRET_KEY                "$_DOJAH_SECRET_KEY"
+        continue-on-error: true   # Don't fail deploy if Telegram/Dojah not set yet
 
       - name: Register Telegram Webhooks
         run: |
