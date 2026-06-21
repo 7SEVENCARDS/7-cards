@@ -98,6 +98,17 @@ function bodyTooLarge(): Response {
 
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
+    // Inject Cloudflare Worker bindings (vars + secrets) into process.env so
+    // every call to process.env.X in this request's call-stack resolves correctly.
+    // Nitro does this for routes that flow through its handler, but server.ts
+    // short-circuits health / cron / webhook routes before reaching Nitro, so
+    // we must do it here — at the very top — before any process.env read.
+    if (env && typeof env === "object") {
+      for (const [k, v] of Object.entries(env as Record<string, unknown>)) {
+        if (typeof v === "string") process.env[k] = v;
+      }
+    }
+
     const url = new URL(request.url);
     const ip = clientIp(request);
 
