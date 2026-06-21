@@ -7,6 +7,10 @@
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
 export default defineConfig({
+  // Force the Nitro/Cloudflare Workers build outside the Lovable sandbox (e.g. GitHub Actions).
+  // Without this, @lovable.dev/vite-tanstack-config skips the nitro deploy plugin when it
+  // detects no Lovable context, so .output/server/index.mjs is never produced.
+  nitro: true,
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
     // nitro/vite builds from this
