@@ -678,7 +678,9 @@ export async function directDispatchToVendor(opts: {
         batch_position:    opts.batchPosition ?? null,
         batch_total:       opts.batchTotal ?? null,
       },
-    }).catch(() => {});
+    }).catch(e =>
+      console.error("[VendorBroadcast] assignment exposure tracking update failed:", e instanceof Error ? e.message : e)
+    );
 
     return { ok: true };
   } catch (e) {
