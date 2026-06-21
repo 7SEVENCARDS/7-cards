@@ -1,0 +1,28 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Cloudflare Workers — 7SEVEN CARDS B2B API
+# Production domain: https://api.7evencards.xyz
+# ─────────────────────────────────────────────────────────────────────────────
+
+name               = "seven-cards-api"
+main               = "dist/worker.mjs"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# ─── Development (wrangler dev) ───────────────────────────────────────────────
+[env.development]
+name = "seven-cards-api-dev"
+
+[env.development.vars]
+NODE_ENV = "development"
+
+# ─── Production (wrangler deploy --env production) ────────────────────────────
+[env.production]
+name = "seven-cards-api"
+
+[env.production.vars]
+NODE_ENV = "production"
+
+# api.7evencards.xyz → B2B API Worker
+[[env.production.routes]]
+pattern   = "api.7evencards.xyz/*"
+zone_name = "7evencards.xyz"
