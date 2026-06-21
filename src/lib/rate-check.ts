@@ -48,7 +48,9 @@ export async function sendRateCheckToAllVendors(): Promise<{
   }
 
   // Clean up stale bot states from previous conversations first
-  await db.rpc("cleanup_stale_bot_states").catch(() => {});
+  await db.rpc("cleanup_stale_bot_states").catch(e =>
+    console.warn("[RateCheck] cleanup_stale_bot_states RPC failed:", e instanceof Error ? e.message : e)
+  );
 
   const cutoff = new Date(Date.now() - RATE_CHECK_INTERVAL_MS).toISOString();
 
