@@ -205,7 +205,7 @@ async function handleManualReviewApprove(
     action: "manual_trade_approve",
     target_id: tradeId,
     meta: { via: "telegram_bot" },
-  }).catch(() => {});
+  }).catch(e => console.error("[AdminBot] audit_log insert failed:", e instanceof Error ? e.message : e));
 
   if (updated.direct_vendor_id) {
     Promise.resolve().then(async () => {
@@ -265,7 +265,7 @@ async function handleWithdrawalApprove(
     action: "approve_withdrawal",
     target_id: withdrawalId,
     meta: { via: "telegram_bot" },
-  }).catch(() => {});
+  }).catch(e => console.error("[AdminBot] audit_log insert failed:", e instanceof Error ? e.message : e));
 
   await resolveAdminNotifications("withdrawal", withdrawalId, `✅ <b>Withdrawal — Approved</b>\n\nWithdrawal <code>${withdrawalId.slice(0, 8)}</code> of ₦${Number(wd.amount_ngn).toLocaleString()} approved.`);
   await answerCallbackQuery(callbackQueryId, "✅ Withdrawal approved.");
@@ -290,7 +290,7 @@ async function handleKYCApprove(
     action: "kyc_approve",
     target_id: userId,
     meta: { via: "telegram_bot" },
-  }).catch(() => {});
+  }).catch(e => console.error("[AdminBot] audit_log insert failed:", e instanceof Error ? e.message : e));
 
   await resolveAdminNotifications("kyc", userId, `✅ <b>KYC — Approved</b>\n\nUser <code>${userId.slice(0, 8)}</code> KYC approved.`);
   await answerCallbackQuery(callbackQueryId, "✅ KYC approved.");
@@ -309,7 +309,7 @@ async function handleVendorRateApprove(
     action: "approve_vendor_rate",
     target_id: vendorId,
     meta: { via: "telegram_bot" },
-  }).catch(() => {});
+  }).catch(e => console.error("[AdminBot] audit_log insert failed:", e instanceof Error ? e.message : e));
 
   await resolveAdminNotifications("vendor_rate", vendorId, `✅ <b>Vendor Rate — Approved</b>\n\nRate approved for vendor <code>${vendorId.slice(0, 8)}</code>.`);
   await answerCallbackQuery(callbackQueryId, "✅ Rate approved.");
@@ -328,7 +328,7 @@ async function handleVendorRateReject(
     action: "reject_vendor_rate",
     target_id: vendorId,
     meta: { via: "telegram_bot" },
-  }).catch(() => {});
+  }).catch(e => console.error("[AdminBot] audit_log insert failed:", e instanceof Error ? e.message : e));
 
   await resolveAdminNotifications("vendor_rate", vendorId, `❌ <b>Vendor Rate — Rejected</b>\n\nRate rejected for vendor <code>${vendorId.slice(0, 8)}</code>.`);
   await answerCallbackQuery(callbackQueryId, "Rate rejected.");
@@ -386,7 +386,7 @@ async function handleTextCommand(
         .select("user_id").maybeSingle();
       if (updated) {
         await db.from("notifications").insert({ user_id: updated.user_id, title: "Card Rejected", message: `Your gift card was not accepted: ${reason}`, type: "error" });
-        await db.from("admin_audit_log").insert({ admin_id: adminId, action: "manual_trade_reject", target_id: tradeId, meta: { reason, via: "telegram_bot" } }).catch(() => {});
+        await db.from("admin_audit_log").insert({ admin_id: adminId, action: "manual_trade_reject", target_id: tradeId, meta: { reason, via: "telegram_bot" } }).catch(e => console.error("[AdminBot] audit_log insert failed:", e instanceof Error ? e.message : e));
         await resolveAdminNotifications("manual_review", tradeId, `❌ <b>Manual Review — Rejected</b>\n\nTrade <code>${tradeId.slice(0, 8)}</code> rejected. Reason: ${reason}`);
         await markProcessed(db, eventKey);
         await sendAdminBotMessage(chatId, `✅ Trade <code>${tradeId.slice(0, 8)}</code> rejected.`);
@@ -412,7 +412,7 @@ async function handleTextCommand(
         // the createServerFn validator expected { requestId }.
         const { rejectWithdrawalImpl } = await import("./vendors");
         await rejectWithdrawalImpl(db as ReturnType<typeof import("../lib/supabase.server").getServerSupabase>, adminId, withdrawalId, reason);
-        await db.from("admin_audit_log").insert({ admin_id: adminId, action: "reject_withdrawal", target_id: withdrawalId, meta: { reason, via: "telegram_bot" } }).catch(() => {});
+        await db.from("admin_audit_log").insert({ admin_id: adminId, action: "reject_withdrawal", target_id: withdrawalId, meta: { reason, via: "telegram_bot" } }).catch(e => console.error("[AdminBot] audit_log insert failed:", e instanceof Error ? e.message : e));
         await resolveAdminNotifications("withdrawal", withdrawalId, `❌ <b>Withdrawal — Rejected</b>\n\nWithdrawal <code>${withdrawalId.slice(0, 8)}</code> rejected. Reason: ${reason}`);
         await markProcessed(db, eventKey);
         await sendAdminBotMessage(chatId, `✅ Withdrawal <code>${withdrawalId.slice(0, 8)}</code> rejected.`);
@@ -433,7 +433,7 @@ async function handleTextCommand(
     if (!await isAlreadyProcessed(db, eventKey)) {
       await db.from("profiles").update({ kyc_status: "rejected" }).eq("id", userId);
       await db.from("notifications").insert({ user_id: userId, title: "KYC Needs Attention", message: `Your KYC was not approved: ${reason}. Please re-submit.`, type: "error" });
-      await db.from("admin_audit_log").insert({ admin_id: adminId, action: "kyc_reject", target_id: userId, meta: { reason, via: "telegram_bot" } }).catch(() => {});
+      await db.from("admin_audit_log").insert({ admin_id: adminId, action: "kyc_reject", target_id: userId, meta: { reason, via: "telegram_bot" } }).catch(e => console.error("[AdminBot] audit_log insert failed:", e instanceof Error ? e.message : e));
       await resolveAdminNotifications("kyc", userId, `❌ <b>KYC — Rejected</b>\n\nUser <code>${userId.slice(0, 8)}</code> KYC rejected. Reason: ${reason}`);
       await markProcessed(db, eventKey);
       await sendAdminBotMessage(chatId, `✅ KYC for <code>${userId.slice(0, 8)}</code> rejected.`);
