@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createServerFn } from "@tanstack/react-start";
-import { getWebRequest } from "@tanstack/react-start/server";
+import { getRequest } from "@tanstack/react-start/server";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser, requireAdmin, requireVendorAuth } from "../lib/auth-server";
 import { clientIp, assertNotRateLimited, rlKey } from "../lib/rate-limiter";
@@ -242,7 +242,7 @@ export const vendorLogin = createServerFn({ method: "POST" })
     assertPassword(data.password);
 
     // 5 attempts per IP per minute — stops credential-stuffing
-    const req = getWebRequest();
+    const req = getRequest();
     const ip = req ? clientIp(req) : "unknown";
     assertNotRateLimited(rlKey("vendorLogin", ip), 5, 60_000);
 
