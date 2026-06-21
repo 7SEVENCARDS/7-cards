@@ -127,6 +127,33 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
           reloadly_transaction_id: result.productId ? String(result.productId) : null,
         }).eq("id", data.tradeId);
 
+        // ── PILLAR 1: Log 'card_verified' — Reloadly_Token + Timestamp + Actor ──
+        // The hash of (reloadly_token | server_ts_ms | user_id | trade_id | event)
+        // becomes the cryptographic proof that this card passed Reloadly at this
+        // exact moment. If Reloadly is ever accused of returning stale data, this
+        // entry's hash mismatch will expose any tampering.
+        try {
+          const { logTradeEvent, hashReloadlyToken } = await import("../lib/audit-log");
+          const reloadlyTokenHash = await hashReloadlyToken().catch(() => "hash-unavailable");
+          await logTradeEvent(db, {
+            tradeId:  data.tradeId,
+            event:    "card_verified",
+            actorType: "user",
+            actorId:  userId,
+            payload: {
+              brand:               data.brand,
+              amount_usd:          data.amountUsd,
+              reloadly_product_id: result.productId ?? null,
+              reloadly_balance:    result.balance ?? null,
+              reloadly_currency:   result.currency ?? null,
+              reloadly_token_hash: reloadlyTokenHash, // Pillar-1 anchor
+              requires_manual_review: result.requiresManualReview ?? false,
+            },
+          });
+        } catch (e) {
+          console.warn("[AuditLog] card_verified log failed (non-fatal):", e instanceof Error ? e.message : e);
+        }
+
         // Trigger Telegram broadcast to all active vendors (fire-and-forget)
         try {
           const { broadcastTradeToVendors } = await import("./vendor-broadcast");

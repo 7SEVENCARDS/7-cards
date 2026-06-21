@@ -559,6 +559,43 @@ export const markAssignmentFailed = createServerFn({ method: "POST" })
     // Telegram notification to vendor (non-fatal, fire-and-forget)
     notifyVendorFailure(db, vendor.id, assignment, forfeitedAmount, consecutive, threshold, autoSuspended).catch(() => {});
 
+    // ── PILLAR 1: Log 'vendor_marked_failed' to the immutable ledger ─────────
+    try {
+      const { logTradeEvent } = await import("../lib/audit-log");
+      await logTradeEvent(db, {
+        tradeId:      null,
+        assignmentId: data.assignmentId,
+        event:        "vendor_marked_failed",
+        actorType:    "vendor",
+        actorId:      vendor.id,
+        payload: {
+          brand:              assignment.brand,
+          amount_usd:         assignment.amount_usd,
+          amount_ngn:         assignment.amount_ngn,
+          failure_reason:     data.reason,
+          forfeited_ngn:      forfeitedAmount,
+          consecutive_strikes: consecutive,
+          auto_suspended:     autoSuspended,
+        },
+      });
+    } catch (e) {
+      console.warn("[AuditLog] vendor_marked_failed log failed (non-fatal):", e instanceof Error ? e.message : e);
+    }
+
+    // ── PILLARS 2 & 3: Forensic fraud audit (fire-and-forget, non-fatal) ─────
+    // Queries Reloadly right now with the same card code to determine whether
+    // the card was redeemed AFTER T_Exposure (fraud) or was already dead
+    // before delivery (system error). Verdict is written to vendor_disputes and
+    // trade_audit_log. FRAUD_CONFIRMED auto-forfeits deposit + suspends account.
+    try {
+      const { runFraudAudit } = await import("../lib/fraud-detection");
+      runFraudAudit(db, data.assignmentId, vendor.id, data.reason).catch(e =>
+        console.error("[FraudAudit] Audit run failed:", e instanceof Error ? e.message : e)
+      );
+    } catch (e) {
+      console.warn("[FraudAudit] Import failed (non-fatal):", e instanceof Error ? e.message : e);
+    }
+
     return {
       success: true,
       autoSuspended,

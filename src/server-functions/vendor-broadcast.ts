@@ -242,6 +242,12 @@ export async function handleTelegramReply(opts: {
 
   const { buildCardAssignmentMessage } = await import("../lib/telegram");
 
+  // ── PILLAR 2: Record T_Exposure — the exact millisecond the card code lands ──
+  // This timestamp is the forensic anchor: if the vendor later claims the card
+  // was already used, we compare T_Exposure against Reloadly's re-check at that
+  // moment. T_Redeemed ≥ T_Exposure = FRAUD_CONFIRMED, zero ambiguity.
+  const tExposureMs = Date.now();
+
   // Send card details to the winner
   await sendTelegramMessage(
     opts.chatId,
@@ -257,6 +263,37 @@ export async function handleTelegramReply(opts: {
     }),
     "HTML"
   );
+
+  // Persist T_Exposure onto the assignment immediately after message is sent
+  await db.from("vendor_card_assignments").update({
+    card_exposed_at:    new Date(tExposureMs).toISOString(),
+    card_exposed_at_ms: tExposureMs,
+  }).eq("id", assignmentId);
+
+  // ── PILLAR 1: Log 'card_exposed' to the immutable cryptographic ledger ────
+  try {
+    const { logTradeEvent, hashReloadlyToken } = await import("../lib/audit-log");
+    const reloadlyTokenHash = await hashReloadlyToken().catch(() => "hash-unavailable");
+    await logTradeEvent(db, {
+      tradeId:      broadcast.trade_id,
+      assignmentId,
+      event:        "card_exposed",
+      actorType:    "system",
+      actorId:      vendor.id,
+      payload: {
+        vendor_id:           vendor.id,
+        vendor_telegram_id:  opts.chatId,
+        brand:               broadcast.brand,
+        amount_usd:          broadcast.amount_usd,
+        amount_ngn:          broadcast.amount_ngn,
+        t_exposure_ms:       tExposureMs, // THE critical timestamp
+        reloadly_token_hash: reloadlyTokenHash, // Pillar-1: token reference, never raw
+      },
+    });
+  } catch (e) {
+    // Never block the vendor's card delivery on audit-log failure
+    console.error("[AuditLog] card_exposed log failed (non-fatal):", e instanceof Error ? e.message : e);
+  }
 
   // Provision a Squad one-time VAN for this assignment and send it to the vendor
   // Fire-and-forget — the assignment is already created; VAN failure is recoverable
