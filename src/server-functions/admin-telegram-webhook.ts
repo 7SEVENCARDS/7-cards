@@ -27,6 +27,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { answerCallbackQuery, sendAdminBotMessage } from "../lib/telegram";
+import { getEnv } from "../lib/worker-env";
 import { resolveAdminNotifications } from "./admin-telegram";
 import { adminReplyToTicket } from "./support";
 
@@ -48,8 +49,8 @@ type TelegramUpdate = {
 
 function getAdminDb() {
   return createClient(
-    process.env.VITE_SUPABASE_URL ?? "",
-    process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+    getEnv("VITE_SUPABASE_URL") ?? "",
+    getEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "",
     { auth: { autoRefreshToken: false, persistSession: false } }
   );
 }
@@ -465,7 +466,7 @@ export async function handleAdminTelegramWebhook(request: Request): Promise<Resp
   });
 
   // Validate secret token
-  const webhookSecret = process.env.ADMIN_TELEGRAM_WEBHOOK_SECRET;
+  const webhookSecret = getEnv("ADMIN_TELEGRAM_WEBHOOK_SECRET");
   if (webhookSecret) {
     const incomingSecret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
     if (incomingSecret !== webhookSecret) {
