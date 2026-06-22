@@ -19,7 +19,7 @@ const ALLOWED_REGIONS = new Set(["US","UK","EU","CA"]);
 // dispatched one at a time as each preceding card is processed.
 export const submitCardBatch = createServerFn({ method: "POST" })
   .validator((d: {
-    cards:         Array<{ cardCode: string; cardPin?: string }>;
+    cards:         Array<{ cardCode: string; cardPin?: string; imagePath?: string }>;
     brand:         string;
     amountUsd:     number;
     exchangeRate:  number;
@@ -132,6 +132,7 @@ export const submitCardBatch = createServerFn({ method: "POST" })
           batch_position:    position,
           batch_queued:      queued,
           direct_vendor_id:  vendor.id,
+          card_image_path:   card.imagePath ?? null,
         })
         .select("id")
         .single() as { data: { id: string } | null };

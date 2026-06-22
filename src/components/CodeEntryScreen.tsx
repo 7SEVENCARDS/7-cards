@@ -1,27 +1,38 @@
-import { useState } from "react";
-import { ChevronLeft, ChevronRight, Eye, EyeOff, ScanLine, Plus, X, Layers } from "lucide-react";
+import { useState, useRef } from "react";
+import { ChevronLeft, ChevronRight, Eye, EyeOff, ScanLine, Plus, X, Layers, Camera, ImagePlus, Loader2 } from "lucide-react";
+import { supabase } from "../lib/supabase";
 
-type CardEntry = { code: string; pin: string; showPin: boolean };
+type CardEntry = {
+  code: string;
+  pin: string;
+  showPin: boolean;
+  imagePath?: string;
+  imagePreview?: string;
+  imageUploading?: boolean;
+};
 
 interface CodeEntryScreenProps {
   brand:        string;
   amountUsd:    string;
   estimatedNgn: string;
+  userId?:      string;
   onBack:       () => void;
-  onContinue:      (code: string, pin?: string) => void;
-  onContinueBatch?: (cards: Array<{ cardCode: string; cardPin?: string }>) => void;
+  onContinue:      (code: string, pin?: string, imagePath?: string) => void;
+  onContinueBatch?: (cards: Array<{ cardCode: string; cardPin?: string; imagePath?: string }>) => void;
 }
 
 export function CodeEntryScreen({
   brand,
   amountUsd,
   estimatedNgn,
+  userId,
   onBack,
   onContinue,
   onContinueBatch,
 }: CodeEntryScreenProps) {
   const [cards, setCards] = useState<CardEntry[]>([{ code: "", pin: "", showPin: false }]);
   const [error, setError] = useState("");
+  const fileInputRefs = useRef<Array<HTMLInputElement | null>>([]);
 
   const BRAND_EMOJI: Record<string, string> = {
     Apple: "🍎", Amazon: "📦", Steam: "🎮", "Google Play": "▶️",
@@ -46,23 +57,74 @@ export function CodeEntryScreen({
   const removeCard = (i: number) =>
     setCards(cs => cs.filter((_, idx) => idx !== i));
 
+  // ── Image upload ──────────────────────────────────────────────────────────
+  const handleImageSelect = async (i: number, file: File) => {
+    if (!file) return;
+
+    const preview = URL.createObjectURL(file);
+    setCards(cs => cs.map((c, idx) =>
+      idx === i ? { ...c, imagePreview: preview, imageUploading: true, imagePath: undefined } : c
+    ));
+
+    if (!userId) {
+      setCards(cs => cs.map((c, idx) =>
+        idx === i ? { ...c, imageUploading: false } : c
+      ));
+      return;
+    }
+
+    try {
+      const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const path = `${userId}/${Date.now()}_${i}.${ext}`;
+      const { data, error: uploadErr } = await supabase.storage
+        .from("card-images")
+        .upload(path, file, { cacheControl: "3600", upsert: false });
+
+      if (uploadErr) {
+        console.warn("[CardImage] Upload failed:", uploadErr.message);
+        setCards(cs => cs.map((c, idx) =>
+          idx === i ? { ...c, imageUploading: false } : c
+        ));
+        return;
+      }
+
+      setCards(cs => cs.map((c, idx) =>
+        idx === i ? { ...c, imagePath: data.path, imageUploading: false } : c
+      ));
+    } catch (e) {
+      console.warn("[CardImage] Upload error:", e instanceof Error ? e.message : e);
+      setCards(cs => cs.map((c, idx) =>
+        idx === i ? { ...c, imageUploading: false } : c
+      ));
+    }
+  };
+
+  const removeImage = (i: number) => {
+    const prev = cards[i]?.imagePreview;
+    if (prev) URL.revokeObjectURL(prev);
+    setCards(cs => cs.map((c, idx) =>
+      idx === i ? { ...c, imagePath: undefined, imagePreview: undefined, imageUploading: false } : c
+    ));
+  };
+
   // ── Submit ─────────────────────────────────────────────────────────────────
   const handleContinue = () => {
-    // Validate all cards
     for (let i = 0; i < cards.length; i++) {
       const c = cards[i];
       const label = cards.length > 1 ? `Card ${i + 1}` : "Card";
       if (!c.code.trim()) { setError(`${label}: enter the card code`); return; }
       if (c.code.trim().length < 8) { setError(`${label}: code looks too short`); return; }
+      if (c.imageUploading) { setError(`${label}: image still uploading — wait a moment`); return; }
     }
     setError("");
 
     if (cards.length === 1) {
-      onContinue(cards[0].code.trim(), cards[0].pin.trim() || undefined);
+      onContinue(cards[0].code.trim(), cards[0].pin.trim() || undefined, cards[0].imagePath);
     } else {
       onContinueBatch?.(cards.map(c => ({
-        cardCode: c.code.trim(),
-        cardPin:  c.pin.trim() || undefined,
+        cardCode:  c.code.trim(),
+        cardPin:   c.pin.trim() || undefined,
+        imagePath: c.imagePath,
       })));
     }
   };
@@ -151,7 +213,7 @@ export function CodeEntryScreen({
             </div>
 
             {/* PIN input */}
-            <div className="px-4 pb-4">
+            <div className="px-4 pb-3">
               <div className="bg-secondary rounded-xl px-3 py-2.5 flex items-center gap-2">
                 <input
                   type={card.showPin ? "text" : "password"}
@@ -165,6 +227,61 @@ export function CodeEntryScreen({
                   {card.showPin ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                 </button>
               </div>
+            </div>
+
+            {/* Image upload */}
+            <div className="px-4 pb-4">
+              {card.imagePreview ? (
+                <div className="relative rounded-xl overflow-hidden border border-border bg-secondary">
+                  <img
+                    src={card.imagePreview}
+                    alt="Card photo"
+                    className="w-full h-32 object-cover"
+                  />
+                  {card.imageUploading && (
+                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center gap-2">
+                      <Loader2 className="size-5 text-white animate-spin" />
+                      <span className="text-white text-xs font-bold">Uploading…</span>
+                    </div>
+                  )}
+                  {!card.imageUploading && (
+                    <button
+                      onClick={() => removeImage(i)}
+                      className="absolute top-2 right-2 size-6 rounded-full bg-black/60 grid place-items-center text-white hover:bg-red-600/80 transition"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  )}
+                  {!card.imageUploading && card.imagePath && (
+                    <div className="absolute bottom-2 left-2 bg-green-500/80 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+                      ✓ Uploaded
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => fileInputRefs.current[i]?.click()}
+                  className="w-full flex items-center justify-center gap-2 border border-dashed border-border/60 rounded-xl py-2.5 text-xs text-muted-foreground hover:border-gold/40 hover:text-gold transition"
+                >
+                  <Camera className="size-3.5" />
+                  <span>Attach card photo</span>
+                  <ImagePlus className="size-3.5 ml-0.5 opacity-60" />
+                </button>
+              )}
+              {/* Hidden file input — accepts camera or gallery */}
+              <input
+                ref={(el) => { fileInputRefs.current[i] = el; }}
+                type="file"
+                accept="image/*,image/heic,image/heif"
+                capture="environment"
+                className="sr-only"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleImageSelect(i, file);
+                  e.target.value = "";
+                }}
+              />
             </div>
           </div>
         ))}
@@ -186,6 +303,14 @@ export function CodeEntryScreen({
           )}
         </div>
       )}
+
+      {/* Photo tip */}
+      <div className="mx-5 mt-4 flex items-start gap-2 bg-secondary/60 rounded-xl px-3 py-2.5">
+        <Camera className="size-3.5 text-muted-foreground shrink-0 mt-0.5" />
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          <span className="font-semibold text-foreground/70">Tip:</span> Attaching a photo speeds up verification and helps resolve disputes. Optional but recommended.
+        </p>
+      </div>
 
       {/* Error */}
       {error && (

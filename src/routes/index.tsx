@@ -161,7 +161,7 @@ function App() {
     return Number(r?.rate_per_dollar ?? 1485);
   };
 
-  const handleCodeContinue = async (code: string, pin?: string) => {
+  const handleCodeContinue = async (code: string, pin?: string, _imagePath?: string) => {
     if (!activeSell || !user) return;
     setPendingCode({ code, pin });
     setCreatingTrade(true);
@@ -190,7 +190,7 @@ function App() {
   // to a DIFFERENT vendor (round-robin). Only 1 active vendor → sequential
   // queue (one card dispatched at a time to minimise exposure risk).
   const handleCodeContinueBatch = async (
-    cards: Array<{ cardCode: string; cardPin?: string }>
+    cards: Array<{ cardCode: string; cardPin?: string; imagePath?: string }>
   ) => {
     if (!activeSell || !user) return;
     setCreatingTrade(true);
@@ -279,6 +279,7 @@ function App() {
             estimatedNgn={Math.round(
               Number(activeSell.amountUsd) * activeSell.rate
             ).toLocaleString()}
+            userId={user?.id}
             onBack={() => setTab("sell")}
             onContinue={creatingTrade ? () => {} : handleCodeContinue}
             onContinueBatch={creatingTrade ? undefined : handleCodeContinueBatch}
