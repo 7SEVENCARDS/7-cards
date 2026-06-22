@@ -694,7 +694,7 @@ const REGION_CONFIG = {
 } as const;
 type Region = keyof typeof REGION_CONFIG;
 
-const BRAND_LOGOS: Record<string, string> = {
+const BRAND_LOGO_URLS: Record<string, string> = {
   "Apple":       "https://logo.clearbit.com/apple.com",
   "Steam":       "https://logo.clearbit.com/steampowered.com",
   "Amazon":      "https://logo.clearbit.com/amazon.com",
@@ -992,7 +992,7 @@ function SellScreen({
 
 function BrandLogo({ name, emoji }: { name: string; emoji: string }) {
   const [failed, setFailed] = useState(false);
-  const logo = BRAND_LOGOS[name];
+  const logo = BRAND_LOGO_URLS[name];
   if (!logo || failed) {
     return <span className="text-3xl leading-none">{emoji}</span>;
   }
