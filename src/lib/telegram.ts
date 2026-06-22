@@ -6,24 +6,25 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { fetchWithTimeout } from "./fetch-with-timeout";
+import { getEnv } from "./worker-env";
 
 const TELEGRAM_API = "https://api.telegram.org";
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
 function getVendorBotToken() {
-  return process.env.TELEGRAM_BOT_TOKEN ?? "";
+  return getEnv("TELEGRAM_BOT_TOKEN") ?? "";
 }
 
 function getAdminBotToken() {
-  return process.env.ADMIN_TELEGRAM_BOT_TOKEN ?? "";
+  return getEnv("ADMIN_TELEGRAM_BOT_TOKEN") ?? "";
 }
 
 export function isTelegramConfigured() {
-  return !!process.env.TELEGRAM_BOT_TOKEN;
+  return !!getEnv("TELEGRAM_BOT_TOKEN");
 }
 
 export function isAdminBotConfigured() {
-  return !!process.env.ADMIN_TELEGRAM_BOT_TOKEN;
+  return !!getEnv("ADMIN_TELEGRAM_BOT_TOKEN");
 }
 
 // ── Generic send (shared by both bots) ───────────────────────────────────────
