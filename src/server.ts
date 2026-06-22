@@ -2,6 +2,7 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+import { initWorkerEnv, getEnv } from "./lib/worker-env";
 import {
   handleSquadPayoutWebhook,
   handleSquadPaymentWebhook,
@@ -98,16 +99,11 @@ function bodyTooLarge(): Response {
 
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
-    // Inject Cloudflare Worker bindings (vars + secrets) into process.env so
-    // every call to process.env.X in this request's call-stack resolves correctly.
-    // Nitro does this for routes that flow through its handler, but server.ts
-    // short-circuits health / cron / webhook routes before reaching Nitro, so
-    // we must do it here — at the very top — before any process.env read.
-    if (env && typeof env === "object") {
-      for (const [k, v] of Object.entries(env as Record<string, unknown>)) {
-        if (typeof v === "string") process.env[k] = v;
-      }
-    }
+    // Store Cloudflare Worker bindings (vars + secrets) in the module-level
+    // singleton so getEnv() resolves correctly throughout this request.
+    // Vite/Nitro inlines process.env.X at build time, so process.env is
+    // unreliable for secrets — use getEnv() everywhere instead.
+    initWorkerEnv(env);
 
     const url = new URL(request.url);
     const ip = clientIp(request);
@@ -208,7 +204,7 @@ export default {
       // scheduled() export so the logic stays in one place.
       if (url.pathname === "/api/cron/rate-check") {
         const secret = request.headers.get("x-cron-secret");
-        const expected = process.env.CRON_SECRET;
+        const expected = getEnv("CRON_SECRET");
         if (!expected || secret !== expected) {
           return addSecurityHeaders(
             new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -236,14 +232,14 @@ export default {
     // ── Health check — shows config status without exposing secret values ──
     if (url.pathname === "/api/health") {
       const cfg = {
-        supabase:   !!(process.env.VITE_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
-        squadco:    !!process.env.SQUADCO_SECRET_KEY,
-        reloadly:   !!(process.env.RELOADLY_CLIENT_ID && process.env.RELOADLY_CLIENT_SECRET),
-        busha:      !!process.env.BUSHA_API_KEY,
-        onesignal:  !!(process.env.ONESIGNAL_APP_ID && process.env.ONESIGNAL_REST_API_KEY),
-        telegram:   !!process.env.TELEGRAM_BOT_TOKEN,
-        app_secret: !!process.env.APP_SECRET,
-        cron:       !!process.env.CRON_SECRET,
+        supabase:   !!(getEnv("VITE_SUPABASE_URL") && getEnv("SUPABASE_SERVICE_ROLE_KEY")),
+        squadco:    !!getEnv("SQUADCO_SECRET_KEY"),
+        reloadly:   !!(getEnv("RELOADLY_CLIENT_ID") && getEnv("RELOADLY_CLIENT_SECRET")),
+        busha:      !!getEnv("BUSHA_API_KEY"),
+        onesignal:  !!(getEnv("ONESIGNAL_APP_ID") && getEnv("ONESIGNAL_REST_API_KEY")),
+        telegram:   !!getEnv("TELEGRAM_BOT_TOKEN"),
+        app_secret: !!getEnv("APP_SECRET"),
+        cron:       !!getEnv("CRON_SECRET"),
       };
       const allOk = Object.values(cfg).every(Boolean);
       if (!allOk) {
