@@ -230,51 +230,6 @@ export default {
     }
 
     // ── Health check — shows config status without exposing secret values ──
-    // ── SSR debug — captures the actual React render error ──────────────────
-    if (url.pathname === "/api/ssr-debug") {
-      const captured: string[] = [];
-      const origErr = console.error.bind(console);
-      const origWarn = console.warn.bind(console);
-      (console as unknown as Record<string, unknown>).error = (...args: unknown[]) => {
-        captured.push(args.map((a) => (a instanceof Error ? a.stack ?? a.message : String(a))).join(" "));
-        origErr(...args);
-      };
-      (console as unknown as Record<string, unknown>).warn = (...args: unknown[]) => {
-        captured.push("[WARN] " + args.map(String).join(" "));
-        origWarn(...args);
-      };
-      try {
-        const testReq = new Request("https://7evencards.xyz/", {
-          method: "GET",
-          headers: { accept: "text/html", "user-agent": "ssr-debug" },
-        });
-        const handler = await getServerEntry();
-        const response = await handler.fetch(testReq, env, ctx);
-        const text = await response.text();
-        return new Response(
-          JSON.stringify(
-            {
-              status: response.status,
-              has_error_marker: text.includes("<!--$!-->"),
-              captured_logs: captured,
-              body_first_200: text.slice(0, 200),
-            },
-            null,
-            2,
-          ),
-          { headers: { "Content-Type": "application/json" } },
-        );
-      } catch (e) {
-        return new Response(
-          JSON.stringify({ caught_exception: String(e), captured_logs: captured }, null, 2),
-          { headers: { "Content-Type": "application/json" } },
-        );
-      } finally {
-        (console as unknown as Record<string, unknown>).error = origErr;
-        (console as unknown as Record<string, unknown>).warn = origWarn;
-      }
-    }
-
     if (url.pathname === "/api/health") {
       // Critical: all must be present for 200. Optional: logged but won't cause 503.
       const critical = {
