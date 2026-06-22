@@ -36,6 +36,7 @@ import {
 import logoBadge from "../assets/logo-badge.png.asset.json";
 import logoFull from "../assets/logo-full.png.asset.json";
 import { AuthScreen } from "../components/AuthScreen";
+import { CryptoScreen } from "../components/CryptoScreen";
 import { CodeEntryScreen } from "../components/CodeEntryScreen";
 import { KYCScreen } from "../components/KYCScreen";
 import { PayoutAccountsScreen } from "../components/PayoutAccountsScreen";
@@ -57,9 +58,10 @@ import {
   useLeaderboard,
   useUserBadges,
   useNotifications,
+  useCryptoRates,
 } from "../hooks/useAppData";
 import { supabase } from "../lib/supabase";
-import { createTrade, verifyGiftCard, processPayout, submitCardBatch, getTradeLimits } from "../server-functions/trades";
+import { createTrade, verifyGiftCard, processPayout, getTradeLimits } from "../server-functions/trades";
 import { getCryptoDepositAddress, initiateCryptoSwap, initiateCryptoSend } from "../server-functions/crypto";
 import { getKYCStatus } from "../server-functions/kyc";
 import { lookupAccount, addPayoutAccount } from "../server-functions/payout-accounts";
@@ -68,7 +70,7 @@ export const Route = createFileRoute("/")({
   component: App,
 });
 
-type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications" | "referral" | "premium" | "history" | "status" | "support" | "admin";
+type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "crypto" | "profile" | "kyc" | "payout" | "notifications" | "referral" | "premium" | "history" | "status" | "support" | "admin";
 
 type ActiveSell = {
   brand: string;
@@ -89,6 +91,7 @@ function App() {
 
   // ── Real data hooks ──────────────────────────────────────────────────────
   const { data: rates = [] } = useExchangeRates();
+  const { data: cryptoRates = [] } = useCryptoRates();
   const { data: wallets = [] } = useWallets(user?.id);
   const { data: portfolio } = usePortfolioValue(user?.id);
   const { data: recentTrades = [] } = useRecentTrades(user?.id, 5);
@@ -186,64 +189,18 @@ function App() {
     setTab("verify");
   };
 
-  // ── Multi-card batch handler ───────────────────────────────────────────────
-  // When the user enters multiple cards in CodeEntryScreen, each card is sent
-  // to a DIFFERENT vendor (round-robin). Only 1 active vendor → sequential
-  // queue (one card dispatched at a time to minimise exposure risk).
-  const handleCodeContinueBatch = async (
-    cards: Array<{ cardCode: string; cardPin?: string }>
-  ) => {
-    if (!activeSell || !user) return;
-    setCreatingTrade(true);
-    try {
-      const result = await submitCardBatch({
-        data: {
-          cards,
-          brand:        activeSell.brand,
-          amountUsd:    Number(activeSell.amountUsd),
-          exchangeRate: activeSell.rate,
-        },
-      }) as {
-        batchId:       string;
-        strategy:      string;
-        vendorCount:   number;
-        verifiedCount: number;
-        failedCount:   number;
-        queuedCount:   number;
-        cards:         Array<{ position: number; status: string; failureReason?: string; assignedVendorName?: string }>;
-      };
-
-      // Show a summary notification then land on history
-      const { verifiedCount, failedCount, strategy } = result;
-      const stratLabel = strategy === "sequential" ? "sequential" : "risk-distributed";
-      await queryClient.invalidateQueries({ queryKey: ["trades", user.id] });
-
-      // Navigate to trade history so user sees all their batch trades
-      setActiveSell(null);
-      setPendingCode(null);
-      setActiveTradeId(null);
-      setTab("history");
-
-      // Surface a summary notification (non-blocking)
-      console.info(
-        `[Batch] ${verifiedCount} verified, ${failedCount} failed · ${stratLabel}`
-      );
-    } catch (e) {
-      console.error("[Batch] submitCardBatch failed:", e instanceof Error ? e.message : e);
-      // Fall back to history tab so user isn't stuck
-      setTab("history");
-    } finally {
-      setCreatingTrade(false);
-      setActiveSell(null);
-    }
-  };
-
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setTab("home");
   };
 
   const unreadCount = (notifications as Array<{read:boolean}>).filter((n) => !n.read).length;
+
+  // Alert badge: any tracked coin moved ≥ 5% in the last 24 h
+  const hasCryptoAlert = (cryptoRates as Array<{ change?: string }>).some((r) => {
+    const pct = parseFloat((r.change ?? "0").replace(/[^0-9.\-]/g, ""));
+    return Math.abs(pct) >= 5;
+  });
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -252,6 +209,8 @@ function App() {
           <HomeScreen
             onSell={() => setTab("sell")}
             onNotifications={() => setTab("notifications")}
+            onCrypto={() => setTab("crypto")}
+            hasCryptoAlert={hasCryptoAlert}
             userName={userName}
             ngnBalance={ngnBalance}
             recentTrades={recentTrades as TradeRow[]}
@@ -281,7 +240,6 @@ function App() {
             ).toLocaleString()}
             onBack={() => setTab("sell")}
             onContinue={creatingTrade ? () => {} : handleCodeContinue}
-            onContinueBatch={creatingTrade ? undefined : handleCodeContinueBatch}
           />
         )}
         {tab === "verify" && activeSell && (
@@ -321,6 +279,12 @@ function App() {
             portfolio={portfolio as PortfolioData | undefined}
             recentTrades={recentTrades as TradeRow[]}
             onViewHistory={() => setTab("history")}
+          />
+        )}
+        {tab === "crypto" && (
+          <CryptoScreen
+            wallets={wallets as WalletData[]}
+            onBack={() => setTab("wallet")}
           />
         )}
         {tab === "profile" && (
@@ -406,7 +370,7 @@ function App() {
           />
         )}
 
-        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && tab !== "premium" && tab !== "history" && tab !== "status" && tab !== "support" && tab !== "admin" && (
+        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && tab !== "premium" && tab !== "history" && tab !== "status" && tab !== "support" && tab !== "admin" && tab !== "crypto" && (
           <BottomNav tab={tab} setTab={(t) => setTab(t as Tab)} />
         )}
       </div>
@@ -450,10 +414,10 @@ function timeAgo(iso: string): string {
 }
 
 function HomeScreen({
-  onSell, onNotifications, userName, ngnBalance, recentTrades, bestRate, xp, unreadCount,
+  onSell, onNotifications, onCrypto, hasCryptoAlert, userName, ngnBalance, recentTrades, bestRate, xp, unreadCount,
 }: {
-  onSell: () => void; onNotifications: () => void; userName: string; ngnBalance: number;
-  recentTrades: TradeRow[]; bestRate: number; xp?: XPData; unreadCount: number;
+  onSell: () => void; onNotifications: () => void; onCrypto?: () => void; hasCryptoAlert?: boolean;
+  userName: string; ngnBalance: number; recentTrades: TradeRow[]; bestRate: number; xp?: XPData; unreadCount: number;
 }) {
   const [hideBalance, setHideBalance] = useState(false);
 
@@ -568,12 +532,12 @@ function HomeScreen({
       <div className="px-5 mt-6">
         <div className="grid grid-cols-4 gap-3">
           {[
-            { icon: Gift, label: "Gift Card", color: "bg-gold/15 text-gold", comingSoon: false },
-            { icon: Bitcoin, label: "Crypto", color: "bg-cyan/15 text-cyan", comingSoon: true },
-            { icon: ScanLine, label: "Scan", color: "bg-pink/15 text-pink", comingSoon: false },
-            { icon: Sparkles, label: "Rewards", color: "bg-orange/15 text-orange", comingSoon: false },
-          ].map(({ icon: Icon, label, color, comingSoon }) => (
-            <div key={label} className="flex flex-col items-center gap-2 relative">
+            { icon: Gift,     label: "Gift Card", color: "bg-gold/15 text-gold",     onClick: onSell,    comingSoon: false },
+            { icon: Bitcoin,  label: "Crypto",    color: "bg-cyan/15 text-cyan",     onClick: undefined, comingSoon: true  },
+            { icon: ScanLine, label: "Scan",      color: "bg-pink/15 text-pink",     onClick: undefined, comingSoon: false },
+            { icon: Sparkles, label: "Rewards",   color: "bg-orange/15 text-orange", onClick: undefined, comingSoon: false },
+          ].map(({ icon: Icon, label, color, onClick, comingSoon }) => (
+            <button key={label} onClick={onClick} disabled={comingSoon} className="flex flex-col items-center gap-2 active:scale-95 transition disabled:active:scale-100">
               <div className="relative">
                 <div className={`size-14 rounded-2xl grid place-items-center ${color} ${comingSoon ? "opacity-50" : ""}`}>
                   <Icon className="size-6" />
@@ -585,7 +549,7 @@ function HomeScreen({
                 )}
               </div>
               <span className="text-[11px] font-semibold text-muted-foreground">{label}</span>
-            </div>
+            </button>
           ))}
         </div>
       </div>

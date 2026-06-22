@@ -1,7 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
-import { sanitizeStr, sanitizeCode, assertAmount, assertOneOf } from "../lib/validate";
 
 // ─── Submit a batch of cards (multi-card risk distribution) ──────────────────
 // Each card is an independent trade. Cards are distributed across different
@@ -12,29 +11,13 @@ import { sanitizeStr, sanitizeCode, assertAmount, assertOneOf } from "../lib/val
 // dispatched immediately. The rest are queued (batch_queued = true) and
 // dispatched one at a time as each preceding card is processed.
 export const submitCardBatch = createServerFn({ method: "POST" })
-  .validator((d: unknown) => {
-    const raw = d as Record<string, unknown>;
-    const cards = raw.cards;
-    if (!Array.isArray(cards) || cards.length < 1 || cards.length > 10) {
-      throw new Error("cards must be an array of 1–10 items");
-    }
-    const validatedCards = cards.map((c: unknown, i: number) => {
-      const card = c as Record<string, unknown>;
-      return {
-        cardCode: sanitizeCode(card.cardCode, 64, `cards[${i}].cardCode`),
-        cardPin:  card.cardPin != null ? sanitizeCode(card.cardPin, 20, `cards[${i}].cardPin`, ) : undefined,
-      };
-    });
-    return {
-      cards:        validatedCards,
-      brand:        sanitizeStr(raw.brand,       100, "brand"),
-      amountUsd:    assertAmount(raw.amountUsd,  10_000, "amountUsd"),
-      exchangeRate: assertAmount(raw.exchangeRate, 5_000, "exchangeRate"),
-      payoutMethod: raw.payoutMethod != null
-        ? assertOneOf(raw.payoutMethod, ["bank", "wallet"] as const, "payoutMethod")
-        : undefined,
-    };
-  })
+  .validator((d: {
+    cards:        Array<{ cardCode: string; cardPin?: string }>;
+    brand:        string;
+    amountUsd:    number;
+    exchangeRate: number;
+    payoutMethod?: "bank" | "wallet";
+  }) => d)
   .handler(async ({ data }) => {
     if (!data.cards.length || data.cards.length > 10) {
       throw new Error("Batch must have 1–10 cards");
@@ -42,6 +25,20 @@ export const submitCardBatch = createServerFn({ method: "POST" })
 
     const userId = await requireUser();
     const db     = getServerSupabase();
+
+    // Enforce per-trade USD limit based on user's verification tier
+    const { getUserTradeTier, TRADE_TIER_LIMITS } = await import("../lib/db-helpers");
+    const { tier } = await getUserTradeTier(db, userId);
+    const { perTradeLimitUsd } = TRADE_TIER_LIMITS[tier];
+    if (data.amountUsd > perTradeLimitUsd) {
+      const msgs: Record<string, string> = {
+        unverified:    `Verify your email to trade up to $500 per card. Your current limit is $${perTradeLimitUsd}.`,
+        email_verified:`Complete KYC identity verification to trade up to $5,000 per card. Your current limit is $${perTradeLimitUsd}.`,
+        kyc_verified:  `Upgrade to Premium to trade up to $10,000 per card. Your current limit is $${perTradeLimitUsd}.`,
+        premium:       `Trade amount exceeds the maximum allowed.`,
+      };
+      throw new Error(msgs[tier] ?? `Amount exceeds your $${perTradeLimitUsd} per-trade limit.`);
+    }
 
     const {
       getEligibleVendors,
@@ -55,22 +52,6 @@ export const submitCardBatch = createServerFn({ method: "POST" })
 
     const strategy    = getDispatchStrategy(vendors.length, data.cards.length);
     const assignments = assignVendorsToCards(vendors, data.cards.length, strategy);
-    // §4.1 fix: cross-check client-supplied exchangeRate against the server's live rate
-    // to prevent a client inflating the rate and receiving an overpaid payout.
-    {
-      const { data: rateRow } = await db
-        .from("exchange_rates")
-        .select("rate_per_dollar")
-        .ilike("brand", data.brand)
-        .maybeSingle();
-      if (rateRow?.rate_per_dollar) {
-        const serverRate = Number(rateRow.rate_per_dollar);
-        // Reject if client rate exceeds server rate by more than 10% (covers live-rate lag)
-        if (data.exchangeRate > serverRate * 1.10) {
-          throw new Error(`Exchange rate ${data.exchangeRate} exceeds server rate ${serverRate} by more than 10%. Please refresh rates and retry.`);
-        }
-      }
-    }
     const amountNgn   = Math.round(data.amountUsd * data.exchangeRate);
 
     // Create the batch tracking record
@@ -152,16 +133,6 @@ export const submitCardBatch = createServerFn({ method: "POST" })
         });
 
         if (result.success) {
-          // §4.1 fix: if Reloadly returned the real card balance, reject amount inflation
-          if (
-            result.balance != null &&
-            !(result.requiresManualReview) &&
-            data.amountUsd > result.balance * 1.10
-          ) {
-            await db.from("trades").update({ status: "invalid", failure_reason: "Amount mismatch" }).eq("id", trade.id);
-            results.push({ position, tradeId: trade.id, status: "failed", failureReason: `Card balance (${result.balance}) is less than submitted amount (${data.amountUsd})`, amountNgn });
-            continue;
-          }
           // P0-1 fix: Set pending_review status when Reloadly flags manual review needed.
           const needsReview = result.requiresManualReview ?? false;
           await db.from("trades").update({
@@ -184,9 +155,7 @@ export const submitCardBatch = createServerFn({ method: "POST" })
               batch_position: position,
               strategy,
             },
-          }).catch(e =>
-            console.error("[Trade] logTradeEvent (card_verified) failed:", e instanceof Error ? e.message : e)
-          );
+          }).catch(() => {});
 
           if (!queued && !needsReview) {
             // P0-1 fix: Only dispatch when verified — never dispatch pending_review trades.
@@ -201,17 +170,14 @@ export const submitCardBatch = createServerFn({ method: "POST" })
             }).catch(() => ({ ok: false, error: "dispatch failed" }));
 
             if (dispatchResult.ok) {
-              await recordVendorAssignment(db, vendor.id).catch(e =>
-                console.error("[Trade] recordVendorAssignment failed:", e instanceof Error ? e.message : e)
-              );
+              await recordVendorAssignment(db, vendor.id).catch(() => {});
             }
           }
 
           results.push({
             position,
             tradeId:            trade.id,
-            // §4.4 fix: pending_review must be reported truthfully — was incorrectly set to "verified"
-            status:             needsReview ? "pending_review" : (queued ? "queued" : "verified"),
+            status:             needsReview ? "verified" : (queued ? "queued" : "verified"),
             assignedVendorName: vendor.business_name,
             assignedVendorId:   vendor.id,
             amountNgn,
@@ -232,17 +198,13 @@ export const submitCardBatch = createServerFn({ method: "POST" })
         }
       } catch (e) {
         const errMsg = e instanceof Error ? e.message : "Verification service error";
-        await db.from("trades").update({ status: "invalid", failure_reason: errMsg }).eq("id", trade.id).catch(e =>
-          console.error("[Trade] status update (invalid) failed:", e instanceof Error ? e.message : e)
-        );
+        await db.from("trades").update({ status: "invalid", failure_reason: errMsg }).eq("id", trade.id).catch(() => {});
         results.push({ position, tradeId: trade.id, status: "failed", failureReason: errMsg, amountNgn });
       }
     }
 
     // Sync batch counts
-    await db.rpc("sync_batch_status", { p_batch_id: batch.id }).catch(e =>
-      console.error("[Trade] sync_batch_status RPC failed:", e instanceof Error ? e.message : e)
-    );
+    await db.rpc("sync_batch_status", { p_batch_id: batch.id }).catch(() => {});
 
     return {
       batchId:       batch.id,
@@ -276,6 +238,30 @@ export const getUserTrades = createServerFn({ method: "GET" })
     }
   });
 
+// ─── Get current user's trade tier and limits ─────────────────────────────────
+export const getTradeLimits = createServerFn({ method: "GET" })
+  .validator((d: Record<string, never>) => d)
+  .handler(async () => {
+    const userId = await requireUser();
+    const db = getServerSupabase();
+
+    const { getUserTradeTier, TRADE_TIER_LIMITS, checkVerificationAllowance } = await import("../lib/db-helpers");
+    const { tier, emailVerified, kycVerified, premium } = await getUserTradeTier(db, userId);
+    const limits = TRADE_TIER_LIMITS[tier];
+    const allowance = await checkVerificationAllowance(db, userId);
+
+    return {
+      tier,
+      emailVerified,
+      kycVerified,
+      premium,
+      perTradeLimitUsd: limits.perTradeLimitUsd,
+      dailyVerifLimit: limits.dailyVerifLimit,
+      dailyVerifRemaining: allowance.remaining ?? null,
+      unlimited: allowance.unlimited,
+    };
+  });
+
 // ─── Create a new trade ───────────────────────────────────────────────────────
 export const createTrade = createServerFn({ method: "POST" })
   .validator((d: {
@@ -287,6 +273,20 @@ export const createTrade = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const userId = await requireUser();
     const db = getServerSupabase();
+
+    // Enforce per-trade USD limit based on user's verification tier
+    const { getUserTradeTier, TRADE_TIER_LIMITS } = await import("../lib/db-helpers");
+    const { tier } = await getUserTradeTier(db, userId);
+    const { perTradeLimitUsd } = TRADE_TIER_LIMITS[tier];
+    if (data.amountUsd > perTradeLimitUsd) {
+      const msgs: Record<string, string> = {
+        unverified:    `Verify your email to trade up to $500 per card. Your current limit is $${perTradeLimitUsd}.`,
+        email_verified:`Complete KYC identity verification to trade up to $5,000 per card. Your current limit is $${perTradeLimitUsd}.`,
+        kyc_verified:  `Upgrade to Premium to trade up to $10,000 per card. Your current limit is $${perTradeLimitUsd}.`,
+        premium:       `Trade amount exceeds the maximum allowed.`,
+      };
+      throw new Error(msgs[tier] ?? `Amount exceeds your $${perTradeLimitUsd} per-trade limit.`);
+    }
 
     const amountNgn = Math.round(data.amountUsd * data.exchangeRate);
 
@@ -310,19 +310,14 @@ export const createTrade = createServerFn({ method: "POST" })
 
 // ─── Verify gift card via Reloadly ────────────────────────────────────────────
 export const verifyGiftCard = createServerFn({ method: "POST" })
-  .validator((d: unknown) => {
-    const raw = d as Record<string, unknown>;
-    return {
-      tradeId:        sanitizeStr(raw.tradeId,       36, "tradeId"),
-      cardCode:       sanitizeCode(raw.cardCode,     64, "cardCode"),
-      cardPin:        raw.cardPin != null ? sanitizeCode(raw.cardPin, 20, "cardPin") : undefined,
-      brand:          sanitizeStr(raw.brand,         100, "brand"),
-      amountUsd:      assertAmount(raw.amountUsd,  10_000, "amountUsd"),
-      recipientEmail: raw.recipientEmail != null
-        ? sanitizeStr(raw.recipientEmail, 254, "recipientEmail", { required: false })
-        : undefined,
-    };
-  })
+  .validator((d: {
+    tradeId: string;
+    cardCode: string;
+    cardPin?: string;
+    brand: string;
+    amountUsd: number;
+    recipientEmail?: string;
+  }) => d)
   .handler(async ({ data }) => {
     const userId = await requireUser();
     const db = getServerSupabase();

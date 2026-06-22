@@ -5,7 +5,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { DEFAULT_NGN_RATE } from "./constants";
 
 // ─── Referral Commission ──────────────────────────────────────────────────────
 // Awards 5% of the trade's NGN value to the referrer.
@@ -61,9 +60,46 @@ export async function creditReferrerCommissionFn(
   return { success: true, commissionNgn };
 }
 
+// ─── Trade Tier ───────────────────────────────────────────────────────────────
+export type TradeTier = "unverified" | "email_verified" | "kyc_verified" | "premium";
+
+export const TRADE_TIER_LIMITS: Record<TradeTier, { perTradeLimitUsd: number; dailyVerifLimit: number | null; label: string }> = {
+  unverified:    { perTradeLimitUsd: 200,    dailyVerifLimit: 3,    label: "Unverified" },
+  email_verified:{ perTradeLimitUsd: 500,    dailyVerifLimit: null, label: "Email Verified" },
+  kyc_verified:  { perTradeLimitUsd: 5_000,  dailyVerifLimit: null, label: "KYC Verified" },
+  premium:       { perTradeLimitUsd: 10_000, dailyVerifLimit: null, label: "Premium" },
+};
+
+export async function getUserTradeTier(
+  db: SupabaseClient,
+  userId: string
+): Promise<{ tier: TradeTier; emailVerified: boolean; kycVerified: boolean; premium: boolean }> {
+  const { data: profile } = await db
+    .from("profiles")
+    .select("premium, kyc_status")
+    .eq("id", userId)
+    .single();
+
+  let emailVerified = false;
+  try {
+    const { data: authUser } = await (db.auth as { admin?: { getUserById: (id: string) => Promise<{ data: { user: { email_confirmed_at?: string | null } | null } }> } }).admin?.getUserById(userId) ?? { data: { user: null } };
+    emailVerified = !!authUser?.user?.email_confirmed_at;
+  } catch { /* non-critical — treat as unverified */ }
+
+  const premium    = !!profile?.premium;
+  const kycVerified = profile?.kyc_status === "verified";
+
+  let tier: TradeTier = "unverified";
+  if (premium)      tier = "premium";
+  else if (kycVerified) tier = "kyc_verified";
+  else if (emailVerified) tier = "email_verified";
+
+  return { tier, emailVerified, kycVerified, premium };
+}
+
 // ─── Verification Allowance ───────────────────────────────────────────────────
-// Free users: 3 verifications/day.
-// Unlimited if: premium OR $25+/week OR $50+/month in paid trades.
+// Unverified email: 3 verifications/day.
+// Email-verified, KYC-verified, Premium, or $25+/week, $50+/month: unlimited.
 export type VerificationAllowance = {
   allowed: boolean;
   unlimited: boolean;
@@ -74,6 +110,7 @@ export type VerificationAllowance = {
   monthlyNgn?: number;
   weeklyThresholdNgn?: number;
   monthlyThresholdNgn?: number;
+  tier?: TradeTier;
 };
 
 export async function checkVerificationAllowance(
@@ -82,12 +119,27 @@ export async function checkVerificationAllowance(
 ): Promise<VerificationAllowance> {
   const { data: profile } = await db
     .from("profiles")
-    .select("premium")
+    .select("premium, kyc_status")
     .eq("id", userId)
     .single();
 
   if (profile?.premium) {
-    return { allowed: true, unlimited: true, reason: "premium" };
+    return { allowed: true, unlimited: true, reason: "premium", tier: "premium" };
+  }
+
+  if (profile?.kyc_status === "verified") {
+    return { allowed: true, unlimited: true, reason: "kyc_verified", tier: "kyc_verified" };
+  }
+
+  // Check email verification — email-verified users get unlimited verifications
+  let emailVerified = false;
+  try {
+    const { data: authUser } = await (db.auth as { admin?: { getUserById: (id: string) => Promise<{ data: { user: { email_confirmed_at?: string | null } | null } }> } }).admin?.getUserById(userId) ?? { data: { user: null } };
+    emailVerified = !!authUser?.user?.email_confirmed_at;
+  } catch { /* non-critical */ }
+
+  if (emailVerified) {
+    return { allowed: true, unlimited: true, reason: "email_verified", tier: "email_verified" };
   }
 
   const weekStart = new Date();
@@ -102,7 +154,7 @@ export async function checkVerificationAllowance(
     .gte("settled_at", weekStart.toISOString());
 
   const weeklyNgn = (weeklyTrades ?? []).reduce((s, t) => s + Number(t.amount_ngn ?? 0), 0);
-  const WEEKLY_THRESHOLD_NGN = 25 * DEFAULT_NGN_RATE;
+  const WEEKLY_THRESHOLD_NGN = 25 * 1485;
   if (weeklyNgn >= WEEKLY_THRESHOLD_NGN) {
     return { allowed: true, unlimited: true, reason: "weekly_volume", weeklyNgn };
   }
@@ -119,7 +171,7 @@ export async function checkVerificationAllowance(
     .gte("settled_at", monthStart.toISOString());
 
   const monthlyNgn = (monthlyTrades ?? []).reduce((s, t) => s + Number(t.amount_ngn ?? 0), 0);
-  const MONTHLY_THRESHOLD_NGN = 50 * DEFAULT_NGN_RATE;
+  const MONTHLY_THRESHOLD_NGN = 50 * 1485;
   if (monthlyNgn >= MONTHLY_THRESHOLD_NGN) {
     return { allowed: true, unlimited: true, reason: "monthly_volume", monthlyNgn };
   }
