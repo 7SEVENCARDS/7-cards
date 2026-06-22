@@ -6,12 +6,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { fetchWithTimeout } from "./fetch-with-timeout";
+import { getEnv } from "./worker-env";
 
 const DOJAH_BASE = "https://api.dojah.io";
 
 function getDojahHeaders() {
-  const appId = process.env.DOJAH_APP_ID;
-  const secretKey = process.env.DOJAH_SECRET_KEY;
+  const appId = getEnv("DOJAH_APP_ID");
+  const secretKey = getEnv("DOJAH_SECRET_KEY");
 
   if (!appId || appId.includes("YOUR_") || !secretKey || secretKey.includes("YOUR_")) {
     throw new Error("[Dojah] DOJAH_APP_ID and DOJAH_SECRET_KEY not configured");
