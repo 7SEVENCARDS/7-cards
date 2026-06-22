@@ -1,66 +1,37 @@
 import { useState } from "react";
-import { ShieldCheck, Phone, ArrowRight, RotateCcw } from "lucide-react";
+import { ShieldCheck, Mail, Eye, EyeOff, ArrowRight, KeyRound } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import logoFullAsset from "../assets/logo-full.png.asset.json";
 
-type AuthStep = "phone" | "otp" | "name";
+type AuthStep = "login" | "register" | "verify-email" | "name";
 
 interface AuthScreenProps {
   onAuthenticated: () => void;
 }
 
 export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
-  const [step, setStep] = useState<AuthStep>("phone");
-  const [phone, setPhone] = useState("");
-  const [otp, setOtp] = useState("");
+  const [step, setStep] = useState<AuthStep>("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [fullName, setFullName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
 
-  const formatPhone = (raw: string) => {
-    const digits = raw.replace(/\D/g, "");
-    if (digits.startsWith("0")) return "+234" + digits.slice(1);
-    if (digits.startsWith("234")) return "+" + digits;
-    return "+" + digits;
-  };
-
-  const handleSendOTP = async () => {
+  const handleLogin = async () => {
     setError("");
-    if (phone.replace(/\D/g, "").length < 10) {
-      setError("Enter a valid Nigerian phone number");
-      return;
-    }
+    if (!email.trim()) { setError("Enter your email address"); return; }
+    if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
     setLoading(true);
     try {
-      const { error: err } = await supabase.auth.signInWithOtp({
-        phone: formatPhone(phone),
-      });
-      if (err) throw err;
-      setStep("otp");
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to send OTP");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleVerifyOTP = async () => {
-    setError("");
-    if (otp.length < 6) {
-      setError("Enter the 6-digit code");
-      return;
-    }
-    setLoading(true);
-    try {
-      const { data, error: err } = await supabase.auth.verifyOtp({
-        phone: formatPhone(phone),
-        token: otp,
-        type: "sms",
+      const { data, error: err } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
       });
       if (err) throw err;
       if (!data.session) throw new Error("No session returned");
 
-      // Check if profile has a name
       const { data: profile } = await supabase
         .from("profiles")
         .select("full_name")
@@ -73,7 +44,77 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         onAuthenticated();
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Invalid OTP code");
+      const msg = e instanceof Error ? e.message : "Login failed";
+      if (msg.toLowerCase().includes("invalid login") || msg.toLowerCase().includes("invalid credentials")) {
+        setError("Incorrect email or password. Try again or create an account.");
+      } else if (msg.toLowerCase().includes("email not confirmed")) {
+        setInfo("Please verify your email first — check your inbox.");
+        setError("");
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegister = async () => {
+    setError("");
+    if (!email.trim()) { setError("Enter your email address"); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { setError("Enter a valid email address"); return; }
+    if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
+    setLoading(true);
+    try {
+      const { data, error: err } = await supabase.auth.signUp({
+        email: email.trim().toLowerCase(),
+        password,
+        options: {
+          emailRedirectTo: window.location.origin,
+        },
+      });
+      if (err) throw err;
+
+      if (data.session) {
+        // Email confirmations disabled — immediately signed in
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("full_name")
+          .eq("id", data.session.user.id)
+          .single();
+        if (!profile?.full_name) {
+          setStep("name");
+        } else {
+          onAuthenticated();
+        }
+      } else {
+        // Email confirmation required
+        setStep("verify-email");
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Registration failed";
+      if (msg.toLowerCase().includes("already registered") || msg.toLowerCase().includes("user already registered")) {
+        setError("This email is already registered. Please log in.");
+        setStep("login");
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    setError("");
+    setLoading(true);
+    try {
+      const { error: err } = await supabase.auth.resend({
+        type: "signup",
+        email: email.trim().toLowerCase(),
+      });
+      if (err) throw err;
+      setInfo("Verification email resent — check your inbox.");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to resend");
     } finally {
       setLoading(false);
     }
@@ -125,7 +166,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
               Verify Fast.<br />Get Paid Faster.
             </h1>
             <p className="text-sm text-white/70 mt-2 font-medium">
-              Sell gift cards & crypto for Naira in under 5 minutes.
+              Sell gift cards for Naira in under 5 minutes.
             </p>
 
             <div className="mt-6 grid grid-cols-3 gap-3">
@@ -146,87 +187,128 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         {/* Form */}
         <div className="flex-1 px-6 py-8 flex flex-col gap-5">
 
-          {step === "phone" && (
+          {/* Tab toggle: Login / Register */}
+          {(step === "login" || step === "register") && (
+            <div className="flex gap-1 bg-card p-1 rounded-2xl border border-border">
+              <button
+                onClick={() => { setStep("login"); setError(""); setInfo(""); }}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition ${step === "login" ? "bg-gold text-jungle-deep" : "text-muted-foreground"}`}
+              >
+                Log In
+              </button>
+              <button
+                onClick={() => { setStep("register"); setError(""); setInfo(""); }}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition ${step === "register" ? "bg-gold text-jungle-deep" : "text-muted-foreground"}`}
+              >
+                Create Account
+              </button>
+            </div>
+          )}
+
+          {/* Email field */}
+          {(step === "login" || step === "register") && (
             <>
-              <div>
-                <p className="text-xs text-muted-foreground font-bold uppercase tracking-wider">Step 1 of 2</p>
-                <h2 className="text-xl font-extrabold mt-1">Enter your phone number</h2>
-                <p className="text-sm text-muted-foreground mt-1">We'll send you a verification code</p>
-              </div>
-
-              <div className="bg-card rounded-2xl border border-border p-4 flex items-center gap-3">
-                <div className="size-10 rounded-xl bg-secondary grid place-items-center flex-shrink-0">
-                  <Phone className="size-5 text-muted-foreground" />
+              <div className="space-y-3">
+                <div className="bg-card rounded-2xl border border-border p-4 flex items-center gap-3">
+                  <div className="size-10 rounded-xl bg-secondary grid place-items-center flex-shrink-0">
+                    <Mail className="size-5 text-muted-foreground" />
+                  </div>
+                  <input
+                    type="email"
+                    placeholder="you@email.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && (step === "login" ? handleLogin() : handleRegister())}
+                    className="bg-transparent outline-none text-base font-semibold flex-1 placeholder:text-muted-foreground/50"
+                    inputMode="email"
+                    autoComplete="email"
+                  />
                 </div>
-                <input
-                  type="tel"
-                  placeholder="08012345678"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSendOTP()}
-                  className="bg-transparent outline-none text-base font-semibold flex-1 placeholder:text-muted-foreground/50"
-                  inputMode="tel"
-                />
+
+                <div className="bg-card rounded-2xl border border-border p-4 flex items-center gap-3">
+                  <div className="size-10 rounded-xl bg-secondary grid place-items-center flex-shrink-0">
+                    <KeyRound className="size-5 text-muted-foreground" />
+                  </div>
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    placeholder="Password (min 6 characters)"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && (step === "login" ? handleLogin() : handleRegister())}
+                    className="bg-transparent outline-none text-base font-semibold flex-1 placeholder:text-muted-foreground/50"
+                    autoComplete={step === "login" ? "current-password" : "new-password"}
+                  />
+                  <button onClick={() => setShowPassword((v) => !v)} className="text-muted-foreground flex-shrink-0">
+                    {showPassword ? <EyeOff className="size-5" /> : <Eye className="size-5" />}
+                  </button>
+                </div>
               </div>
 
-              {error && (
-                <p className="text-sm text-pink font-semibold text-center">{error}</p>
-              )}
+              {error && <p className="text-sm text-pink font-semibold text-center">{error}</p>}
+              {info && <p className="text-sm text-cyan font-semibold text-center">{info}</p>}
 
               <button
-                onClick={handleSendOTP}
+                onClick={step === "login" ? handleLogin : handleRegister}
                 disabled={loading}
                 className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold active:scale-[0.99] transition disabled:opacity-60"
               >
-                {loading ? "Sending…" : <>Send Code <ArrowRight className="size-5" /></>}
+                {loading
+                  ? (step === "login" ? "Signing in…" : "Creating account…")
+                  : step === "login"
+                    ? <><ShieldCheck className="size-5" /> Sign In</>
+                    : <>Create Account <ArrowRight className="size-5" /></>
+                }
               </button>
+
+              {step === "login" && (
+                <button
+                  onClick={() => { setStep("register"); setError(""); setInfo(""); }}
+                  className="text-center text-xs text-muted-foreground font-semibold"
+                >
+                  No account yet? <span className="text-gold underline">Create one free</span>
+                </button>
+              )}
             </>
           )}
 
-          {step === "otp" && (
+          {/* Email verification step */}
+          {step === "verify-email" && (
             <>
-              <div>
-                <p className="text-xs text-muted-foreground font-bold uppercase tracking-wider">Step 2 of 2</p>
-                <h2 className="text-xl font-extrabold mt-1">Enter verification code</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Sent to <span className="text-foreground font-semibold">{phone}</span>
+              <div className="text-center space-y-3">
+                <div className="size-16 rounded-full bg-cyan/15 grid place-items-center mx-auto">
+                  <Mail className="size-8 text-cyan" />
+                </div>
+                <h2 className="text-xl font-extrabold">Check your inbox</h2>
+                <p className="text-sm text-muted-foreground">
+                  We sent a verification link to<br />
+                  <span className="text-foreground font-semibold">{email}</span>
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Click the link in the email to verify your account, then come back and log in.
                 </p>
               </div>
 
-              <div className="bg-card rounded-2xl border border-border p-4 flex items-center gap-3">
-                <input
-                  type="text"
-                  placeholder="123456"
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  onKeyDown={(e) => e.key === "Enter" && handleVerifyOTP()}
-                  className="bg-transparent outline-none text-3xl font-extrabold flex-1 tracking-[0.4em] placeholder:text-muted-foreground/30 placeholder:tracking-normal"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                />
-              </div>
-
-              {error && (
-                <p className="text-sm text-pink font-semibold text-center">{error}</p>
-              )}
+              {error && <p className="text-sm text-pink font-semibold text-center">{error}</p>}
+              {info && <p className="text-sm text-cyan font-semibold text-center">{info}</p>}
 
               <button
-                onClick={handleVerifyOTP}
+                onClick={handleResendVerification}
                 disabled={loading}
                 className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold active:scale-[0.99] transition disabled:opacity-60"
               >
-                {loading ? "Verifying…" : <>Verify & Enter <ShieldCheck className="size-5" /></>}
+                {loading ? "Resending…" : "Resend Verification Email"}
               </button>
 
               <button
-                onClick={() => { setStep("phone"); setOtp(""); setError(""); }}
-                className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground font-semibold"
+                onClick={() => { setStep("login"); setError(""); setInfo(""); }}
+                className="text-center text-xs text-muted-foreground font-semibold"
               >
-                <RotateCcw className="size-3.5" /> Change number
+                Already verified? <span className="text-gold underline">Log in</span>
               </button>
             </>
           )}
 
+          {/* Name step */}
           {step === "name" && (
             <>
               <div>
@@ -245,9 +327,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
                 />
               </div>
 
-              {error && (
-                <p className="text-sm text-pink font-semibold text-center">{error}</p>
-              )}
+              {error && <p className="text-sm text-pink font-semibold text-center">{error}</p>}
 
               <button
                 onClick={handleSaveName}

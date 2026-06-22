@@ -565,17 +565,24 @@ function HomeScreen({
       <div className="px-5 mt-6">
         <div className="grid grid-cols-4 gap-3">
           {[
-            { icon: Gift, label: "Gift Card", color: "bg-gold/15 text-gold" },
-            { icon: Bitcoin, label: "Crypto", color: "bg-cyan/15 text-cyan" },
-            { icon: ScanLine, label: "Scan", color: "bg-pink/15 text-pink" },
-            { icon: Sparkles, label: "Rewards", color: "bg-orange/15 text-orange" },
-          ].map(({ icon: Icon, label, color }) => (
-            <button key={label} className="flex flex-col items-center gap-2">
-              <div className={`size-14 rounded-2xl grid place-items-center ${color}`}>
-                <Icon className="size-6" />
+            { icon: Gift, label: "Gift Card", color: "bg-gold/15 text-gold", comingSoon: false },
+            { icon: Bitcoin, label: "Crypto", color: "bg-cyan/15 text-cyan", comingSoon: true },
+            { icon: ScanLine, label: "Scan", color: "bg-pink/15 text-pink", comingSoon: false },
+            { icon: Sparkles, label: "Rewards", color: "bg-orange/15 text-orange", comingSoon: false },
+          ].map(({ icon: Icon, label, color, comingSoon }) => (
+            <div key={label} className="flex flex-col items-center gap-2 relative">
+              <div className="relative">
+                <div className={`size-14 rounded-2xl grid place-items-center ${color} ${comingSoon ? "opacity-50" : ""}`}>
+                  <Icon className="size-6" />
+                </div>
+                {comingSoon && (
+                  <span className="absolute -top-2 -right-2 bg-gold text-jungle-deep text-[8px] font-extrabold px-1.5 py-0.5 rounded-full leading-none uppercase tracking-wide">
+                    Soon
+                  </span>
+                )}
               </div>
               <span className="text-[11px] font-semibold text-muted-foreground">{label}</span>
-            </button>
+            </div>
           ))}
         </div>
       </div>

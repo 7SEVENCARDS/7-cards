@@ -529,20 +529,19 @@ function HomeScreen({
       <div className="px-5 mt-6">
         <div className="grid grid-cols-4 gap-3">
           {[
-            { icon: Gift,     label: "Gift Card", color: "bg-gold/15 text-gold",     onClick: onSell,    alert: false },
-            { icon: Bitcoin,  label: "Crypto",    color: "bg-cyan/15 text-cyan",     onClick: onCrypto,  alert: hasCryptoAlert },
-            { icon: ScanLine, label: "Scan",      color: "bg-pink/15 text-pink",     onClick: undefined, alert: false },
-            { icon: Sparkles, label: "Rewards",   color: "bg-orange/15 text-orange", onClick: undefined, alert: false },
-          ].map(({ icon: Icon, label, color, onClick, alert }) => (
-            <button key={label} onClick={onClick} className="flex flex-col items-center gap-2 active:scale-95 transition">
+            { icon: Gift,     label: "Gift Card", color: "bg-gold/15 text-gold",     onClick: onSell,    comingSoon: false },
+            { icon: Bitcoin,  label: "Crypto",    color: "bg-cyan/15 text-cyan",     onClick: undefined, comingSoon: true  },
+            { icon: ScanLine, label: "Scan",      color: "bg-pink/15 text-pink",     onClick: undefined, comingSoon: false },
+            { icon: Sparkles, label: "Rewards",   color: "bg-orange/15 text-orange", onClick: undefined, comingSoon: false },
+          ].map(({ icon: Icon, label, color, onClick, comingSoon }) => (
+            <button key={label} onClick={onClick} disabled={comingSoon} className="flex flex-col items-center gap-2 active:scale-95 transition disabled:active:scale-100">
               <div className="relative">
-                <div className={`size-14 rounded-2xl grid place-items-center ${color}`}>
+                <div className={`size-14 rounded-2xl grid place-items-center ${color} ${comingSoon ? "opacity-50" : ""}`}>
                   <Icon className="size-6" />
                 </div>
-                {alert && (
-                  <span className="absolute -top-1 -right-1 flex size-3.5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75" />
-                    <span className="relative inline-flex rounded-full size-3.5 bg-orange-500 border-2 border-background" />
+                {comingSoon && (
+                  <span className="absolute -top-2 -right-2 bg-gold text-jungle-deep text-[8px] font-extrabold px-1.5 py-0.5 rounded-full leading-none uppercase tracking-wide">
+                    Soon
                   </span>
                 )}
               </div>
