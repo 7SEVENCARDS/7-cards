@@ -33,8 +33,8 @@ import {
   LogOut,
   MessageCircle as MessageCircleIcon,
 } from "lucide-react";
-import logoBadge from "../assets/logo-badge.png.asset.json";
-import logoFull from "../assets/logo-full.png.asset.json";
+
+
 import { AuthScreen } from "../components/AuthScreen";
 import { CodeEntryScreen } from "../components/CodeEntryScreen";
 import { KYCScreen } from "../components/KYCScreen";
@@ -246,8 +246,8 @@ function App() {
   const unreadCount = (notifications as Array<{read:boolean}>).filter((n) => !n.read).length;
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto flex min-h-screen max-w-[480px] flex-col bg-background pb-24 relative">
+    <div className="min-h-dvh bg-background text-foreground">
+      <div className="mx-auto flex min-h-dvh max-w-[480px] flex-col bg-background pb-safe-nav relative">
         {tab === "home" && (
           <HomeScreen
             onSell={() => setTab("sell")}
@@ -466,14 +466,14 @@ function HomeScreen({
   return (
     <div className="flex flex-col">
       {/* Header */}
-      <header className="bg-gradient-hero px-5 pt-12 pb-8 rounded-b-[2rem] shadow-glow-jungle relative overflow-hidden">
+      <header className="bg-gradient-hero px-5 pt-safe-top pb-8 rounded-b-[2rem] shadow-glow-jungle relative overflow-hidden">
         <div className="absolute -right-10 -top-10 size-40 rounded-full bg-gold/10 blur-2xl" />
         <div className="absolute right-20 top-32 size-24 rounded-full bg-pink/20 blur-2xl" />
 
         <div className="flex items-center justify-between relative">
           <div className="flex items-center gap-3">
             <div className="size-11 rounded-2xl bg-jungle-deep grid place-items-center overflow-hidden ring-1 ring-gold/40 shadow-glow-gold">
-              <img src={logoBadge.url} alt="7SEVEN" className="size-11 object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display="none"; }} />
+              <img src="/logo-badge.png" alt="7SEVEN" className="size-11 object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display="none"; }} />
             </div>
             <div>
               <p className="text-xs text-white/60 font-medium">Welcome back</p>
@@ -798,7 +798,7 @@ function SellScreen({
 
   return (
     <div className="flex flex-col pb-8">
-      <header className="px-5 pt-12 pb-4">
+      <header className="px-5 pt-safe-top pb-4">
         <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">Step 1 of 3</p>
         <h1 className="text-2xl font-extrabold mt-1">Sell a Gift Card</h1>
         <p className="text-sm text-muted-foreground mt-1">Verified in 3 seconds. Paid in under 5 minutes.</p>
@@ -1042,7 +1042,7 @@ function LeagueScreen({
 
   return (
     <div className="flex flex-col">
-      <header className="px-5 pt-12 pb-4 bg-gradient-pink rounded-b-[2rem] shadow-glow-pink relative overflow-hidden">
+      <header className="px-5 pt-safe-top pb-4 bg-gradient-pink rounded-b-[2rem] shadow-glow-pink relative overflow-hidden">
         <div className="absolute -right-8 -top-8 text-[140px] opacity-15 leading-none">🏆</div>
         <p className="text-xs text-white/80 font-semibold uppercase tracking-wider">The Hustle League</p>
         <h1 className="text-3xl font-extrabold text-white mt-1">Weekly Top Traders</h1>
@@ -1156,7 +1156,7 @@ function WalletScreen({
 
   return (
     <div className="flex flex-col pb-28">
-      <header className="px-5 pt-12 pb-6">
+      <header className="px-5 pt-safe-top pb-6">
         <h1 className="text-2xl font-extrabold">Wallet</h1>
 
         {/* NGN Balance Card */}
@@ -1330,7 +1330,7 @@ function ProfileScreen({
 
   return (
     <div className="flex flex-col">
-      <header className="px-5 pt-12 pb-6 bg-gradient-hero rounded-b-[2rem] shadow-glow-jungle relative overflow-hidden">
+      <header className="px-5 pt-safe-top pb-6 bg-gradient-hero rounded-b-[2rem] shadow-glow-jungle relative overflow-hidden">
         <div className="absolute -right-8 -top-8 size-40 rounded-full bg-gold/10 blur-2xl" />
         <h1 className="text-2xl font-extrabold text-white">Profile</h1>
 
@@ -1698,7 +1698,7 @@ function VerifyScreen({
 
   return (
     <div className="flex flex-col">
-      <header className="px-5 pt-12 pb-3 flex items-center justify-between">
+      <header className="px-5 pt-safe-top pb-3 flex items-center justify-between">
         <button onClick={onBack} className="size-10 rounded-full bg-card border border-border grid place-items-center">
           <ChevronLeft className="size-5" />
         </button>
@@ -2151,7 +2151,7 @@ function BottomNav({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
   ];
 
   return (
-    <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[480px] px-4 pb-4 pt-2 bg-gradient-to-t from-background via-background to-transparent z-50">
+    <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[480px] px-4 pb-safe-bottom pt-2 bg-gradient-to-t from-background via-background to-transparent z-50">
       <div className="bg-card/95 backdrop-blur-xl rounded-3xl border border-border shadow-card flex items-center justify-around py-2 px-2">
         {items.map((it) => {
           const active = tab === it.id;
@@ -2214,7 +2214,7 @@ function CryptoComingSoonModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex flex-col max-w-[480px] mx-auto overflow-y-auto" style={{ background: "linear-gradient(160deg, #050e1a 0%, #071525 60%, #0a1e35 100%)" }}>
       {/* Close button */}
-      <div className="px-5 pt-12 flex justify-end">
+      <div className="px-5 pt-safe-modal flex justify-end">
         <button onClick={onClose} className="size-10 rounded-full bg-white/8 border border-white/10 grid place-items-center active:scale-95 transition">
           <XCircle className="size-5 text-white/60" />
         </button>

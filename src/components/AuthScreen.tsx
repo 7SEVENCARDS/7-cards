@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Mail, Lock, User, ArrowRight, Eye, EyeOff, ShieldCheck, CheckCircle2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
-import logoFullAsset from "../assets/logo-full.png.asset.json";
+
 
 type AuthMode = "signin" | "signup";
 type AuthStep = "credentials" | "name";
@@ -92,8 +92,8 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col">
-      <div className="mx-auto w-full max-w-[480px] flex flex-col min-h-screen">
+    <div className="min-h-dvh bg-background text-foreground flex flex-col">
+      <div className="mx-auto w-full max-w-[480px] flex flex-col min-h-dvh">
 
         {/* Hero */}
         <div className="bg-gradient-hero px-6 pt-14 pb-10 rounded-b-[2.5rem] shadow-glow-jungle relative overflow-hidden flex-shrink-0">
@@ -101,7 +101,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           <div className="absolute -left-8 bottom-0 size-40 rounded-full bg-cyan/10 blur-2xl" />
           <div className="relative">
             <img
-              src={logoFullAsset.url}
+              src="/logo-full.png"
               alt="7SEVEN CARDS"
               className="h-9 object-contain"
               onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}

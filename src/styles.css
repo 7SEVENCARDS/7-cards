@@ -32,7 +32,6 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  /* 7SEVEN brand tokens */
   --color-jungle: var(--jungle);
   --color-jungle-deep: var(--jungle-deep);
   --color-gold: var(--gold);
@@ -50,7 +49,6 @@
 :root {
   --radius: 1rem;
 
-  /* Brand */
   --jungle: oklch(0.35 0.09 158);
   --jungle-deep: oklch(0.25 0.07 158);
   --gold: oklch(0.87 0.17 92);
@@ -61,7 +59,6 @@
   --midnight: oklch(0.18 0.02 260);
   --cloud: oklch(0.985 0.003 260);
 
-  /* Dark by default — feels right for a hustle app */
   --background: var(--midnight);
   --foreground: oklch(0.97 0.01 90);
   --card: oklch(0.22 0.025 260);
@@ -97,19 +94,71 @@
 @layer base {
   * {
     border-color: var(--color-border);
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    box-sizing: border-box;
   }
 
-  html, body {
+  html {
+    overscroll-behavior: none;
+    height: 100%;
+  }
+
+  body {
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    min-height: 100%;
+    min-height: 100dvh;
   }
 
   h1, h2, h3, h4 {
     font-family: var(--font-display);
     letter-spacing: -0.02em;
   }
+
+  input, textarea, select {
+    font-size: max(1rem, 16px);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+}
+
+@utility pt-safe-top {
+  padding-top: max(3rem, env(safe-area-inset-top));
+}
+
+@utility pt-safe-top-hero {
+  padding-top: max(3.5rem, calc(env(safe-area-inset-top) + 0.5rem));
+}
+
+@utility pb-safe-bottom {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+@utility pb-safe-nav {
+  padding-bottom: max(6rem, calc(5.5rem + env(safe-area-inset-bottom)));
+}
+
+@utility pt-safe-modal {
+  padding-top: max(3rem, env(safe-area-inset-top));
+}
+
+@utility min-h-dvh {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+@utility h-dvh {
+  height: 100vh;
+  height: 100dvh;
 }
 
 @utility text-gradient-gold {
@@ -119,21 +168,11 @@
   color: transparent;
 }
 
-@utility bg-gradient-hero {
-  background: var(--gradient-hero);
-}
-@utility bg-gradient-gold {
-  background: var(--gradient-gold);
-}
-@utility bg-gradient-pink {
-  background: var(--gradient-pink);
-}
-@utility bg-gradient-cyan {
-  background: var(--gradient-cyan);
-}
-@utility bg-gradient-card {
-  background: var(--gradient-card);
-}
+@utility bg-gradient-hero { background: var(--gradient-hero); }
+@utility bg-gradient-gold { background: var(--gradient-gold); }
+@utility bg-gradient-pink { background: var(--gradient-pink); }
+@utility bg-gradient-cyan { background: var(--gradient-cyan); }
+@utility bg-gradient-card { background: var(--gradient-card); }
 
 @utility shadow-glow-gold { box-shadow: var(--shadow-glow-gold); }
 @utility shadow-glow-pink { box-shadow: var(--shadow-glow-pink); }

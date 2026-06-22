@@ -206,7 +206,7 @@ export function TradeStatusScreen({ tradeId, userId, onBack, payoutBankCode, pay
   };
 
   return (
-    <div className="flex flex-col min-h-screen">
+    <div className="flex flex-col min-h-dvh">
       {/* Header */}
       <header className="sticky top-0 z-20 bg-background/90 backdrop-blur border-b border-border/60 px-5 py-4 flex items-center gap-3">
         <button onClick={onBack} className="size-9 rounded-xl bg-secondary grid place-items-center">

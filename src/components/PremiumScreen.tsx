@@ -98,11 +98,11 @@ export function PremiumScreen({ userId, userEmail, userName, onBack }: PremiumSc
     new Date(iso).toLocaleDateString("en-NG", { day: "numeric", month: "long", year: "numeric" });
 
   return (
-    <div className="flex flex-col min-h-screen bg-background pb-8">
+    <div className="flex flex-col min-h-dvh bg-background pb-8">
       <div className="mx-auto w-full max-w-[480px] flex flex-col">
 
         {/* Header */}
-        <header className="px-5 pt-12 pb-4 flex items-center gap-4">
+        <header className="px-5 pt-safe-top pb-4 flex items-center gap-4">
           <button onClick={onBack} className="size-10 rounded-full bg-card border border-border grid place-items-center">
             <ChevronLeft className="size-5" />
           </button>

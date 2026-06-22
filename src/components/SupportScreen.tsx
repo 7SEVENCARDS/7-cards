@@ -437,7 +437,7 @@ export function SupportScreen({
   return (
     <div className="flex flex-col h-screen bg-background">
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <header className="shrink-0 bg-background/95 backdrop-blur border-b border-border/50 px-4 pt-12 pb-3 flex items-center gap-3 z-20">
+      <header className="shrink-0 bg-background/95 backdrop-blur border-b border-border/50 px-4 pt-safe-top pb-3 flex items-center gap-3 z-20">
         <button
           onClick={view === "compose" ? () => setView("landing") : onBack}
           className="size-9 rounded-xl bg-secondary grid place-items-center shrink-0"

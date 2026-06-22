@@ -263,7 +263,7 @@ export function TradeHistoryScreen({ userId, onBack, onViewStatus }: Props) {
   const activeFilters = (statusFilter !== "all" ? 1 : 0) + (typeFilter !== "all" ? 1 : 0);
 
   return (
-    <div className="flex flex-col min-h-screen">
+    <div className="flex flex-col min-h-dvh">
       <header className="sticky top-0 z-20 bg-background/90 backdrop-blur border-b border-border/60 px-5 py-4 flex items-center gap-3">
         <button onClick={onBack} className="size-9 rounded-xl bg-secondary grid place-items-center">
           <ArrowLeft className="size-5" />

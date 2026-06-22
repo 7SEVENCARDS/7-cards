@@ -2092,8 +2092,8 @@ export function AdminScreen({ adminId, onBack }: Props) {
   ];
 
   return (
-    <div className="flex flex-col min-h-screen">
-      <header className="px-5 pt-12 pb-5 bg-gradient-hero rounded-b-[2rem] shadow-glow-jungle relative overflow-hidden">
+    <div className="flex flex-col min-h-dvh">
+      <header className="px-5 pt-safe-top pb-5 bg-gradient-hero rounded-b-[2rem] shadow-glow-jungle relative overflow-hidden">
         <div className="absolute -right-8 -top-8 size-40 rounded-full bg-cyan/10 blur-2xl" />
         <button onClick={onBack} className="flex items-center gap-2 text-white/70 text-sm mb-4">
           <ArrowLeft className="size-4" /> Back

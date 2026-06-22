@@ -176,11 +176,11 @@ export function PayoutAccountsScreen({ userId, onBack }: PayoutAccountsScreenPro
     BANKS.find((b) => b.code === code)?.name ?? code;
 
   return (
-    <div className="flex flex-col min-h-screen bg-background">
+    <div className="flex flex-col min-h-dvh bg-background">
       <div className="mx-auto w-full max-w-[480px] flex flex-col flex-1">
 
         {/* Header */}
-        <header className="px-5 pt-12 pb-4 flex items-center gap-4">
+        <header className="px-5 pt-safe-top pb-4 flex items-center gap-4">
           <button onClick={onBack} className="size-10 rounded-full bg-card border border-border grid place-items-center">
             <ChevronLeft className="size-5" />
           </button>
