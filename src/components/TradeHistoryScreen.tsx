@@ -308,26 +308,59 @@ export function TradeHistoryScreen({ userId, onBack, onViewStatus }: Props) {
             <p className="text-sm text-muted-foreground">Loading trades…</p>
           </div>
         ) : trades.length === 0 ? (
-          <div className="flex flex-col items-center py-16 gap-3 text-center">
-            <div className="size-16 rounded-2xl bg-secondary grid place-items-center">
-              <Gift className="size-8 text-muted-foreground" />
-            </div>
-            <p className="text-base font-bold">No trades yet</p>
-            <p className="text-sm text-muted-foreground max-w-[200px]">
-              {statusFilter !== "all" || typeFilter !== "all"
-                ? "Try clearing the filters"
-                : "Sell your first gift card to get started"}
-            </p>
-            {(statusFilter !== "all" || typeFilter !== "all") && (
+          statusFilter !== "all" || typeFilter !== "all" ? (
+            /* ── Filtered empty state ── */
+            <div className="flex flex-col items-center py-14 gap-4 text-center">
+              <div className="size-20 rounded-3xl bg-secondary grid place-items-center">
+                <SlidersHorizontal className="size-9 text-muted-foreground" />
+              </div>
+              <div>
+                <p className="text-base font-extrabold">No matches</p>
+                <p className="text-sm text-muted-foreground mt-1 max-w-[200px] mx-auto">
+                  No trades match your current filters
+                </p>
+              </div>
               <button
                 onClick={() => applyFilters("all", "all")}
-                className="flex items-center gap-1.5 text-xs text-gold font-semibold mt-1"
+                className="flex items-center gap-2 bg-secondary border border-border rounded-2xl px-5 py-3 text-sm font-bold"
               >
-                <RefreshCw className="size-3.5" />
-                Clear filters
+                <RefreshCw className="size-4" /> Clear Filters
               </button>
-            )}
-          </div>
+            </div>
+          ) : (
+            /* ── True empty state — no trades at all ── */
+            <div className="flex flex-col items-center py-10 gap-5 text-center">
+              <div className="relative">
+                <img
+                  src="/mascot.png"
+                  alt="Seven the mascot"
+                  className="size-32 object-contain drop-shadow-xl"
+                />
+                <div className="absolute -bottom-1 -right-1 size-8 rounded-full bg-gold grid place-items-center shadow-glow-gold">
+                  <Gift className="size-4 text-jungle-deep" />
+                </div>
+              </div>
+              <div>
+                <p className="text-lg font-extrabold">No trades yet</p>
+                <p className="text-sm text-muted-foreground mt-1.5 max-w-[220px] mx-auto leading-relaxed">
+                  Sell your first gift card and get paid in under 5 minutes
+                </p>
+              </div>
+              <button
+                onClick={onBack}
+                className="bg-gradient-gold text-jungle-deep font-extrabold px-7 py-3.5 rounded-2xl shadow-glow-gold flex items-center gap-2 text-sm active:scale-[0.98] transition"
+              >
+                <Gift className="size-4" /> Sell a Gift Card
+              </button>
+              <div className="flex items-center gap-4 text-[11px] text-muted-foreground pt-1">
+                <span className="flex items-center gap-1">⚡ <span>Paid in &lt;5 min</span></span>
+                <span className="size-1 rounded-full bg-border" />
+                <span className="flex items-center gap-1">🎯 <span>₦0 fees</span></span>
+                <span className="size-1 rounded-full bg-border" />
+                <span className="flex items-center gap-1">🏆 <span>+50 XP</span></span>
+              </div>
+            </div>
+          )
         ) : (
           <>
             {trades.map((trade) => (

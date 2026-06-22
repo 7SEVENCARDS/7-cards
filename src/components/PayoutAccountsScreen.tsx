@@ -377,17 +377,38 @@ export function PayoutAccountsScreen({ userId, onBack }: PayoutAccountsScreenPro
             )}
 
             {!isLoading && accounts.length === 0 && (
-              <div className="flex flex-col items-center gap-4 py-16 text-center">
-                <div className="size-20 rounded-3xl bg-card border border-border grid place-items-center">
-                  <Building2 className="size-10 text-muted-foreground" />
+              <div className="flex flex-col items-center gap-5 py-10 text-center">
+                <div className="relative">
+                  <img
+                    src="/mascot.png"
+                    alt="Seven the mascot"
+                    className="size-32 object-contain drop-shadow-xl"
+                  />
+                  <div className="absolute -bottom-1 -right-1 size-9 rounded-full bg-jungle border-2 border-background grid place-items-center shadow-glow-jungle">
+                    <Building2 className="size-4 text-cyan" />
+                  </div>
                 </div>
                 <div>
-                  <p className="text-base font-bold">No accounts yet</p>
-                  <p className="text-sm text-muted-foreground mt-1">Add a Nigerian bank account to receive trade payouts</p>
+                  <p className="text-lg font-extrabold">No bank accounts yet</p>
+                  <p className="text-sm text-muted-foreground mt-1.5 max-w-[230px] mx-auto leading-relaxed">
+                    Add your Nigerian bank account once — we'll send every payout straight to it
+                  </p>
+                </div>
+                <div className="flex flex-col gap-2 w-full max-w-[280px]">
+                  {[
+                    { icon: "🏦", text: "GTBank, Zenith, OPay, PalmPay + 20 more" },
+                    { icon: "⚡", text: "Payouts hit your account in under 5 min" },
+                    { icon: "🔒", text: "Verified via Squadco — 100% secure" },
+                  ].map((f) => (
+                    <div key={f.text} className="flex items-center gap-3 bg-card border border-border rounded-xl px-4 py-3 text-left">
+                      <span className="text-sm shrink-0">{f.icon}</span>
+                      <p className="text-xs text-muted-foreground">{f.text}</p>
+                    </div>
+                  ))}
                 </div>
                 <button
                   onClick={() => setShowAdd(true)}
-                  className="bg-gradient-gold text-jungle-deep font-extrabold px-6 py-3.5 rounded-2xl shadow-glow-gold flex items-center gap-2"
+                  className="bg-gradient-gold text-jungle-deep font-extrabold px-7 py-4 rounded-2xl shadow-glow-gold flex items-center gap-2 active:scale-[0.98] transition"
                 >
                   <Plus className="size-5" /> Add Bank Account
                 </button>

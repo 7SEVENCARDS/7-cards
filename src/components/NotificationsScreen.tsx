@@ -165,24 +165,58 @@ export function NotificationsScreen({ userId, notifications, onBack }: Notificat
 
         {/* Empty state */}
         {shown.length === 0 && (
-          <div className="flex flex-col items-center gap-4 flex-1 justify-center text-center px-8">
-            <div className="size-20 rounded-3xl bg-card border border-border grid place-items-center">
-              <Bell className="size-10 text-muted-foreground" />
-            </div>
-            <div>
-              <p className="text-base font-bold">
-                {filter === "unread" ? "No unread notifications" : "No notifications yet"}
-              </p>
-              <p className="text-sm text-muted-foreground mt-1">
-                {filter === "unread"
-                  ? "You're all caught up 🎉"
-                  : "Trade, level up, or refer friends to get notified here"}
-              </p>
-            </div>
-            {filter === "unread" && (
-              <button onClick={() => setFilter("all")} className="text-xs text-gold font-semibold">
-                View all notifications
-              </button>
+          <div className="flex flex-col items-center gap-5 flex-1 justify-center text-center px-8 py-8">
+            {filter === "unread" ? (
+              /* ── All caught up ── */
+              <>
+                <div className="size-24 rounded-3xl bg-cyan/10 border border-cyan/20 grid place-items-center">
+                  <span className="text-4xl">✅</span>
+                </div>
+                <div>
+                  <p className="text-base font-extrabold">All caught up!</p>
+                  <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-[220px] mx-auto">
+                    No unread notifications — you're on top of everything
+                  </p>
+                </div>
+                <button
+                  onClick={() => setFilter("all")}
+                  className="text-xs text-gold font-semibold border border-gold/30 rounded-full px-4 py-2 bg-gold/10"
+                >
+                  View all notifications
+                </button>
+              </>
+            ) : (
+              /* ── No notifications at all ── */
+              <>
+                <div className="relative">
+                  <img
+                    src="/mascot.png"
+                    alt="Seven the mascot"
+                    className="size-28 object-contain drop-shadow-xl"
+                  />
+                  <div className="absolute -top-1 -right-2 size-8 rounded-full bg-gold/20 border border-gold/40 grid place-items-center">
+                    <Bell className="size-4 text-gold" />
+                  </div>
+                </div>
+                <div>
+                  <p className="text-base font-extrabold">Nothing here yet</p>
+                  <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-[220px] mx-auto">
+                    Sell a card, level up, or refer a friend — your activity shows up here
+                  </p>
+                </div>
+                <div className="flex flex-col gap-2.5 w-full max-w-[260px]">
+                  {[
+                    { icon: "🎁", text: "Trade settled → payout confirmation" },
+                    { icon: "⚡", text: "XP earned → rank up alerts" },
+                    { icon: "👥", text: "Friend joined → referral bonus" },
+                  ].map((tip) => (
+                    <div key={tip.text} className="flex items-center gap-3 bg-card border border-border rounded-2xl px-4 py-3 text-left">
+                      <span className="text-base shrink-0">{tip.icon}</span>
+                      <p className="text-xs text-muted-foreground">{tip.text}</p>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </div>
         )}

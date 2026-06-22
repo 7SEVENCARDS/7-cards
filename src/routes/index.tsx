@@ -630,8 +630,18 @@ function HomeScreen({
               />
             ))
           ) : (
-            <div className="text-center py-8 text-sm text-muted-foreground">
-              No trades yet. Sell your first card!
+            <div className="flex flex-col items-center gap-4 py-8 text-center">
+              <img src="/mascot.png" alt="Seven" className="size-20 object-contain drop-shadow-lg" />
+              <div>
+                <p className="text-sm font-extrabold">No trades yet</p>
+                <p className="text-xs text-muted-foreground mt-1">Sell a gift card to see your history here</p>
+              </div>
+              <button
+                onClick={onSell}
+                className="bg-gradient-gold text-jungle-deep font-extrabold text-xs px-5 py-2.5 rounded-xl shadow-glow-gold flex items-center gap-1.5 active:scale-[0.98] transition"
+              >
+                <Gift className="size-3.5" /> Sell Now
+              </button>
             </div>
           )}
         </div>
@@ -1063,7 +1073,10 @@ function LeagueScreen({
             </div>
           ))
         ) : (
-          <div className="col-span-3 text-center py-6 text-sm text-muted-foreground">No leaderboard data yet</div>
+          <div className="col-span-3 flex flex-col items-center gap-3 py-8 text-center">
+            <img src="/mascot.png" alt="Seven" className="size-16 object-contain opacity-60" />
+            <p className="text-xs text-muted-foreground">No trades this week yet — be the first!</p>
+          </div>
         )}
       </div>
 
@@ -1123,7 +1136,10 @@ function LeagueScreen({
             );
           })}
           {rest.length === 0 && (
-            <div className="text-center py-6 text-sm text-muted-foreground">No data yet</div>
+            <div className="flex flex-col items-center gap-3 py-8 text-center">
+              <img src="/mascot.png" alt="Seven" className="size-14 object-contain opacity-60" />
+              <p className="text-xs text-muted-foreground px-4">Trade this week to appear on the leaderboard</p>
+            </div>
           )}
         </div>
       </div>
@@ -1297,7 +1313,13 @@ function WalletScreen({
               />
             ))
           ) : (
-            <div className="text-center py-8 text-sm text-muted-foreground">No activity yet</div>
+            <div className="flex flex-col items-center gap-4 py-8 text-center">
+              <img src="/mascot.png" alt="Seven" className="size-20 object-contain drop-shadow-lg" />
+              <div>
+                <p className="text-sm font-extrabold">No activity yet</p>
+                <p className="text-xs text-muted-foreground mt-1">Completed trades appear here</p>
+              </div>
+            </div>
           )}
         </div>
       )}
