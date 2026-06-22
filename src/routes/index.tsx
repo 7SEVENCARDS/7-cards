@@ -694,6 +694,20 @@ const REGION_CONFIG = {
 } as const;
 type Region = keyof typeof REGION_CONFIG;
 
+const BRAND_LOGOS: Record<string, string> = {
+  "Apple":       "https://logo.clearbit.com/apple.com",
+  "Steam":       "https://logo.clearbit.com/steampowered.com",
+  "Amazon":      "https://logo.clearbit.com/amazon.com",
+  "Google Play": "https://logo.clearbit.com/play.google.com",
+  "Xbox":        "https://logo.clearbit.com/xbox.com",
+  "PlayStation": "https://logo.clearbit.com/playstation.com",
+  "Netflix":     "https://logo.clearbit.com/netflix.com",
+  "Spotify":     "https://logo.clearbit.com/spotify.com",
+  "Razer Gold":  "https://logo.clearbit.com/razer.com",
+  "Sephora":     "https://logo.clearbit.com/sephora.com",
+  "Nordstrom":   "https://logo.clearbit.com/nordstrom.com",
+};
+
 const REGION_BRANDS: Record<Region, Array<{ name: string; emoji: string }>> = {
   US: [
     { name: "Apple",       emoji: "🍎" },
@@ -866,11 +880,11 @@ function SellScreen({
               <button
                 key={b.name}
                 onClick={() => setSelected(b.name)}
-                className={`aspect-square rounded-2xl flex flex-col items-center justify-center gap-1 border-2 transition ${
+                className={`aspect-square rounded-2xl flex flex-col items-center justify-center gap-1.5 border-2 transition ${
                   active ? "border-gold bg-gold/10 shadow-glow-gold" : "border-border bg-card"
                 }`}
               >
-                <span className="text-2xl">{b.emoji}</span>
+                <BrandLogo name={b.name} emoji={b.emoji} />
                 <span className="text-[10px] font-semibold text-center px-1 leading-tight">{b.name}</span>
               </button>
             );
@@ -973,6 +987,22 @@ function SellScreen({
         </div>
       </div>
     </div>
+  );
+}
+
+function BrandLogo({ name, emoji }: { name: string; emoji: string }) {
+  const [failed, setFailed] = useState(false);
+  const logo = BRAND_LOGOS[name];
+  if (!logo || failed) {
+    return <span className="text-3xl leading-none">{emoji}</span>;
+  }
+  return (
+    <img
+      src={logo}
+      alt={name}
+      className="size-10 object-contain rounded-xl"
+      onError={() => setFailed(true)}
+    />
   );
 }
 
