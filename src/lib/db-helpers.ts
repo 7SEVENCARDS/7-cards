@@ -8,13 +8,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 // ─── Referral Commission ──────────────────────────────────────────────────────
 // Awards 5% of the trade's NGN value to the referrer.
+// On the referee's FIRST completed trade, both referrer and referee also
+// receive a ₦500 welcome bonus.
 // Platform model: 15% margin kept; 5% to referrer; net = 10%.
 export async function creditReferrerCommissionFn(
   db: SupabaseClient,
   traderId: string,
   tradeId: string,
   tradeAmountNgn: number
-): Promise<{ success: boolean; commissionNgn?: number; reason?: string }> {
+): Promise<{ success: boolean; commissionNgn?: number; bonusAwarded?: boolean; reason?: string }> {
   const { data: trader } = await db
     .from("profiles")
     .select("referred_by, full_name")
@@ -27,6 +29,16 @@ export async function creditReferrerCommissionFn(
   const commissionNgn = Math.round(tradeAmountNgn * COMMISSION_RATE);
   if (commissionNgn <= 0) return { success: false, reason: "amount_too_small" };
 
+  // Check whether this is the referee's first completed trade
+  // (count existing commissions BEFORE inserting the new one)
+  const { count: prevCommissions } = await db
+    .from("referral_commissions")
+    .select("id", { count: "exact", head: true })
+    .eq("referee_id", traderId);
+
+  const isFirstTrade = (prevCommissions ?? 0) === 0;
+
+  // Credit 5% commission to referrer's wallet
   await db.rpc("increment_wallet_balance", {
     p_user_id: trader.referred_by,
     p_currency: "NGN",
@@ -41,6 +53,57 @@ export async function creditReferrerCommissionFn(
     commission_rate: COMMISSION_RATE,
   });
 
+  // ── First-trade ₦500 bonus for both parties ──────────────────────────────
+  if (isFirstTrade) {
+    const BONUS_NGN = 500;
+
+    // Credit ₦500 to referrer
+    await db.rpc("increment_wallet_balance", {
+      p_user_id: trader.referred_by,
+      p_currency: "NGN",
+      p_amount: BONUS_NGN,
+    });
+
+    // Credit ₦500 to referee (the new user)
+    await db.rpc("increment_wallet_balance", {
+      p_user_id: traderId,
+      p_currency: "NGN",
+      p_amount: BONUS_NGN,
+    });
+
+    // Notify both users
+    await db.from("notifications").insert([
+      {
+        user_id: trader.referred_by,
+        title: "Referral Bonus Unlocked! 🎉",
+        message: `₦500 bonus credited! Your referral (${trader.full_name ?? "your friend"}) just completed their first trade. Plus ₦${commissionNgn.toLocaleString()} (5%) commission.`,
+        type: "success",
+      },
+      {
+        user_id: traderId,
+        title: "Welcome Bonus! 🎁",
+        message: `₦500 bonus credited to your wallet for completing your first trade on 7SEVEN CARDS!`,
+        type: "success",
+      },
+    ]);
+
+    // OneSignal pushes (fire-and-forget)
+    try {
+      const { pushNotify } = await import("./onesignal");
+      pushNotify(trader.referred_by, "Referral Bonus Unlocked! 🎉",
+        `₦500 bonus + ₦${commissionNgn.toLocaleString()} commission from your referral's first trade.`,
+        { type: "referral_bonus" }
+      );
+      pushNotify(traderId, "Welcome Bonus! 🎁",
+        "₦500 credited to your wallet for your first trade. Keep trading to earn more!",
+        { type: "first_trade_bonus" }
+      );
+    } catch { /* non-critical */ }
+
+    return { success: true, commissionNgn, bonusAwarded: true };
+  }
+
+  // Standard commission notification (not first trade)
   await db.from("notifications").insert({
     user_id: trader.referred_by,
     title: "Commission Earned! 💰",
@@ -57,7 +120,7 @@ export async function creditReferrerCommissionFn(
     );
   } catch { /* non-critical */ }
 
-  return { success: true, commissionNgn };
+  return { success: true, commissionNgn, bonusAwarded: false };
 }
 
 // ─── Trade Tier ───────────────────────────────────────────────────────────────

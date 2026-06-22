@@ -132,12 +132,20 @@ export const applyReferralCode = createServerFn({ method: "POST" })
 
     await db.from("profiles").update({ referred_by: referrer.id }).eq("id", userId);
 
-    await db.from("notifications").insert({
-      user_id: referrer.id,
-      title: "New Referral! 🎉",
-      message: "Someone just signed up with your referral code. You'll earn 5% commission on every trade they complete!",
-      type: "success",
-    });
+    await db.from("notifications").insert([
+      {
+        user_id: referrer.id,
+        title: "New Referral! 🎉",
+        message: "Someone just signed up with your code! When they complete their first trade, you BOTH earn ₦500 + 100 XP bonus.",
+        type: "success",
+      },
+      {
+        user_id: userId,
+        title: "Referral Code Applied! 🔗",
+        message: `You're now linked to ${referrer.full_name ?? "a friend"}. Complete your first trade to unlock ₦500 bonus for both of you!`,
+        type: "success",
+      },
+    ]);
 
     return { success: true, referrerName: referrer.full_name ?? "a friend" };
   });

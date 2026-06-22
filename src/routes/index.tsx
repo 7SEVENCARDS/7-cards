@@ -328,12 +328,14 @@ function App() {
             profile={profile as ProfileData | null | undefined}
             xp={xp as XPData | undefined}
             emailVerified={emailVerified}
+            userEmail={user?.email ?? ""}
             onSignOut={handleSignOut}
             onNavigateKYC={() => setTab("kyc")}
             onNavigatePayout={() => setTab("payout")}
             onNavigateReferral={() => setTab("referral")}
             onNavigatePremium={() => setTab("premium")}
             onNavigateSupport={() => setTab("support")}
+            onNavigateLeague={() => setTab("league")}
             onNavigateAdmin={profile?.role === "admin" ? () => setTab("admin") : undefined}
           />
         )}
@@ -704,17 +706,17 @@ const REGION_CONFIG = {
 type Region = keyof typeof REGION_CONFIG;
 
 const BRAND_LOGO_URLS: Record<string, string> = {
-  "Apple":       "https://logo.clearbit.com/apple.com",
-  "Steam":       "https://logo.clearbit.com/steampowered.com",
-  "Amazon":      "https://logo.clearbit.com/amazon.com",
-  "Google Play": "https://logo.clearbit.com/play.google.com",
-  "Xbox":        "https://logo.clearbit.com/xbox.com",
-  "PlayStation": "https://logo.clearbit.com/playstation.com",
-  "Netflix":     "https://logo.clearbit.com/netflix.com",
-  "Spotify":     "https://logo.clearbit.com/spotify.com",
-  "Razer Gold":  "https://logo.clearbit.com/razer.com",
-  "Sephora":     "https://logo.clearbit.com/sephora.com",
-  "Nordstrom":   "https://logo.clearbit.com/nordstrom.com",
+  "Apple":       "https://cdn.simpleicons.org/apple/ffffff",
+  "Steam":       "https://cdn.simpleicons.org/steam/ffffff",
+  "Amazon":      "https://cdn.simpleicons.org/amazon/FF9900",
+  "Google Play": "https://cdn.simpleicons.org/googleplay/ffffff",
+  "Xbox":        "https://cdn.simpleicons.org/xbox/52B043",
+  "PlayStation": "https://cdn.simpleicons.org/playstation/ffffff",
+  "Netflix":     "https://cdn.simpleicons.org/netflix/E50914",
+  "Spotify":     "https://cdn.simpleicons.org/spotify/1DB954",
+  "Razer Gold":  "https://cdn.simpleicons.org/razer/44D62C",
+  "Sephora":     "https://cdn.simpleicons.org/sephora/ffffff",
+  "Nordstrom":   "https://cdn.simpleicons.org/nordstrom/ffffff",
 };
 
 const REGION_BRANDS: Record<Region, Array<{ name: string; emoji: string }>> = {
@@ -1343,12 +1345,13 @@ function CircleBtn({ icon: Icon, label, onClick }: { icon: React.ComponentType<{
 /* ─────────────────────────────────── PROFILE ─────────────────────────────────── */
 
 function ProfileScreen({
-  profile, xp, emailVerified, onSignOut, onNavigateKYC, onNavigatePayout, onNavigateReferral, onNavigatePremium, onNavigateSupport, onNavigateAdmin,
+  profile, xp, emailVerified, userEmail, onSignOut, onNavigateKYC, onNavigatePayout, onNavigateReferral, onNavigatePremium, onNavigateSupport, onNavigateLeague, onNavigateAdmin,
 }: {
-  profile?: ProfileData | null; xp?: XPData; emailVerified?: boolean; onSignOut: () => void; onNavigateKYC: () => void; onNavigatePayout: () => void; onNavigateReferral: () => void; onNavigatePremium: () => void; onNavigateSupport: () => void; onNavigateAdmin?: () => void;
+  profile?: ProfileData | null; xp?: XPData; emailVerified?: boolean; userEmail?: string; onSignOut: () => void; onNavigateKYC: () => void; onNavigatePayout: () => void; onNavigateReferral: () => void; onNavigatePremium: () => void; onNavigateSupport: () => void; onNavigateLeague?: () => void; onNavigateAdmin?: () => void;
 }) {
   const firstName = (profile?.full_name ?? "User").split(" ")[0];
   const initial = firstName[0]?.toUpperCase() ?? "?";
+  const levelName = (xp?.level ?? 1) >= 15 ? "Boss" : (xp?.level ?? 1) >= 10 ? "Pro" : "Rookie";
 
   return (
     <div className="flex flex-col">
@@ -1357,45 +1360,57 @@ function ProfileScreen({
         <h1 className="text-2xl font-extrabold text-white">Profile</h1>
 
         <div className="mt-5 flex items-center gap-4">
-          <div className="size-20 rounded-3xl bg-gradient-gold grid place-items-center font-extrabold text-jungle-deep text-3xl shadow-glow-gold">
+          <div className="size-20 rounded-3xl bg-gradient-gold grid place-items-center font-extrabold text-jungle-deep text-3xl shadow-glow-gold shrink-0">
             {initial}
           </div>
-          <div className="flex-1">
-            <p className="text-lg font-extrabold text-white">{profile?.full_name ?? "—"}</p>
-            <p className="text-xs text-white/70">{profile?.phone ?? ""}</p>
-            <div className="mt-2 flex flex-wrap gap-2">
+          <div className="flex-1 min-w-0">
+            <p className="text-lg font-extrabold text-white truncate">{profile?.full_name ?? "—"}</p>
+            {userEmail && (
+              <p className="text-xs text-white/60 truncate mt-0.5">{userEmail}</p>
+            )}
+            {profile?.phone && (
+              <p className="text-xs text-white/60 truncate">{profile.phone}</p>
+            )}
+            <div className="mt-2 flex flex-wrap gap-1.5">
               {emailVerified ? (
                 <span className="px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 text-[10px] font-bold flex items-center gap-1">
                   ✉️ Email Verified
                 </span>
               ) : (
                 <span className="px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-400 text-[10px] font-bold flex items-center gap-1">
-                  ✉️ Email Unverified
+                  ✉️ Unverified
                 </span>
               )}
-              {profile?.kyc_status === "verified" && (
+              {profile?.kyc_status === "verified" ? (
                 <span className="px-2 py-0.5 rounded-full bg-cyan/20 text-cyan text-[10px] font-bold flex items-center gap-1">
                   <ShieldCheck className="size-3" /> KYC Verified
                 </span>
-              )}
+              ) : profile?.kyc_status === "submitted" ? (
+                <span className="px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 text-[10px] font-bold">
+                  ⏳ KYC Pending
+                </span>
+              ) : null}
               {profile?.premium && (
-                <span className="px-2 py-0.5 rounded-full bg-gold/20 text-gold text-[10px] font-bold">PRO</span>
+                <span className="px-2 py-0.5 rounded-full bg-gold/20 text-gold text-[10px] font-bold flex items-center gap-1">
+                  <Crown className="size-3" /> PRO
+                </span>
               )}
             </div>
           </div>
         </div>
 
-        <div className="mt-5 grid grid-cols-3 gap-2 text-center">
-          <ProfStat n={String(xp?.tradeCount ?? 0)} label="Trades" />
+        <div className="mt-5 grid grid-cols-4 gap-2 text-center">
+          <ProfStat n={String(xp?.tradeCount ?? 0)}        label="Trades" />
           <ProfStat n={(xp?.totalXp ?? 0).toLocaleString()} label="XP" />
+          <ProfStat n={`Lv.${xp?.level ?? 1}`}             label={levelName} />
           <ProfStat n={xp?.weeklyRank ? `#${xp.weeklyRank}` : "—"} label="Rank" />
         </div>
       </header>
 
       <div className="px-5 mt-6 space-y-2">
-        <MenuItem icon={Trophy}      label="The Hustle League"  sub={`Level ${xp?.level ?? 1}`}      tint="text-gold" />
-        <MenuItem icon={Gift}        label="Referral Program"   sub="₦500 per friend"                tint="text-pink"   onClick={onNavigateReferral} />
-        <MenuItem icon={ShieldCheck} label="Security & KYC"     sub={profile?.kyc_status === "verified" ? "✅ Verified" : profile?.kyc_status === "submitted" ? "⏳ Under Review" : "Tap to verify"} tint="text-cyan" onClick={onNavigateKYC} />
+        <MenuItem icon={Trophy}      label="The Hustle League"  sub={`Level ${xp?.level ?? 1} · ${levelName} · ${(xp?.streakDays ?? 0)}d streak`} tint="text-gold"   onClick={onNavigateLeague} />
+        <MenuItem icon={Gift}        label="Invite Friends"     sub="You both earn ₦500 + XP bonus"  tint="text-pink"   onClick={onNavigateReferral} />
+        <MenuItem icon={ShieldCheck} label="Security & KYC"     sub={profile?.kyc_status === "verified" ? "✅ Verified · Higher limits unlocked" : profile?.kyc_status === "submitted" ? "⏳ Under Review" : "Tap to verify — unlock $5,000 limit"} tint="text-cyan" onClick={onNavigateKYC} />
         <MenuItem icon={Wallet}      label="Payout Accounts"    sub="Manage bank accounts"           tint="text-orange" onClick={onNavigatePayout} />
         <MenuItem icon={MessageCircleIcon} label="Support & Help" sub={profile?.premium ? "Priority · replies in 1 hour" : "24/7 AI · 1-day human reply"} tint="text-gold" onClick={onNavigateSupport} />
         <MenuItem icon={Gamepad2}    label="Low Data Mode"      sub="Save bandwidth"                 tint="text-cyan" toggle storageKey="7sc_low_data_mode" />
