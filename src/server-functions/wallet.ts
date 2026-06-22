@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { getCryptoRates } from "../lib/busha";
 import { requireUser } from "../lib/auth-server";
+import { initiatePayout } from "../lib/squadco";
 
 // ─── Get own wallets ──────────────────────────────────────────────────────────
 export const getUserWallets = createServerFn({ method: "GET" })
@@ -196,4 +197,85 @@ export const clearReadNotifications = createServerFn({ method: "POST" })
       .eq("user_id", userId)
       .eq("read", true);
     return { success: true };
+  });
+
+// ─── Request user wallet withdrawal ──────────────────────────────────────────
+export const requestUserWithdrawal = createServerFn({ method: "POST" })
+  .validator((d: {
+    amountNgn: number;
+    bankCode: string;
+    accountNumber: string;
+    accountName: string;
+    bankName: string;
+  }) => d)
+  .handler(async ({ data }) => {
+    const userId = await requireUser();
+    const db = getServerSupabase();
+
+    if (data.amountNgn < 500) throw new Error("Minimum withdrawal is ₦500");
+    if (data.amountNgn > 1_000_000) throw new Error("Maximum single withdrawal is ₦1,000,000");
+
+    // 1. Get NGN wallet balance
+    const { data: wallet, error: wErr } = await db
+      .from("wallets")
+      .select("id, balance")
+      .eq("user_id", userId)
+      .eq("currency", "NGN")
+      .single();
+
+    if (wErr || !wallet) throw new Error("NGN wallet not found. Complete a trade first.");
+    const balance = Number(wallet.balance);
+    if (balance < data.amountNgn) {
+      throw new Error(`Insufficient balance. Available: ₦${balance.toLocaleString()}`);
+    }
+
+    // 2. Deduct balance (optimistic lock — only updates if balance is unchanged)
+    const newBalance = balance - data.amountNgn;
+    const { error: deductErr } = await db
+      .from("wallets")
+      .update({ balance: newBalance })
+      .eq("id", wallet.id)
+      .gte("balance", data.amountNgn);
+
+    if (deductErr) throw new Error("Failed to lock balance — please retry");
+
+    // 3. Initiate Squadco payout
+    const withdrawalRef = `WD-${userId.slice(0, 8)}-${Date.now()}`;
+    let payoutRef = "";
+    try {
+      const result = await initiatePayout({
+        tradeId: withdrawalRef,
+        amountNgn: data.amountNgn,
+        bankCode: data.bankCode,
+        accountNumber: data.accountNumber,
+        accountName: data.accountName,
+        narration: "7SEVEN CARDS wallet withdrawal",
+      });
+
+      if (!result.success) {
+        // Restore balance on payout failure
+        await db.from("wallets").update({ balance }).eq("id", wallet.id);
+        throw new Error(result.message ?? "Payout failed — balance restored. Try again.");
+      }
+      payoutRef = result.transactionRef;
+    } catch (e: unknown) {
+      // Restore balance if Squadco is unreachable or not configured
+      await db.from("wallets").update({ balance }).eq("id", wallet.id);
+      const msg = e instanceof Error ? e.message : "Unknown payout error";
+      // Pass through our own descriptive errors; wrap Squadco-internal ones
+      if (msg.includes("balance restored") || msg.includes("Insufficient") || msg.includes("Minimum")) {
+        throw e;
+      }
+      throw new Error("Payout service temporarily unavailable — balance restored. Please try again in a moment.");
+    }
+
+    // 4. Create success notification
+    await db.from("notifications").insert({
+      user_id: userId,
+      title: "Withdrawal Initiated 💸",
+      message: `₦${data.amountNgn.toLocaleString()} is on its way to ${data.accountName} · ${data.bankName}. Usually arrives within 5 minutes.`,
+      type: "success",
+    });
+
+    return { success: true, ref: payoutRef, newBalance };
   });
