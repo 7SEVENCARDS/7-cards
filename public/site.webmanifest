@@ -1,16 +1,39 @@
 {
+  "id": "/?source=pwa",
   "name": "7SEVEN CARDS",
   "short_name": "7SEVEN",
   "description": "Verify Fast. Get Paid Faster. Sell gift cards for Naira in under 5 minutes.",
-  "start_url": "/",
+  "start_url": "/?source=pwa",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
   "background_color": "#0a1220",
   "theme_color": "#0a1220",
   "orientation": "portrait",
+  "prefer_related_applications": false,
   "icons": [
-    { "src": "/logo-badge.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/logo-badge.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/logo-badge.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/logo-full.png",  "sizes": "512x512",  "type": "image/png", "purpose": "any" },
+    { "src": "/logo-full.png",  "sizes": "512x512",  "type": "image/png", "purpose": "maskable" },
     { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
   ],
   "categories": ["finance", "utilities"],
-  "lang": "en"
+  "lang": "en",
+  "dir": "ltr",
+  "shortcuts": [
+    {
+      "name": "Sell a Gift Card",
+      "short_name": "Sell",
+      "description": "Start a new gift card trade",
+      "url": "/?action=sell&source=pwa-shortcut",
+      "icons": [{ "src": "/logo-badge.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Trade History",
+      "short_name": "History",
+      "description": "View your trade history",
+      "url": "/?action=history&source=pwa-shortcut",
+      "icons": [{ "src": "/logo-badge.png", "sizes": "192x192" }]
+    }
+  ]
 }

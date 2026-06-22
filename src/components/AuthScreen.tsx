@@ -157,6 +157,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
               <input
                 type="text"
                 placeholder="Full name"
+                aria-label="Full name"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
                 className="bg-transparent outline-none text-base font-semibold flex-1 placeholder:text-muted-foreground/50"
@@ -173,6 +174,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             <input
               type="email"
               placeholder="Email address"
+              aria-label="Email address"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && (mode === "signin" ? handleSignIn() : handleSignUp())}
@@ -190,6 +192,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             <input
               type={showPassword ? "text" : "password"}
               placeholder="Password (min 6 chars)"
+              aria-label="Password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && (mode === "signin" ? handleSignIn() : handleSignUp())}
@@ -199,6 +202,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             <button
               type="button"
               onClick={() => setShowPassword((v) => !v)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
               className="text-muted-foreground flex-shrink-0"
               tabIndex={-1}
             >

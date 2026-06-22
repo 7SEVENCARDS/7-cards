@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+
+# Block admin and API routes from indexing
+Disallow: /api/
+Disallow: /vendor
+Disallow: /_server/
+
+Sitemap: https://7evencards.xyz/sitemap.xml
