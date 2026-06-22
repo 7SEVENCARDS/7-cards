@@ -16,11 +16,12 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { pushNotify } from "../lib/onesignal";
+import { getEnv } from "../lib/worker-env";
 
 // ─── Admin Supabase (bypasses RLS — webhook has no user session) ──────────────
 function getAdminDb() {
-  const url = process.env.VITE_SUPABASE_URL ?? "";
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+  const url = getEnv("VITE_SUPABASE_URL") ?? "";
+  const key = getEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 }
 
@@ -29,7 +30,7 @@ async function verifySquadSignature(
   rawBody: string,
   signature: string | null
 ): Promise<boolean> {
-  const secret = process.env.SQUADCO_SECRET_KEY;
+  const secret = getEnv("SQUADCO_SECRET_KEY");
   if (!secret || !signature) return false;
 
   try {
@@ -520,7 +521,7 @@ async function handleVendorAssignmentPayment(
 // Validated via X-Telegram-Bot-Api-Secret-Token header.
 export async function handleTelegramWebhook(request: Request): Promise<Response> {
   // Validate secret token if configured
-  const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  const secret = getEnv("TELEGRAM_WEBHOOK_SECRET");
   if (secret) {
     const incoming = request.headers.get("x-telegram-bot-api-secret-token");
     if (incoming !== secret) {
