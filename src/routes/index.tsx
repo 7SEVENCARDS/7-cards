@@ -51,7 +51,6 @@ import { useSession } from "../hooks/useSession";
 import {
   useExchangeRates,
   useWallets,
-  usePortfolioValue,
   useRecentTrades,
   useUserXP,
   useLeaderboard,
@@ -60,7 +59,6 @@ import {
 } from "../hooks/useAppData";
 import { supabase } from "../lib/supabase";
 import { createTrade, verifyGiftCard, processPayout, submitCardBatch, getTradeLimits } from "../server-functions/trades";
-import { getCryptoDepositAddress, initiateCryptoSwap, initiateCryptoSend } from "../server-functions/crypto";
 import { getKYCStatus } from "../server-functions/kyc";
 import { lookupAccount, addPayoutAccount } from "../server-functions/payout-accounts";
 
@@ -91,7 +89,6 @@ function App() {
   // ── Real data hooks ──────────────────────────────────────────────────────
   const { data: rates = [] } = useExchangeRates();
   const { data: wallets = [] } = useWallets(user?.id);
-  const { data: portfolio } = usePortfolioValue(user?.id);
   const { data: recentTrades = [] } = useRecentTrades(user?.id, 5);
   const { data: xp } = useUserXP(user?.id);
   const { data: leaderboard = [] } = useLeaderboard();
@@ -321,7 +318,6 @@ function App() {
         {tab === "wallet" && (
           <WalletScreen
             wallets={wallets as WalletData[]}
-            portfolio={portfolio as PortfolioData | undefined}
             recentTrades={recentTrades as TradeRow[]}
             onViewHistory={() => setTab("history")}
           />
@@ -460,6 +456,7 @@ function HomeScreen({
   recentTrades: TradeRow[]; bestRate: number; xp?: XPData; unreadCount: number;
 }) {
   const [hideBalance, setHideBalance] = useState(false);
+  const [showCryptoSoon, setShowCryptoSoon] = useState(false);
 
   const levelName = (xp?.level ?? 1) >= 15 ? "Boss" : (xp?.level ?? 1) >= 10 ? "Pro" : "Rookie";
   const xpToNext = ((xp?.level ?? 1) + 1) * 1000;
@@ -572,14 +569,14 @@ function HomeScreen({
       <div className="px-5 mt-6">
         <div className="grid grid-cols-4 gap-3">
           {[
-            { icon: Gift, label: "Gift Card", color: "bg-gold/15 text-gold", comingSoon: false },
-            { icon: Bitcoin, label: "Crypto", color: "bg-cyan/15 text-cyan", comingSoon: true },
-            { icon: ScanLine, label: "Scan", color: "bg-pink/15 text-pink", comingSoon: false },
-            { icon: Sparkles, label: "Rewards", color: "bg-orange/15 text-orange", comingSoon: false },
-          ].map(({ icon: Icon, label, color, comingSoon }) => (
-            <div key={label} className="flex flex-col items-center gap-2 relative">
+            { icon: Gift, label: "Gift Card", color: "bg-gold/15 text-gold", comingSoon: false, onClick: onSell },
+            { icon: Bitcoin, label: "Crypto", color: "bg-cyan/15 text-cyan", comingSoon: true, onClick: () => setShowCryptoSoon(true) },
+            { icon: ScanLine, label: "Scan", color: "bg-pink/15 text-pink", comingSoon: false, onClick: onSell },
+            { icon: Sparkles, label: "Rewards", color: "bg-orange/15 text-orange", comingSoon: false, onClick: undefined },
+          ].map(({ icon: Icon, label, color, comingSoon, onClick }) => (
+            <button key={label} onClick={onClick} className="flex flex-col items-center gap-2 relative">
               <div className="relative">
-                <div className={`size-14 rounded-2xl grid place-items-center ${color} ${comingSoon ? "opacity-50" : ""}`}>
+                <div className={`size-14 rounded-2xl grid place-items-center ${color} ${comingSoon ? "opacity-60" : ""}`}>
                   <Icon className="size-6" />
                 </div>
                 {comingSoon && (
@@ -589,7 +586,7 @@ function HomeScreen({
                 )}
               </div>
               <span className="text-[11px] font-semibold text-muted-foreground">{label}</span>
-            </div>
+            </button>
           ))}
         </div>
       </div>
@@ -638,6 +635,7 @@ function HomeScreen({
           )}
         </div>
       </div>
+      {showCryptoSoon && <CryptoComingSoonModal onClose={() => setShowCryptoSoon(false)} />}
     </div>
   );
 }
@@ -1144,46 +1142,83 @@ function Badge({ icon, label, sub, earned }: { icon: string; label: string; sub:
 
 /* ─────────────────────────────────── WALLET ─────────────────────────────────── */
 
-const CURRENCY_META: Record<string, { name: string; icon: string; color: string }> = {
-  NGN:  { name: "Naira",    icon: "₦", color: "bg-jungle/30 text-cyan" },
-  BTC:  { name: "Bitcoin",  icon: "₿", color: "bg-orange/20 text-orange" },
-  USDT: { name: "Tether",   icon: "₮", color: "bg-cyan/15 text-cyan" },
-  ETH:  { name: "Ethereum", icon: "Ξ", color: "bg-pink/15 text-pink" },
-};
-
 function WalletScreen({
-  wallets, portfolio, recentTrades, onViewHistory,
+  wallets, recentTrades, onViewHistory,
 }: {
-  wallets: WalletData[]; portfolio?: PortfolioData; recentTrades: TradeRow[]; onViewHistory: () => void;
+  wallets: WalletData[]; recentTrades: TradeRow[]; onViewHistory: () => void;
 }) {
   const [activeTab, setActiveTab] = useState(0);
-  const [walletModal, setWalletModal] = useState<null | "receive" | "send" | "swap">(null);
+  const [showCryptoSoon, setShowCryptoSoon] = useState(false);
 
-  const totalNgn = portfolio?.totalNgn ?? wallets.reduce((s, w) => s + (w.currency === "NGN" ? Number(w.balance) : 0), 0);
+  const ngnWallet = wallets.find((w) => w.currency === "NGN");
+  const ngnBalance = Number(ngnWallet?.balance ?? 0);
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col pb-28">
       <header className="px-5 pt-12 pb-6">
         <h1 className="text-2xl font-extrabold">Wallet</h1>
 
+        {/* NGN Balance Card */}
         <div className="mt-5 rounded-3xl bg-gradient-hero p-6 shadow-glow-jungle relative overflow-hidden">
           <div className="absolute -right-12 -top-12 size-48 rounded-full bg-cyan/10 blur-3xl" />
-          <p className="text-xs text-white/60 font-medium">Total Net Worth</p>
+          <div className="absolute left-0 bottom-0 size-32 rounded-full bg-gold/5 blur-2xl" />
+          <p className="text-xs text-white/60 font-medium tracking-wide uppercase">Naira Balance</p>
           <h2 className="text-4xl font-extrabold text-white mt-1 tracking-tight">
-            ₦ {totalNgn.toLocaleString()}
+            ₦ {ngnBalance.toLocaleString()}
           </h2>
-
-          <div className="mt-5 grid grid-cols-3 gap-2">
-            <CircleBtn icon={Plus} label="Add" onClick={() => setWalletModal("receive")} />
-            <CircleBtn icon={ArrowUpRight} label="Send" onClick={() => setWalletModal("send")} />
-            <CircleBtn icon={ArrowDownLeft} label="Swap" onClick={() => setWalletModal("swap")} />
-          </div>
+          <p className="text-[11px] text-white/50 mt-1.5">Earned from gift card trades</p>
         </div>
       </header>
 
+      {/* Crypto Coming Soon Banner */}
+      <div className="px-5 mb-5">
+        <div className="rounded-3xl bg-gradient-to-br from-[#071525] to-[#0a1e35] border border-cyan/20 p-5 relative overflow-hidden">
+          <div className="absolute -right-8 -top-8 size-40 rounded-full bg-cyan/8 blur-2xl pointer-events-none" />
+          <div className="absolute -left-4 -bottom-4 size-28 rounded-full bg-gold/8 blur-xl pointer-events-none" />
+
+          <div className="flex items-start gap-3 relative">
+            <div className="size-12 rounded-2xl bg-gradient-to-br from-cyan/25 to-blue-900/60 border border-cyan/25 grid place-items-center shrink-0">
+              <Bitcoin className="size-6 text-cyan" />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-0.5">
+                <p className="text-sm font-extrabold text-white">Crypto Trading</p>
+                <span className="bg-gold text-jungle-deep text-[9px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wider">Coming Soon</span>
+              </div>
+              <p className="text-[11px] text-white/55 leading-relaxed">
+                BTC · ETH · USDT · USDC. Secure, compliant digital assets built for Nigeria.
+              </p>
+            </div>
+          </div>
+
+          {/* Progress steps */}
+          <div className="mt-4 flex gap-2">
+            {[
+              { label: "Dev Complete", done: true },
+              { label: "Security Audit", done: true },
+              { label: "Regulatory", done: true },
+              { label: "Launch 🚀", done: false },
+            ].map((step) => (
+              <div key={step.label} className="flex-1 text-center">
+                <div className={`h-1 rounded-full mb-1.5 ${step.done ? "bg-gradient-to-r from-gold to-amber-400" : "bg-white/15"}`} />
+                <p className="text-[8px] text-white/40 font-semibold leading-tight">{step.label}</p>
+              </div>
+            ))}
+          </div>
+
+          <button
+            onClick={() => setShowCryptoSoon(true)}
+            className="w-full mt-4 py-3 rounded-2xl bg-cyan/12 border border-cyan/25 text-cyan text-xs font-extrabold flex items-center justify-center gap-2 active:scale-[0.98] transition"
+          >
+            <Bell className="size-4" /> Get Early Access
+          </button>
+        </div>
+      </div>
+
+      {/* Tabs */}
       <div className="px-5">
         <div className="flex gap-2 bg-card p-1 rounded-2xl border border-border">
-          {["Assets", "Activity", "Rewards"].map((t, i) => (
+          {["Assets", "Activity"].map((t, i) => (
             <button
               key={t}
               onClick={() => setActiveTab(i)}
@@ -1195,41 +1230,56 @@ function WalletScreen({
         </div>
       </div>
 
+      {/* Assets */}
       {activeTab === 0 && (
         <div className="px-5 mt-4 space-y-2">
-          {wallets.map((w) => {
-            const meta = CURRENCY_META[w.currency] ?? { name: w.currency, icon: w.currency[0], color: "bg-secondary text-foreground" };
-            return (
-              <div key={w.currency} className="bg-card rounded-2xl p-4 border border-border/60 flex items-center gap-3">
-                <div className={`size-11 rounded-2xl grid place-items-center font-extrabold text-lg ${meta.color}`}>
-                  {meta.icon}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold">{meta.name}</p>
-                  <p className="text-[11px] text-muted-foreground">{Number(w.balance).toLocaleString()} {w.currency}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-bold">
-                    {w.currency === "NGN" ? `₦${Number(w.balance).toLocaleString()}` : Number(w.balance).toFixed(6)}
-                  </p>
-                </div>
+          {/* NGN wallet */}
+          {ngnWallet ? (
+            <div className="bg-card rounded-2xl p-4 border border-border/60 flex items-center gap-3">
+              <div className="size-11 rounded-2xl grid place-items-center font-extrabold text-lg bg-jungle/30 text-cyan">₦</div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold">Naira</p>
+                <p className="text-[11px] text-muted-foreground">Nigerian Naira · NGN</p>
               </div>
-            );
-          })}
-          {wallets.length === 0 && (
-            <div className="text-center py-8 text-sm text-muted-foreground">No wallet data yet</div>
+              <div className="text-right">
+                <p className="text-sm font-bold">₦{ngnBalance.toLocaleString()}</p>
+                <p className="text-[10px] text-cyan font-semibold">Available</p>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-6 text-sm text-muted-foreground">
+              Sell your first gift card to earn ₦
+            </div>
           )}
+
+          {/* Locked crypto assets — Coming Soon tiles */}
+          {[
+            { symbol: "BTC", name: "Bitcoin",  icon: "₿", color: "bg-orange-500/15 text-orange-400" },
+            { symbol: "ETH", name: "Ethereum", icon: "Ξ", color: "bg-indigo-500/15 text-indigo-400" },
+            { symbol: "USDT", name: "Tether",  icon: "₮", color: "bg-emerald-500/15 text-emerald-400" },
+          ].map(({ symbol, name, icon, color }) => (
+            <button
+              key={symbol}
+              onClick={() => setShowCryptoSoon(true)}
+              className="w-full bg-card/40 rounded-2xl p-4 border border-border/30 flex items-center gap-3 opacity-55 hover:opacity-75 active:opacity-90 transition"
+            >
+              <div className={`size-11 rounded-2xl grid place-items-center font-extrabold text-lg ${color}`}>{icon}</div>
+              <div className="flex-1 text-left min-w-0">
+                <p className="text-sm font-bold">{name}</p>
+                <p className="text-[11px] text-muted-foreground">{symbol} · Launching Soon</p>
+              </div>
+              <span className="text-[10px] bg-gold/20 text-gold font-extrabold px-2.5 py-1 rounded-full shrink-0">Soon</span>
+            </button>
+          ))}
         </div>
       )}
 
+      {/* Activity */}
       {activeTab === 1 && (
         <div className="px-5 mt-4 space-y-2">
           <div className="flex items-center justify-between mb-1">
             <p className="text-xs font-semibold text-muted-foreground">Recent Activity</p>
-            <button
-              onClick={onViewHistory}
-              className="text-xs font-semibold text-gold"
-            >
+            <button onClick={onViewHistory} className="text-xs font-semibold text-gold">
               See All →
             </button>
           </div>
@@ -1251,15 +1301,7 @@ function WalletScreen({
         </div>
       )}
 
-      {activeTab === 2 && (
-        <div className="px-5 mt-4 text-center py-8 text-sm text-muted-foreground">
-          Rewards coming soon
-        </div>
-      )}
-
-      {walletModal === "receive" && <ReceiveModal wallets={wallets} onClose={() => setWalletModal(null)} />}
-      {walletModal === "send"    && <SendModal    wallets={wallets} onClose={() => setWalletModal(null)} />}
-      {walletModal === "swap"    && <SwapModal    wallets={wallets} onClose={() => setWalletModal(null)} />}
+      {showCryptoSoon && <CryptoComingSoonModal onClose={() => setShowCryptoSoon(false)} />}
     </div>
   );
 }
@@ -1863,7 +1905,7 @@ function VerifyScreen({
               <div className="space-y-3">
                 <div className="bg-cyan/10 border border-cyan/20 rounded-2xl p-4 space-y-1">
                   <p className="text-xs font-extrabold text-cyan">Credit to your 7SEVEN wallet</p>
-                  <p className="text-[11px] text-muted-foreground">₦{amountNgn.toLocaleString()} will be added instantly — no bank account needed. Use it to swap to crypto or withdraw later.</p>
+                  <p className="text-[11px] text-muted-foreground">₦{amountNgn.toLocaleString()} will be added instantly — no bank account needed. Withdraw to your bank any time.</p>
                 </div>
                 <button
                   onClick={handlePayout}
@@ -2140,314 +2182,174 @@ function BottomNav({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
   );
 }
 
-/* ─────────────────────── CRYPTO WALLET MODALS ───────────────────────────── */
+/* ─────────────────────── CRYPTO COMING SOON MODAL ───────────────────────────── */
 
-const CRYPTO_LIST = [
-  { symbol: "BTC",  name: "Bitcoin",   color: "bg-orange-500 text-white", icon: "₿" },
-  { symbol: "ETH",  name: "Ethereum",  color: "bg-indigo-500 text-white", icon: "Ξ" },
-  { symbol: "USDT", name: "Tether",    color: "bg-emerald-500 text-white", icon: "₮" },
-  { symbol: "USDC", name: "USD Coin",  color: "bg-blue-500 text-white",   icon: "$" },
-] as const;
+function ReceiveModal({ wallets: _w, onClose }: { wallets: WalletData[]; onClose: () => void }) {
+  return <CryptoComingSoonModal onClose={onClose} />;
+}
+function SendModal({ wallets: _w2, onClose: _c2 }: { wallets: WalletData[]; onClose: () => void }) {
+  return <CryptoComingSoonModal onClose={_c2} />;
+}
 
-function ReceiveModal({ wallets, onClose }: { wallets: WalletData[]; onClose: () => void }) {
-  const [selected, setSelected] = React.useState("BTC");
-  const [copied, setCopied] = React.useState(false);
+function CryptoComingSoonModal({ onClose }: { onClose: () => void }) {
+  const [email, setEmail] = React.useState("");
+  const [submitted, setSubmitted] = React.useState(false);
+  const [notifyLoading, setNotifyLoading] = React.useState(false);
 
-  const { data: addrData, isLoading } = useQuery({
-    queryKey: ["deposit-address", selected],
-    queryFn: () => getCryptoDepositAddress({ data: { currency: selected } }),
-    staleTime: 10 * 60 * 1000,
-  });
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setNotifyLoading(true);
+    setTimeout(() => { setSubmitted(true); setNotifyLoading(false); }, 800);
+  };
 
-  const address = addrData?.address ?? "";
-  const network = addrData?.network ?? selected;
-  const isDemo  = addrData?.demo;
-
-  const handleCopy = () => {
-    if (!address) return;
-    navigator.clipboard?.writeText(address).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handlePushNotify = () => {
+    if (typeof (window as unknown as { OneSignal?: { showNativePrompt: () => void } }).OneSignal !== "undefined") {
+      (window as unknown as { OneSignal: { showNativePrompt: () => void } }).OneSignal.showNativePrompt();
+    }
+    setSubmitted(true);
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-background flex flex-col max-w-[480px] mx-auto">
-      <header className="px-5 pt-12 pb-4 flex items-center gap-3">
-        <button onClick={onClose} className="size-10 rounded-full bg-card border border-border grid place-items-center">
-          <ChevronLeft className="size-5" />
+    <div className="fixed inset-0 z-50 flex flex-col max-w-[480px] mx-auto overflow-y-auto" style={{ background: "linear-gradient(160deg, #050e1a 0%, #071525 60%, #0a1e35 100%)" }}>
+      {/* Close button */}
+      <div className="px-5 pt-12 flex justify-end">
+        <button onClick={onClose} className="size-10 rounded-full bg-white/8 border border-white/10 grid place-items-center active:scale-95 transition">
+          <XCircle className="size-5 text-white/60" />
         </button>
-        <div>
-          <p className="text-lg font-extrabold">Receive Crypto</p>
-          <p className="text-xs text-muted-foreground">Send crypto to your 7SEVEN wallet</p>
-        </div>
-      </header>
-      <div className="px-5 space-y-4 overflow-y-auto pb-8">
-        <div>
-          <p className="text-xs font-bold text-muted-foreground mb-2 uppercase tracking-wide">Select currency</p>
-          <div className="grid grid-cols-4 gap-2">
-            {CRYPTO_LIST.map((cc) => (
-              <button key={cc.symbol} onClick={() => setSelected(cc.symbol)}
-                className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl border-2 transition ${selected === cc.symbol ? "border-gold bg-gold/10" : "border-border bg-card"}`}>
-                <div className={`size-9 rounded-xl grid place-items-center font-extrabold text-base ${cc.color}`}>{cc.icon}</div>
-                <span className="text-[10px] font-bold">{cc.symbol}</span>
-              </button>
-            ))}
+      </div>
+
+      {/* Hero illustration */}
+      <div className="flex flex-col items-center px-8 pt-4 pb-6 text-center relative">
+        {/* Glow orbs */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 size-64 rounded-full bg-cyan/10 blur-3xl pointer-events-none" />
+        <div className="absolute top-16 left-1/4 size-32 rounded-full bg-gold/8 blur-2xl pointer-events-none" />
+
+        {/* Icon cluster */}
+        <div className="relative mb-6">
+          <div className="size-24 rounded-3xl bg-gradient-to-br from-cyan/20 to-blue-900/60 border border-cyan/25 grid place-items-center shadow-[0_0_40px_rgba(0,255,255,0.15)] relative">
+            <Bitcoin className="size-12 text-cyan" />
           </div>
-        </div>
-        {(() => {
-          const w = wallets.find(x => x.currency === selected);
-          if (!w) return null;
-          return (
-            <div className="bg-card rounded-2xl p-3 border border-border flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">Current balance</span>
-              <span className="text-sm font-bold">{Number(w.balance).toFixed(6)} {selected}</span>
+          {[
+            { icon: "₿", color: "bg-orange-500", pos: "-top-3 -right-3" },
+            { icon: "Ξ", color: "bg-indigo-500", pos: "-bottom-3 -right-4" },
+            { icon: "₮", color: "bg-emerald-500", pos: "-bottom-3 -left-4" },
+          ].map((b) => (
+            <div key={b.icon} className={`absolute ${b.pos} size-9 rounded-2xl ${b.color} grid place-items-center font-extrabold text-white text-sm border-2 border-[#050e1a]`}>
+              {b.icon}
             </div>
-          );
-        })()}
-        <div className="bg-card rounded-3xl border border-border p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-extrabold">Your {selected} Address</p>
-            <span className="text-[10px] bg-secondary px-2 py-0.5 rounded-full text-muted-foreground font-semibold">{network}</span>
+          ))}
+        </div>
+
+        <h1 className="text-2xl font-extrabold text-white leading-tight">
+          Crypto Trading<br />
+          <span className="text-cyan">Coming Soon</span>
+        </h1>
+        <p className="text-sm text-white/55 mt-3 leading-relaxed max-w-[300px]">
+          We're building a secure, compliant digital asset experience tailored for Nigeria. Final testing and regulatory review in progress.
+        </p>
+      </div>
+
+      {/* Progress */}
+      <div className="px-8 mb-6">
+        <div className="rounded-3xl bg-white/4 border border-white/8 p-4 space-y-3">
+          {[
+            { label: "Development Complete", detail: "Full feature build done", done: true },
+            { label: "Security Audit", detail: "Infrastructure hardened & reviewed", done: true },
+            { label: "Regulatory Review", detail: "Compliance & licensing in progress", done: true },
+            { label: "Public Launch", detail: "Early access for waitlist first", done: false },
+          ].map((step, i) => (
+            <div key={step.label} className="flex items-center gap-3">
+              <div className={`size-6 rounded-full border-2 grid place-items-center shrink-0 ${step.done ? "bg-gold border-gold" : "border-white/20 bg-white/5"}`}>
+                {step.done ? (
+                  <CheckCircle2 className="size-3.5 text-jungle-deep" />
+                ) : (
+                  <span className="text-[9px] font-bold text-white/40">{i + 1}</span>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className={`text-xs font-bold ${step.done ? "text-white" : "text-white/40"}`}>{step.label}</p>
+                <p className="text-[10px] text-white/30">{step.detail}</p>
+              </div>
+            </div>
+          ))}
+          {/* Progress bar */}
+          <div className="mt-1 h-1 rounded-full bg-white/10 overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-gold to-amber-400 rounded-full" style={{ width: "78%" }} />
           </div>
-          {isLoading ? (
-            <div className="h-10 bg-secondary rounded-xl animate-pulse" />
-          ) : address ? (
-            <div className="bg-secondary rounded-2xl p-3 flex items-center gap-2">
-              <p className="text-xs font-mono flex-1 break-all text-foreground leading-relaxed">{address}</p>
-              <button onClick={handleCopy}
-                className={`size-9 rounded-xl grid place-items-center shrink-0 transition ${copied ? "bg-cyan/20 text-cyan" : "bg-card text-muted-foreground"}`}>
-                {copied ? <CheckCircle2 className="size-4" /> : <Copy className="size-4" />}
-              </button>
+          <p className="text-[10px] text-white/40 text-center">78% complete · Targeting Q3 2026</p>
+        </div>
+      </div>
+
+      {/* Waitlist */}
+      <div className="px-8 pb-6">
+        <div className="rounded-3xl bg-white/4 border border-white/8 p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <Zap className="size-4 text-gold" />
+            <p className="text-sm font-extrabold text-white">Get Early Access</p>
+          </div>
+          <p className="text-[11px] text-white/50 mb-4 leading-relaxed">
+            Join the waitlist — first to access crypto trading, exclusive rates, and zero launch fees.
+          </p>
+
+          {submitted ? (
+            <div className="flex flex-col items-center gap-3 py-4">
+              <div className="size-14 rounded-full bg-cyan/15 border border-cyan/30 grid place-items-center">
+                <CheckCircle2 className="size-7 text-cyan" />
+              </div>
+              <p className="text-sm font-extrabold text-white">You're on the list!</p>
+              <p className="text-[11px] text-white/50 text-center">We'll notify you the moment crypto trading launches. You'll be among the first.</p>
             </div>
           ) : (
-            <p className="text-xs text-muted-foreground">Address unavailable</p>
-          )}
-          {isDemo && (
-            <div className="flex items-start gap-2 p-3 rounded-xl bg-gold/10 border border-gold/30">
-              <AlertCircle className="size-4 text-gold shrink-0 mt-0.5" />
-              <p className="text-[11px] text-muted-foreground">Demo address — connect your Busha API key for your real deposit address.</p>
-            </div>
-          )}
-          <p className="text-[11px] text-muted-foreground">Send only {selected} on the {network} network. Wrong network = permanent loss.</p>
-        </div>
-        <div className="bg-card rounded-2xl p-4 border border-border">
-          <p className="text-xs font-bold mb-1">Receive NGN</p>
-          <p className="text-[11px] text-muted-foreground">Sell a gift card to credit NGN instantly, or link a bank account for transfers.</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SendModal({ wallets, onClose }: { wallets: WalletData[]; onClose: () => void }) {
-  const queryClient = useQueryClient();
-  const [selected, setSelected] = React.useState("BTC");
-  const [amount, setAmount] = React.useState("");
-  const [address, setAddress] = React.useState("");
-  const [loading, setLoading] = React.useState(false);
-  const [result, setResult] = React.useState<null | { ok: boolean; msg: string }>(null);
-
-  const wallet = wallets.find(w => w.currency === selected);
-  const balance = Number(wallet?.balance ?? 0);
-  const parsedAmount = parseFloat(amount) || 0;
-
-  const handleSend = async () => {
-    if (!parsedAmount || !address.trim() || parsedAmount > balance) return;
-    setLoading(true); setResult(null);
-    try {
-      const res = await initiateCryptoSend({ data: { currency: selected, amount: parsedAmount, address: address.trim() } });
-      if ((res as { success: boolean }).success) {
-        queryClient.invalidateQueries({ queryKey: ["wallets"] });
-        queryClient.invalidateQueries({ queryKey: ["portfolio"] });
-        setResult({ ok: true, msg: `${parsedAmount} ${selected} sent!${(res as { demo?: boolean }).demo ? " (demo)" : ""}` });
-        setAmount(""); setAddress("");
-      } else {
-        const reason = (res as { reason?: string }).reason ?? "Send failed";
-        setResult({ ok: false, msg: reason === "INSUFFICIENT_BALANCE" ? "Insufficient balance" : reason === "KYC_REQUIRED" ? "Complete KYC to send crypto" : reason });
-      }
-    } catch { setResult({ ok: false, msg: "Send failed — try again" }); }
-    finally { setLoading(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 bg-background flex flex-col max-w-[480px] mx-auto">
-      <header className="px-5 pt-12 pb-4 flex items-center gap-3">
-        <button onClick={onClose} className="size-10 rounded-full bg-card border border-border grid place-items-center">
-          <ChevronLeft className="size-5" />
-        </button>
-        <div>
-          <p className="text-lg font-extrabold">Send Crypto</p>
-          <p className="text-xs text-muted-foreground">Withdraw to an external wallet</p>
-        </div>
-      </header>
-      <div className="px-5 space-y-4 overflow-y-auto pb-8">
-        <div className="grid grid-cols-4 gap-2">
-          {CRYPTO_LIST.map((cc) => {
-            const w = wallets.find(x => x.currency === cc.symbol);
-            return (
-              <button key={cc.symbol} onClick={() => setSelected(cc.symbol)}
-                className={`flex flex-col items-center gap-1 p-2.5 rounded-2xl border-2 transition ${selected === cc.symbol ? "border-gold bg-gold/10" : "border-border bg-card"}`}>
-                <div className={`size-8 rounded-xl grid place-items-center font-extrabold text-sm ${cc.color}`}>{cc.icon}</div>
-                <span className="text-[9px] font-bold">{cc.symbol}</span>
-                <span className="text-[9px] text-muted-foreground">{Number(w?.balance ?? 0).toFixed(4)}</span>
-              </button>
-            );
-          })}
-        </div>
-        <div className="bg-card rounded-2xl border border-border p-4 space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-bold text-muted-foreground">Amount</p>
-            <button onClick={() => setAmount(String(balance))} className="text-[11px] text-gold font-bold">Max: {balance.toFixed(6)} {selected}</button>
-          </div>
-          <div className="flex items-center gap-2 bg-secondary rounded-xl px-4 py-3">
-            <input type="number" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)}
-              className="flex-1 bg-transparent text-lg font-extrabold outline-none" />
-            <span className="text-sm font-bold text-muted-foreground">{selected}</span>
-          </div>
-          {parsedAmount > balance && <p className="text-[11px] text-pink font-semibold">Exceeds available balance</p>}
-        </div>
-        <div className="bg-card rounded-2xl border border-border p-4 space-y-2">
-          <p className="text-xs font-bold text-muted-foreground">Recipient Address</p>
-          <textarea placeholder="Paste wallet address here…" value={address} onChange={(e) => setAddress(e.target.value)} rows={2}
-            className="w-full bg-secondary rounded-xl px-4 py-3 text-sm font-mono outline-none resize-none" />
-        </div>
-        {result && (
-          <div className={`flex items-start gap-2 p-3 rounded-xl border ${result.ok ? "bg-cyan/10 border-cyan/30 text-cyan" : "bg-pink/10 border-pink/30 text-pink"}`}>
-            {result.ok ? <CheckCircle2 className="size-4 shrink-0 mt-0.5" /> : <XCircle className="size-4 shrink-0 mt-0.5" />}
-            <p className="text-xs font-semibold">{result.msg}</p>
-          </div>
-        )}
-        <button onClick={handleSend} disabled={loading || !parsedAmount || parsedAmount > balance || !address.trim()}
-          className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 disabled:opacity-40">
-          {loading ? <Loader2 className="size-5 animate-spin" /> : <><Send className="size-5" /> Send {selected}</>}
-        </button>
-        <p className="text-[11px] text-center text-muted-foreground">Always double-check the address. Crypto transactions are irreversible.</p>
-      </div>
-    </div>
-  );
-}
-
-function SwapModal({ wallets, onClose }: { wallets: WalletData[]; onClose: () => void }) {
-  const queryClient = useQueryClient();
-  const [from, setFrom] = React.useState("BTC");
-  const [to, setTo] = React.useState("USDT");
-  const [amount, setAmount] = React.useState("");
-  const [loading, setLoading] = React.useState(false);
-  const [result, setResult] = React.useState<null | { ok: boolean; msg: string }>(null);
-
-  const fromWallet = wallets.find(w => w.currency === from);
-  const balance = Number(fromWallet?.balance ?? 0);
-  const parsedAmount = parseFloat(amount) || 0;
-
-  const { data: cryptoRates = [] } = useQuery({
-    queryKey: ["crypto-rates-swap"],
-    queryFn: async () => {
-      const { getCryptoExchangeRates } = await import("../server-functions/rates");
-      return getCryptoExchangeRates();
-    },
-    staleTime: 5 * 60 * 1000,
-  });
-
-  const getPrice = (sym: string) => {
-    if (sym === "NGN") return 1;
-    const r = (cryptoRates as Array<{ symbol: string; price: string }>).find(x => x.symbol === `${sym}-NGN`);
-    return r ? parseFloat(r.price) : 0;
-  };
-
-  const previewAmount = (() => {
-    const fromP = getPrice(from); const toP = getPrice(to);
-    if (!parsedAmount || fromP === 0 || toP === 0) return null;
-    return (parsedAmount * fromP) / toP;
-  })();
-
-  const allCurrencies = ["BTC", "ETH", "USDT", "USDC", "NGN"];
-
-  const handleSwap = async () => {
-    if (!parsedAmount || parsedAmount > balance || from === to) return;
-    setLoading(true); setResult(null);
-    try {
-      const res = await initiateCryptoSwap({ data: { fromCurrency: from, toCurrency: to, amount: parsedAmount } });
-      if ((res as { success: boolean }).success) {
-        queryClient.invalidateQueries({ queryKey: ["wallets"] });
-        queryClient.invalidateQueries({ queryKey: ["portfolio"] });
-        const got = ((res as { toAmount?: number }).toAmount ?? 0).toFixed(6);
-        setResult({ ok: true, msg: `Swapped ${parsedAmount} ${from} → ${got} ${to}${(res as { demo?: boolean }).demo ? " (demo)" : ""}` });
-        setAmount("");
-      } else {
-        const reason = (res as { reason?: string }).reason ?? "Swap failed";
-        setResult({ ok: false, msg: reason === "INSUFFICIENT_BALANCE" ? "Insufficient balance" : reason === "KYC_REQUIRED" ? "Complete KYC to swap" : reason });
-      }
-    } catch { setResult({ ok: false, msg: "Swap failed — try again" }); }
-    finally { setLoading(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 bg-background flex flex-col max-w-[480px] mx-auto">
-      <header className="px-5 pt-12 pb-4 flex items-center gap-3">
-        <button onClick={onClose} className="size-10 rounded-full bg-card border border-border grid place-items-center">
-          <ChevronLeft className="size-5" />
-        </button>
-        <div>
-          <p className="text-lg font-extrabold">Swap</p>
-          <p className="text-xs text-muted-foreground">Exchange between currencies instantly</p>
-        </div>
-      </header>
-      <div className="px-5 space-y-4 overflow-y-auto pb-8">
-        <div>
-          <p className="text-xs font-bold text-muted-foreground mb-2 uppercase tracking-wide">From</p>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {allCurrencies.filter(s => s !== to).map((sym) => {
-              const w = wallets.find(x => x.currency === sym);
-              return (
-                <button key={sym} onClick={() => setFrom(sym)}
-                  className={`flex flex-col items-center gap-1 px-3 py-2 rounded-2xl border-2 shrink-0 transition ${from === sym ? "border-gold bg-gold/10" : "border-border bg-card"}`}>
-                  <span className="text-xs font-bold">{sym}</span>
-                  <span className="text-[9px] text-muted-foreground">{Number(w?.balance ?? 0).toFixed(4)}</span>
+            <>
+              <form onSubmit={handleSubmit} className="space-y-3 mb-3">
+                <div className="bg-white/6 border border-white/12 rounded-2xl px-4 py-3 flex items-center gap-2">
+                  <span className="text-white/30 text-sm">✉</span>
+                  <input
+                    type="email"
+                    placeholder="your@email.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="flex-1 bg-transparent text-sm text-white placeholder-white/25 outline-none"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={notifyLoading || !email.trim()}
+                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-gold to-amber-400 text-jungle-deep font-extrabold text-sm flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.98] transition"
+                >
+                  {notifyLoading ? <Loader2 className="size-4 animate-spin" /> : <><Bell className="size-4" /> Notify Me at Launch</>}
                 </button>
-              );
-            })}
-          </div>
-        </div>
-        <div>
-          <p className="text-xs font-bold text-muted-foreground mb-2 uppercase tracking-wide">To</p>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {allCurrencies.filter(s => s !== from).map((sym) => (
-              <button key={sym} onClick={() => setTo(sym)}
-                className={`flex flex-col items-center gap-1 px-3 py-2 rounded-2xl border-2 shrink-0 transition ${to === sym ? "border-cyan bg-cyan/10" : "border-border bg-card"}`}>
-                <span className="text-xs font-bold">{sym}</span>
+              </form>
+
+              <div className="relative flex items-center gap-3 mb-3">
+                <div className="flex-1 h-px bg-white/10" />
+                <span className="text-[10px] text-white/25 font-semibold">or</span>
+                <div className="flex-1 h-px bg-white/10" />
+              </div>
+
+              <button
+                onClick={handlePushNotify}
+                className="w-full py-3 rounded-2xl bg-white/6 border border-white/12 text-white/70 font-semibold text-xs flex items-center justify-center gap-2 active:scale-[0.98] transition"
+              >
+                <Bell className="size-4 text-cyan" /> Enable Push Notifications
               </button>
-            ))}
-          </div>
+            </>
+          )}
         </div>
-        <div className="bg-card rounded-2xl border border-border p-4 space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-bold text-muted-foreground">Amount ({from})</p>
-            <button onClick={() => setAmount(String(balance))} className="text-[11px] text-gold font-bold">Max: {balance.toFixed(6)}</button>
-          </div>
-          <div className="flex items-center gap-2 bg-secondary rounded-xl px-4 py-3">
-            <input type="number" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)}
-              className="flex-1 bg-transparent text-lg font-extrabold outline-none" />
-            <span className="text-sm font-bold text-muted-foreground">{from}</span>
-          </div>
-          {parsedAmount > balance && <p className="text-[11px] text-pink font-semibold">Exceeds available balance</p>}
+      </div>
+
+      {/* Available Now */}
+      <div className="px-8 pb-12">
+        <div className="rounded-2xl bg-gold/10 border border-gold/20 p-4">
+          <p className="text-xs font-extrabold text-gold mb-1.5">✅ Available Right Now</p>
+          <p className="text-[11px] text-white/55 leading-relaxed">
+            Sell gift cards → instant NGN payout to your bank. Fast rates, trusted vendors, zero delays.
+          </p>
+          <button onClick={onClose} className="mt-3 w-full py-2.5 rounded-xl bg-gold/20 border border-gold/30 text-gold font-extrabold text-xs active:scale-[0.98] transition">
+            Sell Gift Cards Now →
+          </button>
         </div>
-        {previewAmount !== null && (
-          <div className="bg-cyan/10 border border-cyan/20 rounded-2xl p-4 flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">You receive approx.</span>
-            <span className="text-sm font-extrabold text-cyan">{previewAmount.toFixed(6)} {to}</span>
-          </div>
-        )}
-        {result && (
-          <div className={`flex items-start gap-2 p-3 rounded-xl border ${result.ok ? "bg-cyan/10 border-cyan/30 text-cyan" : "bg-pink/10 border-pink/30 text-pink"}`}>
-            {result.ok ? <CheckCircle2 className="size-4 shrink-0 mt-0.5" /> : <XCircle className="size-4 shrink-0 mt-0.5" />}
-            <p className="text-xs font-semibold">{result.msg}</p>
-          </div>
-        )}
-        <button onClick={handleSwap} disabled={loading || !parsedAmount || parsedAmount > balance || from === to}
-          className="w-full bg-gradient-to-r from-gold to-amber-500 text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 disabled:opacity-40">
-          {loading ? <Loader2 className="size-5 animate-spin" /> : `Swap ${from} → ${to}`}
-        </button>
-        <p className="text-[11px] text-center text-muted-foreground">Rates include a 7% service margin. Swaps are final.</p>
       </div>
     </div>
   );
