@@ -12,6 +12,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { getEnv } from "./worker-env";
 
 // ─── Core: SHA-256 hex digest ─────────────────────────────────────────────────
 export async function sha256Hex(input: string): Promise<string> {
@@ -102,7 +103,7 @@ export async function logTradeEvent(
 // We never store the raw token — only its SHA-256 so the log is un-guessable
 // but still verifiable against our own env variable.
 export async function hashReloadlyToken(): Promise<string> {
-  const token = process.env.RELOADLY_CLIENT_SECRET ?? "not-configured";
+  const token = getEnv("RELOADLY_CLIENT_SECRET") ?? "not-configured";
   return sha256Hex(`reloadly:${token}`);
 }
 
