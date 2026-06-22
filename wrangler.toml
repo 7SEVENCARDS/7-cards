@@ -33,6 +33,8 @@
 #   TELEGRAM_BOT_TOKEN        — BotFather (vendor bot)
 #   TELEGRAM_WEBHOOK_SECRET   — Random string for vendor webhook auth
 #   CRON_SECRET               — Random string for cron auth
+#   RESEND_API_KEY            — Resend dashboard → API Keys (for admin trade emails)
+#   ADMIN_EMAIL               — Admin email address to receive trade notifications
 #   ONESIGNAL_ANDROID_CHANNEL_ID — OneSignal → Android channel
 #   SUPPORT_EMAIL             — Override support@7evencards.xyz if needed
 #   SUPPORT_TELEGRAM_CHAT_ID  — Telegram chat for user support
@@ -86,9 +88,9 @@ pattern   = "www.7evencards.xyz/*"
 zone_name = "7evencards.xyz"
 
 # vendor.7evencards.xyz → rewrites to /vendor/* (handled in server.ts)
-[[env.production.routes]]
-pattern   = "vendor.7evencards.xyz/*"
-zone_name = "7evencards.xyz"
+# Using custom_domains so wrangler automatically provisions the DNS record.
+[[env.production.custom_domains]]
+name = "vendor.7evencards.xyz"
 
 # ─── Workers Rate Limiting (distributed, edge-level) ─────────────────────────
 # The app currently uses per-isolate in-process rate limiting (src/lib/rate-limiter.ts).
