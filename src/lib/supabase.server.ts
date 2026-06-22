@@ -1,6 +1,7 @@
 // ─── Server-side Supabase client (service role, bypasses RLS) ────────────────
 // Only import this in server functions — never in client code.
 import { createClient } from "@supabase/supabase-js";
+import { getEnv } from "./worker-env";
 
 // ─── ConfigError — thrown when required env vars are missing ──────────────────
 // Carries a 503 statusCode so TanStack Start surfaces it as "service
@@ -18,8 +19,8 @@ export class ConfigError extends Error {
 // Calling at request time (not top-level) is intentional: Cloudflare Workers
 // inject secrets into process.env at runtime, not at module evaluation time.
 function assertConfigured(): { url: string; serviceRoleKey: string } {
-  const url = process.env.VITE_SUPABASE_URL ?? "";
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+  const url = getEnv("VITE_SUPABASE_URL") ?? "";
+  const serviceRoleKey = getEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
   const missing: string[] = [];
   if (!url || url.includes("YOUR_PROJECT")) missing.push("VITE_SUPABASE_URL");
