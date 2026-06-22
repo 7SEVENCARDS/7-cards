@@ -10,11 +10,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { fetchWithTimeout } from "./fetch-with-timeout";
+import { getEnv } from "./worker-env";
 
 const ONESIGNAL_API = "https://onesignal.com/api/v1";
 
 function getOneSignalHeaders() {
-  const restKey = process.env.ONESIGNAL_REST_API_KEY;
+  const restKey = getEnv("ONESIGNAL_REST_API_KEY");
   if (!restKey || restKey.includes("YOUR_")) {
     throw new Error("[OneSignal] ONESIGNAL_REST_API_KEY not configured");
   }
@@ -25,7 +26,7 @@ function getOneSignalHeaders() {
 }
 
 function getAppId(): string {
-  const appId = process.env.ONESIGNAL_APP_ID;
+  const appId = getEnv("ONESIGNAL_APP_ID");
   if (!appId || appId.includes("YOUR_")) {
     throw new Error("[OneSignal] ONESIGNAL_APP_ID not configured");
   }
@@ -58,7 +59,7 @@ export async function sendPushToUser(
         data: payload.data ?? {},
         ...(payload.url ? { url: payload.url } : {}),
         // Android specific
-        android_channel_id: process.env.ONESIGNAL_ANDROID_CHANNEL_ID,
+        android_channel_id: getEnv("ONESIGNAL_ANDROID_CHANNEL_ID"),
         // iOS specific — show badge count
         ios_badgeType: "Increase",
         ios_badgeCount: 1,
