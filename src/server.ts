@@ -231,23 +231,27 @@ export default {
 
     // ── Health check — shows config status without exposing secret values ──
     if (url.pathname === "/api/health") {
-      const cfg = {
+      // Critical: all must be present for 200. Optional: logged but won't cause 503.
+      const critical = {
         supabase:   !!(getEnv("VITE_SUPABASE_URL") && getEnv("SUPABASE_SERVICE_ROLE_KEY")),
         squadco:    !!getEnv("SQUADCO_SECRET_KEY"),
         reloadly:   !!(getEnv("RELOADLY_CLIENT_ID") && getEnv("RELOADLY_CLIENT_SECRET")),
         busha:      !!getEnv("BUSHA_API_KEY"),
         onesignal:  !!(getEnv("ONESIGNAL_APP_ID") && getEnv("ONESIGNAL_REST_API_KEY")),
-        telegram:   !!getEnv("TELEGRAM_BOT_TOKEN"),
         app_secret: !!getEnv("APP_SECRET"),
         cron:       !!getEnv("CRON_SECRET"),
       };
-      const allOk = Object.values(cfg).every(Boolean);
+      // Optional / placeholder credentials — present in some envs only.
+      const optional = {
+        telegram: !!getEnv("TELEGRAM_BOT_TOKEN"),
+      };
+      const allOk = Object.values(critical).every(Boolean);
       if (!allOk) {
-        const missing = Object.entries(cfg).filter(([, v]) => !v).map(([k]) => k);
-        console.warn("[Health] Missing secrets:", missing.join(", "));
+        const missing = Object.entries(critical).filter(([, v]) => !v).map(([k]) => k);
+        console.warn("[Health] Missing critical secrets:", missing.join(", "));
       }
       return addSecurityHeaders(
-        new Response(JSON.stringify({ ok: allOk, ts: Date.now(), config: cfg }), {
+        new Response(JSON.stringify({ ok: allOk, ts: Date.now(), critical, optional }), {
           status: allOk ? 200 : 503,
           headers: { "Content-Type": "application/json" },
         }),
