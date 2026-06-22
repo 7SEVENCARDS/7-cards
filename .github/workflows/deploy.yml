@@ -94,6 +94,34 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+
+      # ── Auto-generate APP_SECRET + CRON_SECRET on first deploy ──────────────
+      # If these secrets are not in the GitHub repo, generate them once with
+      # openssl, upload to Cloudflare Workers immediately, then save back to
+      # GitHub Secrets so every future deploy reuses the same stable values.
+      - name: Auto-generate APP_SECRET and CRON_SECRET (if missing)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_PAT }}
+          _APP_SECRET: ${{ secrets.APP_SECRET }}
+          _CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$_APP_SECRET" ]; then
+            APP_SECRET=$(openssl rand -hex 32)
+            echo "Generated new APP_SECRET"
+            printf '%s' "$APP_SECRET" | pnpm exec wrangler secret put APP_SECRET --env production
+            gh secret set APP_SECRET --body "$APP_SECRET" --repo ${{ github.repository }}
+            echo "✓ APP_SECRET saved to GitHub Secrets + Cloudflare"
+          fi
+          if [ -z "$_CRON_SECRET" ]; then
+            CRON_SECRET=$(openssl rand -hex 32)
+            echo "Generated new CRON_SECRET"
+            printf '%s' "$CRON_SECRET" | pnpm exec wrangler secret put CRON_SECRET --env production
+            gh secret set CRON_SECRET --body "$CRON_SECRET" --repo ${{ github.repository }}
+            echo "✓ CRON_SECRET saved to GitHub Secrets + Cloudflare"
+          fi
+
       # ── Upload runtime secrets to the production Worker ────────────────────
       # These are never baked into the build — they are injected at runtime by
       # Cloudflare Workers. Must be re-uploaded on every deploy so new secrets
