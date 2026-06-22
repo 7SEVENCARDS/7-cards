@@ -22,10 +22,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from "@supabase/supabase-js";
+import { getEnv } from "./worker-env";
 
 function getAdminDb() {
-  const url = process.env.VITE_SUPABASE_URL ?? "";
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+  const url = getEnv("VITE_SUPABASE_URL") ?? "";
+  const key = getEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 }
 
@@ -330,7 +331,7 @@ async function notifyAdminRateChange(
   }
 
   // Telegram alert to ADMIN_TELEGRAM_CHAT_ID if configured
-  const adminChatId = process.env.ADMIN_TELEGRAM_CHAT_ID;
+  const adminChatId = getEnv("ADMIN_TELEGRAM_CHAT_ID");
   if (adminChatId) {
     const { sendTelegramMessage } = await import("./telegram");
     await sendTelegramMessage(
