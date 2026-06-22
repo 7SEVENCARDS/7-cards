@@ -99,6 +99,35 @@ jobs:
       # If these secrets are not in the GitHub repo, generate them once with
       # openssl, upload to Cloudflare Workers immediately, then save back to
       # GitHub Secrets so every future deploy reuses the same stable values.
+      - name: Provision vendor.7evencards.xyz DNS record (CNAME, proxied)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          ZONE_ID=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/zones?name=7evencards.xyz" \
+            | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const z=JSON.parse(d.join(''));console.log(z.result[0]?.id||'')}catch{console.log('')} })")
+          if [ -z "$ZONE_ID" ]; then
+            echo "::warning::Could not get Cloudflare Zone ID — skipping vendor DNS"
+            exit 0
+          fi
+          echo "Zone ID: $ZONE_ID"
+          # Check if CNAME already exists
+          EXISTING=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=CNAME&name=vendor.7evencards.xyz" \
+            | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));console.log(r.result?.length>0?r.result[0].id:'')}catch{console.log('')} })")
+          if [ -n "$EXISTING" ]; then
+            echo "✓ vendor CNAME already exists (ID: $EXISTING) — skipping"
+          else
+            RESULT=$(curl -s -X POST \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
+              -d '{"type":"CNAME","name":"vendor","content":"7evencards.xyz","proxied":true,"ttl":1}' \
+              | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));console.log(r.success?'created:'+r.result.id:'err:'+JSON.stringify(r.errors))}catch{console.log('parse error')} })")
+            echo "vendor CNAME: $RESULT"
+          fi
+        continue-on-error: true
+
       - name: Auto-generate APP_SECRET and CRON_SECRET (if missing)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
