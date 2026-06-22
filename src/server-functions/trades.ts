@@ -175,6 +175,21 @@ export const submitCardBatch = createServerFn({ method: "POST" })
             },
           }).catch(() => {});
 
+          // Admin email — fire-and-forget, non-critical
+          import("../lib/email").then(async ({ sendAdminEmail, buildNewTradeEmailHtml }) => {
+            await sendAdminEmail({
+              subject: `🃏 New Trade: ${data.brand} ${Number(data.amountUsd).toFixed(2)} USD`,
+              html: buildNewTradeEmailHtml({
+                tradeId:   trade.id,
+                userId,
+                brand:     data.brand,
+                amountUsd: data.amountUsd,
+                amountNgn,
+                status:    needsReview ? "pending_review" : "verified",
+              }),
+            });
+          }).catch(() => {});
+
           if (!queued && !needsReview) {
             // P0-1 fix: Only dispatch when verified — never dispatch pending_review trades.
             const dispatchResult = await directDispatchToVendor({
@@ -333,7 +348,10 @@ export const createTrade = createServerFn({ method: "POST" })
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error("[Trades] createTrade DB error:", error.message);
+      throw new Error("Failed to create trade. Please try again.");
+    }
     return trade;
   });
 
@@ -354,7 +372,7 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
     // Verify the trade belongs to this user
     const { data: trade } = await db
       .from("trades")
-      .select("id, user_id, status")
+      .select("id, user_id, status, amount_ngn")
       .eq("id", data.tradeId)
       .single();
 
@@ -439,6 +457,21 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
           console.warn("[AuditLog] card_verified log failed (non-fatal):", e instanceof Error ? e.message : e);
         }
 
+        // Admin email — fire-and-forget, non-critical
+        import("../lib/email").then(async ({ sendAdminEmail, buildNewTradeEmailHtml }) => {
+          await sendAdminEmail({
+            subject: `🃏 New Trade: ${data.brand} ${Number(data.amountUsd).toFixed(2)} USD`,
+            html: buildNewTradeEmailHtml({
+              tradeId:   data.tradeId,
+              userId,
+              brand:     data.brand,
+              amountUsd: data.amountUsd,
+              amountNgn: Number((trade as { amount_ngn?: number }).amount_ngn ?? 0),
+              status:    needsReview ? "pending_review" : "verified",
+            }),
+          });
+        }).catch(() => {});
+
         // P0-1 fix: Only broadcast to vendors when NOT requiring manual review.
         // Pending-review trades enter the vendor pipeline only after admin approval.
         if (!needsReview) {
@@ -480,13 +513,14 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
+      console.error("[Trades] verifyGiftCard error:", msg);
 
       await db.from("trades").update({
         status: "invalid",
         failure_reason: "Verification service error",
       }).eq("id", data.tradeId);
 
-      return { success: false, reason: msg };
+      return { success: false, reason: "Card verification failed. Please check your card details and try again." };
     }
   });
 
@@ -520,7 +554,7 @@ export const processPayout = createServerFn({ method: "POST" })
       return { success: false, reason: "Your card is pending manual review by our team. You will be notified once it's approved and your payout can proceed." };
     }
     if (trade.status !== "verified") {
-      return { success: false, reason: `Trade is not verified (status: ${trade.status}).` };
+      return { success: false, reason: "This trade cannot be paid out yet — please complete verification or contact support." };
     }
 
     const amountNgn = Number(trade.amount_ngn);
@@ -623,12 +657,13 @@ export const processPayout = createServerFn({ method: "POST" })
 
         return { success: true, transactionRef: result.transactionRef };
       } else {
+        console.error("[Trades] processPayout Squad error:", result.message);
         await db.from("trades").update({
           status: "failed",
           failure_reason: result.message,
         }).eq("id", data.tradeId);
 
-        return { success: false, reason: result.message };
+        return { success: false, reason: "Payment transfer failed. Please contact support if this persists." };
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -739,6 +774,6 @@ export const getTradeStatus = createServerFn({ method: "GET" })
       .eq("user_id", userId)
       .single();
 
-    if (error) throw error;
+    if (error || !trade) return null;
     return trade;
   });
