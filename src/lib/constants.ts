@@ -19,6 +19,8 @@ export const APP_DOMAIN = "https://7evencards.xyz";
 
 /** Return the runtime app URL, falling back to the canonical domain. */
 export function getAppUrl(): string {
+  // VITE_APP_URL and APP_URL are in the build env so Vite inlines them
+  // correctly. The hardcoded APP_DOMAIN is the final fallback.
   return (
     process.env.VITE_APP_URL ??
     process.env.APP_URL ??
