@@ -260,14 +260,14 @@ export async function handleTelegramReply(opts: {
     return;
   }
 
-  // Fetch card code + pin from the trade
+  // Fetch card code, pin, and optional card image from the trade
   const { data: trade } = await db
     .from("trades")
-    .select("card_code, card_pin")
+    .select("card_code, card_pin, card_image_path")
     .eq("id", broadcast.trade_id)
-    .single() as { data: { card_code: string; card_pin: string | null } | null };
+    .single() as { data: { card_code: string; card_pin: string | null; card_image_path: string | null } | null };
 
-  const { buildCardAssignmentMessage } = await import("../lib/telegram");
+  const { buildCardAssignmentMessage, sendTelegramPhoto } = await import("../lib/telegram");
 
   // ── PILLAR 2: Record T_Exposure — the exact millisecond the card code lands ──
   // This timestamp is the forensic anchor: if the vendor later claims the card
@@ -275,21 +275,41 @@ export async function handleTelegramReply(opts: {
   // moment. T_Redeemed ≥ T_Exposure = FRAUD_CONFIRMED, zero ambiguity.
   const tExposureMs = Date.now();
 
-  // Send card details to the winner
-  await sendTelegramMessage(
-    opts.chatId,
-    buildCardAssignmentMessage({
-      vendorName,
-      brand: broadcast.brand,
-      amountUsd: Number(broadcast.amount_usd),
-      amountNgn: Number(broadcast.amount_ngn),
-      cardCode: trade?.card_code ?? "(contact admin)",
-      cardPin: trade?.card_pin ?? null,
-      assignmentId,
-      portalUrl: "https://7evencards.xyz",
-    }),
-    "HTML"
-  );
+  // Build the assignment message once (used as body or photo caption)
+  const cardMessage = buildCardAssignmentMessage({
+    vendorName,
+    brand: broadcast.brand,
+    amountUsd: Number(broadcast.amount_usd),
+    amountNgn: Number(broadcast.amount_ngn),
+    cardCode: trade?.card_code ?? "(contact admin)",
+    cardPin: trade?.card_pin ?? null,
+    assignmentId,
+    portalUrl: "https://7evencards.xyz",
+  });
+
+  // ── Send card image inline (if the user attached one) ────────────────────────
+  // Generate a 2-hour signed URL from the private card-images bucket and pass it
+  // to sendPhoto — Telegram downloads + caches the image and displays it in-chat
+  // alongside the code as a caption. If no image or delivery fails, fall back to
+  // the original text-only message so the vendor always gets their card code.
+  let cardSent = false;
+  if (trade?.card_image_path) {
+    const { data: signed } = await db.storage
+      .from("card-images")
+      .createSignedUrl(trade.card_image_path, 7200); // 2-hour window
+    if (signed?.signedUrl) {
+      const photoResult = await sendTelegramPhoto(opts.chatId, signed.signedUrl, cardMessage, "HTML");
+      cardSent = photoResult.ok;
+      if (!photoResult.ok) {
+        console.warn("[Broadcast] sendPhoto failed, falling back to text:", photoResult.error);
+      }
+    }
+  }
+
+  if (!cardSent) {
+    // No image uploaded, or Telegram photo delivery failed — text-only (original behaviour)
+    await sendTelegramMessage(opts.chatId, cardMessage, "HTML");
+  }
 
   // Persist T_Exposure onto the assignment immediately after message is sent
   await db.from("vendor_card_assignments").update({

@@ -82,6 +82,47 @@ export async function sendTelegramMessage(
   }
 }
 
+// ── Vendor bot: send photo with caption ───────────────────────────────────────
+// Used to deliver the card image inline when a vendor claims a trade.
+// Telegram downloads the image from `photoUrl`, caches it, and displays it in
+// the vendor's chat alongside the card details caption.
+// Caption limit: 1024 chars — buildCardAssignmentMessage output is ~350 chars.
+export async function sendTelegramPhoto(
+  chatId: string | number,
+  photoUrl: string,
+  caption: string,
+  parseMode: "HTML" | "Markdown" | "MarkdownV2" = "HTML",
+): Promise<{ ok: boolean; messageId?: number; error?: string }> {
+  const token = getVendorBotToken();
+  if (!token) return { ok: false, error: "TELEGRAM_BOT_TOKEN not set" };
+  // Telegram caps photo captions at 1024 chars.
+  const safeCaption = caption.length > 1024 ? caption.slice(0, 1020) + "…" : caption;
+  try {
+    const res = await fetchWithTimeout(`${TELEGRAM_API}/bot${token}/sendPhoto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id:    chatId,
+        photo:      photoUrl,
+        caption:    safeCaption,
+        parse_mode: parseMode,
+      }),
+    });
+    const data = (await res.json()) as {
+      ok: boolean;
+      result?: { message_id: number };
+      description?: string;
+    };
+    if (!data.ok) {
+      // Return failure — caller is responsible for falling back to sendTelegramMessage
+      return { ok: false, error: data.description };
+    }
+    return { ok: true, messageId: data.result?.message_id };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Network error" };
+  }
+}
+
 // ── Admin bot: send message with optional inline keyboard ─────────────────────
 export async function sendAdminBotMessage(
   chatId: string | number,
