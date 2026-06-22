@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { fetchWithTimeout } from "./fetch-with-timeout";
+import { getEnv } from "./worker-env";
 
 const BUSHA_BASE = "https://api.busha.co/v1";
 
@@ -13,7 +14,7 @@ const BUSHA_BASE = "https://api.busha.co/v1";
 export const COMPANY_SPREAD = 0.07;
 
 function getBushaHeaders() {
-  const apiKey = process.env.BUSHA_API_KEY;
+  const apiKey = getEnv("BUSHA_API_KEY");
 
   if (!apiKey || apiKey.includes("YOUR_")) {
     throw new Error("[Busha] BUSHA_API_KEY not configured");
