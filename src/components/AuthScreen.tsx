@@ -1,103 +1,90 @@
 import { useState } from "react";
-import { ShieldCheck, Phone, ArrowRight, RotateCcw } from "lucide-react";
+import { Mail, Lock, User, ArrowRight, Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import logoFullAsset from "../assets/logo-full.png.asset.json";
 
-type AuthStep = "phone" | "otp" | "name";
+type AuthMode = "signin" | "signup";
+type AuthStep = "credentials" | "name";
 
 interface AuthScreenProps {
   onAuthenticated: () => void;
 }
 
 export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
-  const [step, setStep] = useState<AuthStep>("phone");
-  const [phone, setPhone] = useState("");
-  const [otp, setOtp] = useState("");
+  const [mode, setMode] = useState<AuthMode>("signin");
+  const [step, setStep] = useState<AuthStep>("credentials");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const formatPhone = (raw: string) => {
-    const digits = raw.replace(/\D/g, "");
-    if (digits.startsWith("0")) return "+234" + digits.slice(1);
-    if (digits.startsWith("234")) return "+" + digits;
-    return "+" + digits;
+  const switchMode = (next: AuthMode) => {
+    setMode(next);
+    setError("");
+    setEmail("");
+    setPassword("");
+    setFullName("");
   };
 
-  const handleSendOTP = async () => {
+  const handleSignIn = async () => {
     setError("");
-    if (phone.replace(/\D/g, "").length < 10) {
-      setError("Enter a valid Nigerian phone number");
-      return;
-    }
+    if (!email.trim()) { setError("Enter your email address"); return; }
+    if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
     setLoading(true);
     try {
-      const { error: err } = await supabase.auth.signInWithOtp({
-        phone: formatPhone(phone),
-      });
+      const { error: err } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (err) throw err;
-      setStep("otp");
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to send OTP");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleVerifyOTP = async () => {
-    setError("");
-    if (otp.length < 6) {
-      setError("Enter the 6-digit code");
-      return;
-    }
-    setLoading(true);
-    try {
-      const { data, error: err } = await supabase.auth.verifyOtp({
-        phone: formatPhone(phone),
-        token: otp,
-        type: "sms",
-      });
-      if (err) throw err;
-      if (!data.session) throw new Error("No session returned");
-
-      // Check if profile has a name
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("full_name")
-        .eq("id", data.session.user.id)
-        .single();
-
-      if (!profile?.full_name) {
-        setStep("name");
-      } else {
-        onAuthenticated();
-      }
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Invalid OTP code");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSaveName = async () => {
-    setError("");
-    if (fullName.trim().length < 2) {
-      setError("Enter your full name");
-      return;
-    }
-    setLoading(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      await supabase
-        .from("profiles")
-        .update({ full_name: fullName.trim() })
-        .eq("id", user.id);
-
       onAuthenticated();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to save name");
+      const msg = e instanceof Error ? e.message : "Sign in failed";
+      setError(msg.includes("Invalid login") ? "Incorrect email or password" : msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSignUp = async () => {
+    setError("");
+    if (!email.trim()) { setError("Enter your email address"); return; }
+    if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
+    if (fullName.trim().length < 2) { setError("Enter your full name"); return; }
+    setLoading(true);
+    try {
+      const { data, error: err } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: { data: { full_name: fullName.trim() } },
+      });
+      if (err) throw err;
+      if (data.user) {
+        await supabase.from("profiles").upsert({
+          id: data.user.id,
+          full_name: fullName.trim(),
+        }, { onConflict: "id" });
+      }
+      onAuthenticated();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Sign up failed";
+      setError(msg.includes("already registered") ? "An account with this email already exists. Sign in instead." : msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email.trim()) { setError("Enter your email first, then click Forgot Password"); return; }
+    setLoading(true);
+    try {
+      const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (err) throw err;
+      setError("");
+      alert(`Password reset email sent to ${email.trim()}. Check your inbox.`);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to send reset email");
     } finally {
       setLoading(false);
     }
@@ -108,27 +95,23 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
       <div className="mx-auto w-full max-w-[480px] flex flex-col min-h-screen">
 
         {/* Hero */}
-        <div className="bg-gradient-hero px-6 pt-16 pb-12 rounded-b-[2.5rem] shadow-glow-jungle relative overflow-hidden flex-shrink-0">
+        <div className="bg-gradient-hero px-6 pt-14 pb-10 rounded-b-[2.5rem] shadow-glow-jungle relative overflow-hidden flex-shrink-0">
           <div className="absolute -right-16 -top-16 size-56 rounded-full bg-gold/10 blur-3xl" />
           <div className="absolute -left-8 bottom-0 size-40 rounded-full bg-cyan/10 blur-2xl" />
-
           <div className="relative">
             <img
               src={logoFullAsset.url}
               alt="7SEVEN CARDS"
-              className="h-10 object-contain"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = "none";
-              }}
+              className="h-9 object-contain"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
             />
-            <h1 className="text-3xl font-extrabold text-white mt-5 leading-tight">
+            <h1 className="text-3xl font-extrabold text-white mt-4 leading-tight">
               Verify Fast.<br />Get Paid Faster.
             </h1>
-            <p className="text-sm text-white/70 mt-2 font-medium">
+            <p className="text-sm text-white/70 mt-1.5 font-medium">
               Sell gift cards & crypto for Naira in under 5 minutes.
             </p>
-
-            <div className="mt-6 grid grid-cols-3 gap-3">
+            <div className="mt-5 grid grid-cols-3 gap-2.5">
               {[
                 { value: "₦0", label: "Fees" },
                 { value: "<5min", label: "Payout" },
@@ -143,124 +126,123 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           </div>
         </div>
 
+        {/* Mode toggle */}
+        <div className="px-6 pt-6">
+          <div className="bg-secondary rounded-2xl p-1 grid grid-cols-2 gap-1">
+            <button
+              onClick={() => switchMode("signin")}
+              className={`py-2.5 rounded-xl text-sm font-bold transition ${mode === "signin" ? "bg-card shadow text-foreground" : "text-muted-foreground"}`}
+            >
+              Sign In
+            </button>
+            <button
+              onClick={() => switchMode("signup")}
+              className={`py-2.5 rounded-xl text-sm font-bold transition ${mode === "signup" ? "bg-card shadow text-foreground" : "text-muted-foreground"}`}
+            >
+              Create Account
+            </button>
+          </div>
+        </div>
+
         {/* Form */}
-        <div className="flex-1 px-6 py-8 flex flex-col gap-5">
+        <div className="flex-1 px-6 pt-5 pb-8 flex flex-col gap-4">
 
-          {step === "phone" && (
-            <>
-              <div>
-                <p className="text-xs text-muted-foreground font-bold uppercase tracking-wider">Step 1 of 2</p>
-                <h2 className="text-xl font-extrabold mt-1">Enter your phone number</h2>
-                <p className="text-sm text-muted-foreground mt-1">We'll send you a verification code</p>
+          {/* Full name — sign up only */}
+          {mode === "signup" && (
+            <div className="bg-card rounded-2xl border border-border p-4 flex items-center gap-3">
+              <div className="size-10 rounded-xl bg-secondary grid place-items-center flex-shrink-0">
+                <User className="size-5 text-muted-foreground" />
               </div>
-
-              <div className="bg-card rounded-2xl border border-border p-4 flex items-center gap-3">
-                <div className="size-10 rounded-xl bg-secondary grid place-items-center flex-shrink-0">
-                  <Phone className="size-5 text-muted-foreground" />
-                </div>
-                <input
-                  type="tel"
-                  placeholder="08012345678"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSendOTP()}
-                  className="bg-transparent outline-none text-base font-semibold flex-1 placeholder:text-muted-foreground/50"
-                  inputMode="tel"
-                />
-              </div>
-
-              {error && (
-                <p className="text-sm text-pink font-semibold text-center">{error}</p>
-              )}
-
-              <button
-                onClick={handleSendOTP}
-                disabled={loading}
-                className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold active:scale-[0.99] transition disabled:opacity-60"
-              >
-                {loading ? "Sending…" : <>Send Code <ArrowRight className="size-5" /></>}
-              </button>
-            </>
+              <input
+                type="text"
+                placeholder="Full name"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                className="bg-transparent outline-none text-base font-semibold flex-1 placeholder:text-muted-foreground/50"
+                autoComplete="name"
+              />
+            </div>
           )}
 
-          {step === "otp" && (
-            <>
-              <div>
-                <p className="text-xs text-muted-foreground font-bold uppercase tracking-wider">Step 2 of 2</p>
-                <h2 className="text-xl font-extrabold mt-1">Enter verification code</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Sent to <span className="text-foreground font-semibold">{phone}</span>
-                </p>
-              </div>
+          {/* Email */}
+          <div className="bg-card rounded-2xl border border-border p-4 flex items-center gap-3">
+            <div className="size-10 rounded-xl bg-secondary grid place-items-center flex-shrink-0">
+              <Mail className="size-5 text-muted-foreground" />
+            </div>
+            <input
+              type="email"
+              placeholder="Email address"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && (mode === "signin" ? handleSignIn() : handleSignUp())}
+              className="bg-transparent outline-none text-base font-semibold flex-1 placeholder:text-muted-foreground/50"
+              autoComplete="email"
+              inputMode="email"
+            />
+          </div>
 
-              <div className="bg-card rounded-2xl border border-border p-4 flex items-center gap-3">
-                <input
-                  type="text"
-                  placeholder="123456"
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  onKeyDown={(e) => e.key === "Enter" && handleVerifyOTP()}
-                  className="bg-transparent outline-none text-3xl font-extrabold flex-1 tracking-[0.4em] placeholder:text-muted-foreground/30 placeholder:tracking-normal"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                />
-              </div>
+          {/* Password */}
+          <div className="bg-card rounded-2xl border border-border p-4 flex items-center gap-3">
+            <div className="size-10 rounded-xl bg-secondary grid place-items-center flex-shrink-0">
+              <Lock className="size-5 text-muted-foreground" />
+            </div>
+            <input
+              type={showPassword ? "text" : "password"}
+              placeholder="Password (min 6 chars)"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && (mode === "signin" ? handleSignIn() : handleSignUp())}
+              className="bg-transparent outline-none text-base font-semibold flex-1 placeholder:text-muted-foreground/50"
+              autoComplete={mode === "signin" ? "current-password" : "new-password"}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              className="text-muted-foreground flex-shrink-0"
+              tabIndex={-1}
+            >
+              {showPassword ? <EyeOff className="size-4.5" /> : <Eye className="size-4.5" />}
+            </button>
+          </div>
 
-              {error && (
-                <p className="text-sm text-pink font-semibold text-center">{error}</p>
-              )}
-
-              <button
-                onClick={handleVerifyOTP}
-                disabled={loading}
-                className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold active:scale-[0.99] transition disabled:opacity-60"
-              >
-                {loading ? "Verifying…" : <>Verify & Enter <ShieldCheck className="size-5" /></>}
-              </button>
-
-              <button
-                onClick={() => { setStep("phone"); setOtp(""); setError(""); }}
-                className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground font-semibold"
-              >
-                <RotateCcw className="size-3.5" /> Change number
-              </button>
-            </>
+          {/* Error */}
+          {error && (
+            <p className="text-sm text-pink font-semibold text-center px-2">{error}</p>
           )}
 
-          {step === "name" && (
-            <>
-              <div>
-                <h2 className="text-xl font-extrabold">What's your name?</h2>
-                <p className="text-sm text-muted-foreground mt-1">Used on your profile and payouts</p>
-              </div>
+          {/* CTA */}
+          <button
+            onClick={mode === "signin" ? handleSignIn : handleSignUp}
+            disabled={loading}
+            className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold active:scale-[0.99] transition disabled:opacity-60"
+          >
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <span className="size-4 border-2 border-jungle-deep/30 border-t-jungle-deep rounded-full animate-spin" />
+                {mode === "signin" ? "Signing in…" : "Creating account…"}
+              </span>
+            ) : mode === "signin" ? (
+              <><ShieldCheck className="size-5" /> Sign In</>
+            ) : (
+              <>Create Account <ArrowRight className="size-5" /></>
+            )}
+          </button>
 
-              <div className="bg-card rounded-2xl border border-border p-4">
-                <input
-                  type="text"
-                  placeholder="Tunde Adebayo"
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSaveName()}
-                  className="bg-transparent outline-none text-base font-semibold w-full placeholder:text-muted-foreground/50"
-                />
-              </div>
-
-              {error && (
-                <p className="text-sm text-pink font-semibold text-center">{error}</p>
-              )}
-
-              <button
-                onClick={handleSaveName}
-                disabled={loading}
-                className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold active:scale-[0.99] transition disabled:opacity-60"
-              >
-                {loading ? "Saving…" : <>Let's Go <ArrowRight className="size-5" /></>}
-              </button>
-            </>
+          {/* Forgot password */}
+          {mode === "signin" && (
+            <button
+              onClick={handleForgotPassword}
+              disabled={loading}
+              className="text-xs text-muted-foreground font-semibold text-center hover:text-foreground transition"
+            >
+              Forgot password?
+            </button>
           )}
 
-          <p className="text-center text-[11px] text-muted-foreground mt-auto pt-4">
-            By continuing you agree to our <a href="/terms" className="underline underline-offset-2">Terms of Service</a> and <a href="/privacy" className="underline underline-offset-2">Privacy Policy</a>.
+          <p className="text-center text-[11px] text-muted-foreground mt-auto pt-2">
+            By continuing you agree to our{" "}
+            <a href="/terms" className="underline underline-offset-2">Terms of Service</a> and{" "}
+            <a href="/privacy" className="underline underline-offset-2">Privacy Policy</a>.
             <br />7SEVEN CARDS · Built for Africa 🌍
           </p>
         </div>
