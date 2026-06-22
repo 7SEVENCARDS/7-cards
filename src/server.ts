@@ -176,6 +176,19 @@ export default {
 
     // vendor.7evencards.xyz → rewrite pathname to /vendor/*
     if (url.hostname === "vendor.7evencards.xyz") {
+      if (!allow(rlKey("global", ip), 300, 60_000)) {
+        return addSecurityHeaders(tooManyRequests(60), requestId);
+      }
+      if (
+        request.method === "POST" ||
+        request.method === "PUT" ||
+        request.method === "PATCH"
+      ) {
+        const contentLength = request.headers.get("content-length");
+        if (contentLength && Number(contentLength) > MAX_BODY_BYTES) {
+          return addSecurityHeaders(bodyTooLarge(), requestId);
+        }
+      }
       const rewritten = new URL(request.url);
       rewritten.hostname = "7evencards.xyz";
       if (!rewritten.pathname.startsWith("/vendor")) {
@@ -188,14 +201,11 @@ export default {
         body: request.body ?? undefined,
         redirect: "manual",
       });
-      if (!allow(rlKey("global", ip), 300, 60_000)) {
-        return addSecurityHeaders(tooManyRequests(60));
-      }
       try {
         const handler = await getServerEntry();
         const response = await handler.fetch(rewrittenReq, env, ctx);
         const normalized = await normalizeCatastrophicSsrResponse(response);
-        return addSecurityHeaders(normalized);
+        return addSecurityHeaders(normalized, requestId);
       } catch (error) {
         console.error(error);
         return addSecurityHeaders(
@@ -203,12 +213,13 @@ export default {
             status: 500,
             headers: { "content-type": "text/html; charset=utf-8" },
           }),
+          requestId,
         );
       }
     }
 
     if (!allow(rlKey("global", ip), 300, 60_000)) {
-      return addSecurityHeaders(tooManyRequests(60));
+      return addSecurityHeaders(tooManyRequests(60), requestId);
     }
 
     if (
@@ -218,7 +229,7 @@ export default {
     ) {
       const contentLength = request.headers.get("content-length");
       if (contentLength && Number(contentLength) > MAX_BODY_BYTES) {
-        return addSecurityHeaders(bodyTooLarge());
+        return addSecurityHeaders(bodyTooLarge(), requestId);
       }
     }
 
@@ -230,29 +241,29 @@ export default {
         url.pathname === "/api/webhooks/squadco/payment"
       ) {
         if (!allow(rlKey("webhook", ip), 120, 60_000)) {
-          return addSecurityHeaders(tooManyRequests(60));
+          return addSecurityHeaders(tooManyRequests(60), requestId);
         }
         const handler =
           url.pathname === "/api/webhooks/squadco/payout"
             ? handleSquadPayoutWebhook
             : handleSquadPaymentWebhook;
-        return addSecurityHeaders(await handler(request));
+        return addSecurityHeaders(await handler(request), requestId);
       }
 
       // Vendor Telegram webhook — must return 200 fast; processing is async inside handler
       if (url.pathname === "/api/webhooks/telegram") {
         if (!allow(rlKey("telegram_webhook", ip), 200, 60_000)) {
-          return addSecurityHeaders(tooManyRequests(30));
+          return addSecurityHeaders(tooManyRequests(30), requestId);
         }
-        return addSecurityHeaders(await handleTelegramWebhook(request));
+        return addSecurityHeaders(await handleTelegramWebhook(request), requestId);
       }
 
       // Admin Telegram bot webhook — inline buttons, link codes, support replies
       if (url.pathname === "/api/webhooks/telegram-admin") {
         if (!allow(rlKey("telegram_admin_webhook", ip), 200, 60_000)) {
-          return addSecurityHeaders(tooManyRequests(30));
+          return addSecurityHeaders(tooManyRequests(30), requestId);
         }
-        return addSecurityHeaders(await handleAdminTelegramWebhook(request));
+        return addSecurityHeaders(await handleAdminTelegramWebhook(request), requestId);
       }
 
       // ── Cron: vendor rate-check (every 6 hours via external scheduler) ──────
@@ -268,7 +279,8 @@ export default {
             new Response(JSON.stringify({ error: "Unauthorized" }), {
               status: 401,
               headers: { "Content-Type": "application/json" },
-            })
+            }),
+            requestId,
           );
         }
         // waitUntil keeps the Worker alive until cronWork settles even after we respond.
@@ -282,7 +294,8 @@ export default {
         return addSecurityHeaders(
           new Response(JSON.stringify({ ok: true, started: true }), {
             headers: { "Content-Type": "application/json" },
-          })
+          }),
+          requestId,
         );
       }
     }
@@ -316,6 +329,7 @@ export default {
           status: allOk ? 200 : 503,
           headers: { "Content-Type": "application/json" },
         }),
+        requestId,
       );
     }
 
@@ -324,7 +338,7 @@ export default {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       const normalized = await normalizeCatastrophicSsrResponse(response);
-      return addSecurityHeaders(normalized);
+      return addSecurityHeaders(normalized, requestId);
     } catch (error) {
       console.error(error);
       return addSecurityHeaders(
@@ -332,6 +346,7 @@ export default {
           status: 500,
           headers: { "content-type": "text/html; charset=utf-8" },
         }),
+        requestId,
       );
     }
   },
