@@ -74,6 +74,7 @@ type ActiveSell = {
   brand: string;
   amountUsd: string;
   rate: number;
+  region: string;
 };
 
 /* ─────────────────────────────────── APP ─────────────────────────────────── */
@@ -171,9 +172,10 @@ function App() {
       const trade = await createTrade({
         data: {
           type: "gift_card",
-          brand: activeSell.brand,
-          amountUsd: Number(activeSell.amountUsd),
+          brand:        activeSell.brand,
+          amountUsd:    Number(activeSell.amountUsd),
           exchangeRate: activeSell.rate,
+          region:       activeSell.region ?? "US",
         },
       });
       setActiveTradeId((trade as {id:string}).id);
@@ -202,6 +204,7 @@ function App() {
           brand:        activeSell.brand,
           amountUsd:    Number(activeSell.amountUsd),
           exchangeRate: activeSell.rate,
+          region:       activeSell.region ?? "US",
         },
       }) as {
         batchId:       string;
@@ -262,8 +265,8 @@ function App() {
         )}
         {tab === "sell" && (
           <SellScreen
-            onVerify={(brand, amountUsd, rate) => {
-              setActiveSell({ brand, amountUsd, rate });
+            onVerify={(brand, amountUsd, rate, region) => {
+              setActiveSell({ brand, amountUsd, rate, region: region ?? "US" });
               setTab("code");
             }}
             rates={rates as RateData[]}
@@ -419,7 +422,7 @@ type TradeRow = {
   id: string; type: string; brand: string | null; amount_usd: number | null;
   amount_ngn: number | null; status: string; created_at: string;
 };
-type RateData = { brand: string; rate_per_dollar: number; trend: string };
+type RateData = { brand: string; rate_per_dollar: number; trend: string; region?: string };
 type XPData = {
   totalXp: number; weeklyXp: number; level: number;
   streakDays: number; tradeCount: number; weeklyRank: number; allTimeRank: number;
@@ -439,6 +442,7 @@ type ProfileData = {
 const BRAND_EMOJI: Record<string, string> = {
   Apple: "🍎", Amazon: "📦", Steam: "🎮", "Google Play": "▶️",
   Xbox: "🟢", PlayStation: "🎯", Netflix: "🎬", Spotify: "🎵",
+  "Razer Gold": "🟡", Sephora: "💄", Nordstrom: "🛍️",
 };
 
 function timeAgo(iso: string): string {
@@ -682,6 +686,53 @@ function TxRow({ icon: Icon, title, sub, amount, color, status }: {
 
 /* ─────────────────────────────────── SELL ─────────────────────────────────── */
 
+const REGION_CONFIG = {
+  US: { name: "United States", flag: "🇺🇸", symbol: "$",   code: "USD", forexMultiplier: 1.000, quickAmounts: ["25","50","100","200"] },
+  UK: { name: "United Kingdom", flag: "🇬🇧", symbol: "£",   code: "GBP", forexMultiplier: 1.270, quickAmounts: ["10","25","50","100"] },
+  EU: { name: "Eurozone",       flag: "🇪🇺", symbol: "€",   code: "EUR", forexMultiplier: 1.080, quickAmounts: ["10","25","50","100"] },
+  CA: { name: "Canada",         flag: "🇨🇦", symbol: "C$",  code: "CAD", forexMultiplier: 0.740, quickAmounts: ["25","50","100","200"] },
+} as const;
+type Region = keyof typeof REGION_CONFIG;
+
+const REGION_BRANDS: Record<Region, Array<{ name: string; emoji: string }>> = {
+  US: [
+    { name: "Apple",       emoji: "🍎" },
+    { name: "Steam",       emoji: "🎮" },
+    { name: "Amazon",      emoji: "📦" },
+    { name: "Google Play", emoji: "▶️"  },
+    { name: "Xbox",        emoji: "🟢" },
+    { name: "PlayStation", emoji: "🎯" },
+    { name: "Netflix",     emoji: "🎬" },
+    { name: "Spotify",     emoji: "🎵" },
+    { name: "Razer Gold",  emoji: "🟡" },
+    { name: "Sephora",     emoji: "💄" },
+    { name: "Nordstrom",   emoji: "🛍️" },
+  ],
+  UK: [
+    { name: "Google Play", emoji: "▶️"  },
+    { name: "Steam",       emoji: "🎮" },
+    { name: "Amazon",      emoji: "📦" },
+    { name: "Apple",       emoji: "🍎" },
+    { name: "Netflix",     emoji: "🎬" },
+    { name: "Spotify",     emoji: "🎵" },
+  ],
+  EU: [
+    { name: "Steam",       emoji: "🎮" },
+    { name: "Google Play", emoji: "▶️"  },
+    { name: "Amazon",      emoji: "📦" },
+    { name: "Apple",       emoji: "🍎" },
+  ],
+  CA: [
+    { name: "Apple",       emoji: "🍎" },
+    { name: "Amazon",      emoji: "📦" },
+    { name: "Steam",       emoji: "🎮" },
+    { name: "Google Play", emoji: "▶️"  },
+    { name: "Xbox",        emoji: "🟢" },
+    { name: "PlayStation", emoji: "🎯" },
+    { name: "Spotify",     emoji: "🎵" },
+  ],
+};
+
 const TIER_LIMITS = {
   unverified:    200,
   email_verified: 500,
@@ -696,44 +747,44 @@ function SellScreen({
   emailVerified,
   onNavigateKYC,
 }: {
-  onVerify: (brand: string, amountUsd: string, rate: number) => void;
+  onVerify: (brand: string, amountUsd: string, rate: number, region: string) => void;
   rates: RateData[];
   kycStatus?: string;
   emailVerified?: boolean;
   onNavigateKYC?: () => void;
 }) {
-  const brands = [
-    { name: "Apple",       emoji: "🍎" },
-    { name: "Amazon",      emoji: "📦" },
-    { name: "Steam",       emoji: "🎮" },
-    { name: "Google Play", emoji: "▶️" },
-    { name: "Xbox",        emoji: "🟢" },
-    { name: "PlayStation", emoji: "🎯" },
-    { name: "Netflix",     emoji: "🎬" },
-    { name: "Spotify",     emoji: "🎵" },
-  ];
-
+  const [region, setRegion] = useState<Region>("US");
   const [selected, setSelected] = useState("Apple");
-  const [amount, setAmount] = useState("100");
+  const [amount, setAmount] = useState("50");
+
+  const { symbol, code, forexMultiplier, quickAmounts } = REGION_CONFIG[region];
+  const brands = REGION_BRANDS[region];
+
+  const handleRegionChange = (r: Region) => {
+    setRegion(r);
+    setSelected(REGION_BRANDS[r][0].name);
+    setAmount(REGION_CONFIG[r].quickAmounts[1]);
+  };
 
   const isKycVerified = kycStatus === "verified";
   const tier = isKycVerified ? "kyc_verified" : emailVerified ? "email_verified" : "unverified";
   const limitUsd = TIER_LIMITS[tier];
   const amountNum = Number(amount || 0);
-  const overLimit = amountNum > limitUsd;
+  const amountUsdEquiv = amountNum * forexMultiplier;
+  const overLimit = amountUsdEquiv > limitUsd;
 
-  const currentRate = useMemo(() => {
-    const r = rates.find((r) => r.brand === selected);
+  const baseRate = useMemo(() => {
+    const r = rates.find((r) => r.brand === selected && r.region === region) ??
+              rates.find((r) => r.brand === selected);
     return Number(r?.rate_per_dollar ?? 1485);
-  }, [selected, rates]);
+  }, [selected, rates, region]);
 
-  const naira = useMemo(() => {
-    const n = Number(amount || 0);
-    return (n * currentRate).toLocaleString();
-  }, [amount, currentRate]);
+  const currentRate = useMemo(() => Math.round(baseRate * forexMultiplier), [baseRate, forexMultiplier]);
+
+  const naira = useMemo(() => (amountNum * currentRate).toLocaleString(), [amountNum, currentRate]);
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col pb-8">
       <header className="px-5 pt-12 pb-4">
         <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">Step 1 of 3</p>
         <h1 className="text-2xl font-extrabold mt-1">Sell a Gift Card</h1>
@@ -775,8 +826,38 @@ function SellScreen({
         <div className="h-1.5 flex-1 rounded-full bg-secondary" />
       </div>
 
+      {/* Region selector */}
+      <div className="px-5 mt-5">
+        <h3 className="text-sm font-bold mb-3">Card Region</h3>
+        <div className="grid grid-cols-4 gap-2">
+          {(Object.keys(REGION_CONFIG) as Region[]).map((key) => {
+            const cfg = REGION_CONFIG[key];
+            return (
+              <button
+                key={key}
+                onClick={() => handleRegionChange(key)}
+                className={`flex flex-col items-center gap-1 py-2.5 rounded-2xl border-2 transition ${
+                  region === key
+                    ? "border-gold bg-gold/10 shadow-glow-gold"
+                    : "border-border bg-card"
+                }`}
+              >
+                <span className="text-xl">{cfg.flag}</span>
+                <span className={`text-[10px] font-bold ${region === key ? "text-gold" : "text-muted-foreground"}`}>{key}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-[11px] text-muted-foreground text-center">
+          {REGION_CONFIG[region].name} · {code}
+          {region !== "US" && (
+            <span className="ml-1 text-gold font-semibold">· ₦{currentRate.toLocaleString()}/{symbol}1</span>
+          )}
+        </p>
+      </div>
+
       {/* Brand selector */}
-      <div className="mt-6 px-5">
+      <div className="mt-4 px-5">
         <h3 className="text-sm font-bold mb-3">Choose Brand</h3>
         <div className="grid grid-cols-4 gap-3">
           {brands.map((b) => {
@@ -798,20 +879,22 @@ function SellScreen({
       </div>
 
       {/* Amount */}
-      <div className="px-5 mt-6">
-        <h3 className="text-sm font-bold mb-3">Card Value (USD)</h3>
+      <div className="px-5 mt-5">
+        <h3 className="text-sm font-bold mb-3">Card Value ({code})</h3>
         <div className="bg-card rounded-2xl p-5 border border-border">
           <div className="flex items-center gap-2">
-            <span className="text-3xl font-extrabold text-muted-foreground">$</span>
+            <span className="text-3xl font-extrabold text-muted-foreground">{symbol}</span>
             <input
               type="number"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               className="bg-transparent outline-none text-4xl font-extrabold flex-1 min-w-0"
+              inputMode="decimal"
+              min="1"
             />
           </div>
-          <div className="mt-3 flex gap-2">
-            {["25", "50", "100", "200", "500"].map((a) => (
+          <div className="mt-3 flex gap-2 flex-wrap">
+            {quickAmounts.map((a) => (
               <button
                 key={a}
                 onClick={() => setAmount(a)}
@@ -819,7 +902,7 @@ function SellScreen({
                   amount === a ? "bg-gold text-jungle-deep border-gold" : "bg-secondary border-border text-muted-foreground"
                 }`}
               >
-                ${a}
+                {symbol}{a}
               </button>
             ))}
           </div>
@@ -834,8 +917,10 @@ function SellScreen({
           </div>
           <p className="text-xs text-white/70 font-medium">You will receive</p>
           <h2 className="text-4xl font-extrabold text-white mt-1 tracking-tight">₦ {naira}</h2>
-          <p className="text-xs text-white/60 mt-1">@ ₦{currentRate.toLocaleString()} / $1</p>
-
+          <p className="text-xs text-white/60 mt-1">
+            @ ₦{currentRate.toLocaleString()} / {symbol}1
+            {region !== "US" && ` · ₦${baseRate.toLocaleString()}/$`}
+          </p>
           <div className="mt-5 grid grid-cols-3 gap-3 pt-4 border-t border-white/10">
             <Stat label="Fee" value="0%" hint="Today" />
             <Stat label="Speed" value="<5min" hint="Guaranteed" />
@@ -849,7 +934,7 @@ function SellScreen({
         {overLimit ? (
           <div className="space-y-2">
             <div className="bg-red-500/10 border border-red-500/30 rounded-2xl px-4 py-3 text-xs text-red-400 font-semibold text-center">
-              ${limitUsd} max per trade at your current verification level
+              ${limitUsd} per-trade limit · ≈ {symbol}{Math.round(limitUsd / forexMultiplier)} {code}
             </div>
             {!emailVerified ? (
               <button
@@ -867,15 +952,15 @@ function SellScreen({
               </button>
             ) : null}
             <button
-              onClick={() => setAmount(String(limitUsd))}
+              onClick={() => setAmount(String(Math.round(limitUsd / forexMultiplier)))}
               className="w-full bg-card border border-border text-foreground font-semibold py-3 rounded-2xl text-sm"
             >
-              Reduce to ${limitUsd} and continue
+              Reduce to {symbol}{Math.round(limitUsd / forexMultiplier)} and continue
             </button>
           </div>
         ) : (
           <button
-            onClick={() => onVerify(selected, amount, currentRate)}
+            onClick={() => onVerify(selected, String(Math.round(amountUsdEquiv * 100) / 100), baseRate, region)}
             disabled={amountNum <= 0}
             className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-glow-gold active:scale-[0.99] transition disabled:opacity-50"
           >

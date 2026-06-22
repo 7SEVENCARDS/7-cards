@@ -2,6 +2,13 @@ import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
 
+// ─── Input whitelists (server-side) ──────────────────────────────────────────
+const ALLOWED_BRANDS = new Set([
+  "Apple","Amazon","Steam","Google Play","Xbox","PlayStation","Netflix","Spotify",
+  "Razer Gold","Sephora","Nordstrom",
+]);
+const ALLOWED_REGIONS = new Set(["US","UK","EU","CA"]);
+
 // ─── Submit a batch of cards (multi-card risk distribution) ──────────────────
 // Each card is an independent trade. Cards are distributed across different
 // vendors using round-robin rotation so no single vendor sees more than one
@@ -12,15 +19,25 @@ import { requireUser } from "../lib/auth-server";
 // dispatched one at a time as each preceding card is processed.
 export const submitCardBatch = createServerFn({ method: "POST" })
   .validator((d: {
-    cards:        Array<{ cardCode: string; cardPin?: string }>;
-    brand:        string;
-    amountUsd:    number;
-    exchangeRate: number;
+    cards:         Array<{ cardCode: string; cardPin?: string }>;
+    brand:         string;
+    amountUsd:     number;
+    exchangeRate:  number;
     payoutMethod?: "bank" | "wallet";
+    region?:       string;
   }) => d)
   .handler(async ({ data }) => {
     if (!data.cards.length || data.cards.length > 10) {
       throw new Error("Batch must have 1–10 cards");
+    }
+
+    // Validate brand and region
+    if (!ALLOWED_BRANDS.has(data.brand)) {
+      throw new Error(`Unrecognised brand: ${data.brand}`);
+    }
+    const region = data.region ?? "US";
+    if (!ALLOWED_REGIONS.has(region)) {
+      throw new Error(`Unrecognised region: ${region}`);
     }
 
     const userId = await requireUser();
@@ -106,6 +123,7 @@ export const submitCardBatch = createServerFn({ method: "POST" })
           user_id:           userId,
           type:              "gift_card",
           brand:             data.brand,
+          region:            region,
           amount_usd:        data.amountUsd,
           amount_ngn:        amountNgn,
           exchange_rate:     data.exchangeRate,
@@ -269,6 +287,7 @@ export const createTrade = createServerFn({ method: "POST" })
     brand: string;
     amountUsd: number;
     exchangeRate: number;
+    region?: string;
   }) => d)
   .handler(async ({ data }) => {
     const userId = await requireUser();
@@ -288,18 +307,28 @@ export const createTrade = createServerFn({ method: "POST" })
       throw new Error(msgs[tier] ?? `Amount exceeds your $${perTradeLimitUsd} per-trade limit.`);
     }
 
+    // Validate brand and region against whitelist
+    if (data.type === "gift_card" && !ALLOWED_BRANDS.has(data.brand)) {
+      throw new Error(`Unrecognised brand: ${data.brand}`);
+    }
+    const region = data.region ?? "US";
+    if (!ALLOWED_REGIONS.has(region)) {
+      throw new Error(`Unrecognised region: ${region}`);
+    }
+
     const amountNgn = Math.round(data.amountUsd * data.exchangeRate);
 
     const { data: trade, error } = await db
       .from("trades")
       .insert({
-        user_id: userId,
-        type: data.type,
-        brand: data.brand,
-        amount_usd: data.amountUsd,
-        amount_ngn: amountNgn,
+        user_id:       userId,
+        type:          data.type,
+        brand:         data.brand,
+        amount_usd:    data.amountUsd,
+        amount_ngn:    amountNgn,
         exchange_rate: data.exchangeRate,
-        status: "pending",
+        status:        "pending",
+        region,
       })
       .select()
       .single();
