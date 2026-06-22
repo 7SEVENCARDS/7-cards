@@ -118,7 +118,7 @@ export const getSupportTicket = createServerFn({ method: "GET" })
     }
   });
 
-// ─── Send support message (Telegram-forwarded) ────────────────────────────────
+// ─── Send support message (Telegram-forwarded + email notification) ───────────
 export const sendSupportMessage = createServerFn({ method: "POST" })
   .validator((d: { body: string; category?: string }) => d)
   .handler(async ({ data }) => {
@@ -166,8 +166,8 @@ export const sendSupportMessage = createServerFn({ method: "POST" })
         ...(ticketId ? { ticket_id: ticketId } : {}),
       });
 
-      // Forward to Telegram support group (fire-and-forget)
       if (ticketId) {
+        // Forward to Telegram support group (fire-and-forget)
         forwardToTelegramSupport({
           ticketId,
           userId,
@@ -178,6 +178,22 @@ export const sendSupportMessage = createServerFn({ method: "POST" })
         }).catch(e =>
           console.error("[Support] forwardToTelegramSupport failed:", e instanceof Error ? e.message : e)
         );
+
+        // Email fallback — fires alongside Telegram for redundancy
+        const capturedTicketId = ticketId;
+        import("../lib/email").then(async ({ sendAdminEmail, buildSupportTicketEmailHtml }) => {
+          await sendAdminEmail({
+            subject: `[7SEVEN CARDS] New Support Ticket${isPremium ? " ⭐ PRO" : ""} — ${data.category ?? "General"}`,
+            html: buildSupportTicketEmailHtml({
+              ticketId: capturedTicketId,
+              userId,
+              userName: fullName,
+              category: data.category ?? null,
+              body: data.body,
+              isPremium,
+            }),
+          });
+        }).catch(() => {});
       }
 
       // Immediate acknowledgment reply
@@ -216,8 +232,6 @@ export const getUnreadSupportCount = createServerFn({ method: "GET" })
   });
 
 // ─── Admin: reply to support ticket (called by admin-telegram-webhook.ts) ─────
-// This is the internal function — admin Telegram bot calls this directly
-// after parsing /reply <ticketId> <message> from the support group.
 export async function adminReplyToTicket(ticketId: string, replyBody: string, adminId: string): Promise<boolean> {
   try {
     const { createClient } = await import("@supabase/supabase-js");
