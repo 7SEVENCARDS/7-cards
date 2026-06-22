@@ -16,10 +16,11 @@ import { createServerFn } from "@tanstack/react-start";
 import { getAppUrl } from "../lib/constants";
 import { requireVendorAuth } from "../lib/auth-server";
 import { getServerSupabase } from "../lib/supabase.server";
+import { getEnv } from "../lib/worker-env";
 
 function getAdminDb() {
-  const url = process.env.VITE_SUPABASE_URL ?? "";
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+  const url = getEnv("VITE_SUPABASE_URL") ?? "";
+  const key = getEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 }
 
@@ -345,8 +346,8 @@ async function provisionAssignmentVAN(
     tradeId: string;
   }
 ): Promise<void> {
-  const squadKey = process.env.SQUADCO_SECRET_KEY ?? "";
-  const env = process.env.SQUADCO_ENV === "production" ? "api-d" : "sandbox-api-d";
+  const squadKey = getEnv("SQUADCO_SECRET_KEY") ?? "";
+  const env = getEnv("SQUADCO_ENV") === "production" ? "api-d" : "sandbox-api-d";
   const customerRef = `7S-VAN-${opts.assignmentId.slice(0, 8)}-${Date.now()}`;
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
 
@@ -613,8 +614,8 @@ export async function directDispatchToVendor(opts: {
   try {
     const { createClient } = await import("@supabase/supabase-js");
     const db = createClient(
-      process.env.VITE_SUPABASE_URL ?? "",
-      process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+      getEnv("VITE_SUPABASE_URL") ?? "",
+      getEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "",
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
     const { sendTelegramMessage, isTelegramConfigured } = await import("../lib/telegram");
@@ -697,7 +698,7 @@ export const adminRegisterTelegramWebhook = createServerFn({ method: "POST" })
     const { requireAdmin } = await import("../lib/auth-server");
     await requireAdmin();
     const { registerTelegramWebhook } = await import("../lib/telegram");
-    const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    const secret = getEnv("TELEGRAM_WEBHOOK_SECRET");
     const ok = await registerTelegramWebhook(data.webhookUrl, secret);
     return { ok };
   });
