@@ -11,6 +11,51 @@ import {
 import { handleAdminTelegramWebhook } from "./server-functions/admin-telegram-webhook";
 import { allow, clientIp, rlKey } from "./lib/rate-limiter";
 
+// ─── Startup validation — runs once on first Worker invocation ───────────────
+// Logs missing secrets as structured error lines so they appear in Cloudflare
+// Logs & Workers Analytics without exposing the actual secret values.
+const CRITICAL_SECRETS = [
+  "VITE_SUPABASE_URL",
+  "VITE_SUPABASE_ANON_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "SQUADCO_SECRET_KEY",
+  "RELOADLY_CLIENT_ID",
+  "RELOADLY_CLIENT_SECRET",
+  "BUSHA_API_KEY",
+  "ONESIGNAL_APP_ID",
+  "ONESIGNAL_REST_API_KEY",
+  "APP_SECRET",
+  "CRON_SECRET",
+] as const;
+
+const OPTIONAL_SECRETS = [
+  "TELEGRAM_BOT_TOKEN",
+  "ADMIN_TELEGRAM_BOT_TOKEN",
+  "RESEND_API_KEY",
+  "DOJAH_APP_ID",
+  "DOJAH_SECRET_KEY",
+] as const;
+
+let startupChecked = false;
+function runStartupValidation(): void {
+  if (startupChecked) return;
+  startupChecked = true;
+  const missing = CRITICAL_SECRETS.filter((k) => !getEnv(k));
+  const missingOptional = OPTIONAL_SECRETS.filter((k) => !getEnv(k));
+  if (missing.length > 0) {
+    console.error(
+      `[7SEVEN][STARTUP][CRITICAL] ${missing.length} required secret(s) missing — platform may not function: ${missing.join(", ")}`,
+    );
+  } else {
+    console.info("[7SEVEN][STARTUP] All critical secrets present ✅");
+  }
+  if (missingOptional.length > 0) {
+    console.warn(
+      `[7SEVEN][STARTUP][OPTIONAL] Features degraded — missing: ${missingOptional.join(", ")}`,
+    );
+  }
+}
+
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
 };
@@ -63,6 +108,11 @@ function addSecurityHeaders(res: Response): Response {
   h.set("Referrer-Policy", "strict-origin-when-cross-origin");
   h.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   h.set("X-XSS-Protection", "1; mode=block");
+  // HSTS: force HTTPS for 1 year, include all subdomains, enable preload list
+  h.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+  // Prevent information leakage via Cross-Origin APIs
+  h.set("Cross-Origin-Opener-Policy", "same-origin");
+  h.set("Cross-Origin-Resource-Policy", "same-origin");
   h.set(
     "Content-Security-Policy",
     [
@@ -104,6 +154,8 @@ export default {
     // Vite/Nitro inlines process.env.X at build time, so process.env is
     // unreliable for secrets — use getEnv() everywhere instead.
     initWorkerEnv(env);
+    // Fail-fast on first request if critical secrets are absent.
+    runStartupValidation();
 
     const url = new URL(request.url);
     const ip = clientIp(request);
@@ -233,17 +285,20 @@ export default {
     if (url.pathname === "/api/health") {
       // Critical: all must be present for 200. Optional: logged but won't cause 503.
       const critical = {
-        supabase:   !!(getEnv("VITE_SUPABASE_URL") && getEnv("SUPABASE_SERVICE_ROLE_KEY")),
-        squadco:    !!getEnv("SQUADCO_SECRET_KEY"),
-        reloadly:   !!(getEnv("RELOADLY_CLIENT_ID") && getEnv("RELOADLY_CLIENT_SECRET")),
-        busha:      !!getEnv("BUSHA_API_KEY"),
-        onesignal:  !!(getEnv("ONESIGNAL_APP_ID") && getEnv("ONESIGNAL_REST_API_KEY")),
-        app_secret: !!getEnv("APP_SECRET"),
-        cron:       !!getEnv("CRON_SECRET"),
+        supabase:        !!(getEnv("VITE_SUPABASE_URL") && getEnv("VITE_SUPABASE_ANON_KEY") && getEnv("SUPABASE_SERVICE_ROLE_KEY")),
+        squadco:         !!getEnv("SQUADCO_SECRET_KEY"),
+        reloadly:        !!(getEnv("RELOADLY_CLIENT_ID") && getEnv("RELOADLY_CLIENT_SECRET")),
+        busha:           !!getEnv("BUSHA_API_KEY"),
+        onesignal:       !!(getEnv("ONESIGNAL_APP_ID") && getEnv("ONESIGNAL_REST_API_KEY")),
+        app_secret:      !!getEnv("APP_SECRET"),
+        cron:            !!getEnv("CRON_SECRET"),
       };
-      // Optional / placeholder credentials — present in some envs only.
+      // Optional: present in most envs, degrade gracefully when missing.
       const optional = {
-        telegram: !!getEnv("TELEGRAM_BOT_TOKEN"),
+        telegram:        !!getEnv("TELEGRAM_BOT_TOKEN"),
+        admin_telegram:  !!getEnv("ADMIN_TELEGRAM_BOT_TOKEN"),
+        resend:          !!getEnv("RESEND_API_KEY"),
+        dojah:           !!(getEnv("DOJAH_APP_ID") && getEnv("DOJAH_SECRET_KEY")),
       };
       const allOk = Object.values(critical).every(Boolean);
       if (!allOk) {

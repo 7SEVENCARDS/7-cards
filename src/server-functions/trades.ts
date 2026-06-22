@@ -560,9 +560,29 @@ export const processPayout = createServerFn({ method: "POST" })
     const amountNgn = Number(trade.amount_ngn);
     const payoutMethod = data.payoutMethod ?? "bank";
 
+    // ── Atomic compare-and-swap: prevent double-payout race condition ──────
+    // Two concurrent requests for the same trade would both read status="verified"
+    // then both proceed to payout. The WHERE status='verified' ensures only ONE
+    // request wins the UPDATE; the other receives 0 rows and is rejected.
+    // This is an atomic DB-level operation — no application-level locks needed.
+    const { data: grabbed, error: grabErr } = await db
+      .from("trades")
+      .update({ status: "processing", payout_method: payoutMethod })
+      .eq("id", data.tradeId)
+      .eq("status", "verified")
+      .eq("user_id", userId)
+      .select("id")
+      .single();
+
+    if (grabErr || !grabbed) {
+      return {
+        success: false,
+        reason: "This trade is already being processed, was already paid, or is no longer available. Refresh to see the latest status.",
+      };
+    }
+
     // ── wallet credit path (no Squad payout) ──────────────────────────────
     if (payoutMethod === "wallet") {
-      await db.from("trades").update({ status: "processing", payout_method: "wallet" }).eq("id", data.tradeId);
       const xp = 50 + (amountNgn > 100_000 ? 25 : 0);
       await db.rpc("increment_wallet_balance", { p_user_id: userId, p_currency: "NGN", p_amount: amountNgn });
       await db.rpc("award_trade_xp", { p_user_id: userId, p_xp: xp });
@@ -602,9 +622,7 @@ export const processPayout = createServerFn({ method: "POST" })
       return { success: false, reason: "No default payout account found. Please add a bank account first." };
     }
 
-    // Mark as processing
-    await db.from("trades").update({ status: "processing", payout_method: "bank" }).eq("id", data.tradeId);
-
+    // status is already "processing" from the atomic CAS above — proceed directly to payout.
     try {
       const { initiatePayout } = await import("../lib/squadco");
 
