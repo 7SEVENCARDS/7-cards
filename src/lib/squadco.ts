@@ -6,17 +6,23 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { fetchWithTimeout } from "./fetch-with-timeout";
+import { getEnv } from "./worker-env";
 
-const SQUADCO_ENV = process.env.SQUADCO_ENV || "sandbox";
+// ── Lazy getters — must not read env at module load time because Vite inlines
+// process.env.X at build time; read from the Worker env singleton instead. ──────
+function getSquadcoEnv(): string {
+  return getEnv("SQUADCO_ENV") || "sandbox";
+}
 
-const BASE_URL =
-  SQUADCO_ENV === "production"
+function getBaseUrl(): string {
+  return getSquadcoEnv() === "production"
     ? "https://api-d.squadco.com"
     : "https://sandbox-api-d.squadco.com";
+}
 
 function getHeaders() {
   // SQUADCO_SECRET_KEY is the bearer token used for all Squad API requests
-  const apiKey = process.env.SQUADCO_SECRET_KEY || process.env.SQUADCO_API_KEY;
+  const apiKey = getEnv("SQUADCO_SECRET_KEY") || getEnv("SQUADCO_API_KEY");
 
   if (!apiKey || apiKey.includes("YOUR_")) {
     throw new Error("[Squadco] SQUADCO_SECRET_KEY not configured");
@@ -29,7 +35,7 @@ function getHeaders() {
 }
 
 async function squadFetch(path: string, options: RequestInit = {}) {
-  const res = await fetchWithTimeout(`${BASE_URL}${path}`, {
+  const res = await fetchWithTimeout(`${getBaseUrl()}${path}`, {
     ...options,
     headers: {
       ...getHeaders(),
@@ -155,7 +161,7 @@ export async function createPaymentLink(params: {
   redirectUrl: string;
 }): Promise<{ checkoutUrl: string | null; error?: string }> {
   try {
-    const res = await fetchWithTimeout(`${BASE_URL}/merchant/create-payment-link`, {
+    const res = await fetchWithTimeout(`${getBaseUrl()}/merchant/create-payment-link`, {
       method: "POST",
       headers: getHeaders(),
       body: JSON.stringify({
