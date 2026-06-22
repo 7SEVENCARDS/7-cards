@@ -7,6 +7,7 @@
 
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
+import { getEnv } from "../lib/worker-env";
 import { requireAdmin } from "../lib/auth-server";
 import { isAdminBotConfigured, fanOutToAdmins } from "../lib/telegram";
 
@@ -32,7 +33,7 @@ export const generateAdminTelegramLinkCode = createServerFn({ method: "POST" })
       expires_at: expiresAt,
     });
 
-    const botUsername = process.env.ADMIN_TELEGRAM_BOT_USERNAME ?? "SevenCardsAdminBot";
+    const botUsername = getEnv("ADMIN_TELEGRAM_BOT_USERNAME") ?? "SevenCardsAdminBot";
     return {
       success: true,
       code,
@@ -77,8 +78,8 @@ export async function getAllLinkedAdminChatIds(): Promise<bigint[]> {
   try {
     const { createClient } = await import("@supabase/supabase-js");
     const db = createClient(
-      process.env.VITE_SUPABASE_URL ?? "",
-      process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+      getEnv("VITE_SUPABASE_URL") ?? "",
+      getEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "",
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
     const { data } = await db.from("admin_telegram_links").select("telegram_chat_id");
@@ -106,8 +107,8 @@ export async function sendAdminNotification(opts: {
   try {
     const { createClient } = await import("@supabase/supabase-js");
     const db = createClient(
-      process.env.VITE_SUPABASE_URL ?? "",
-      process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+      getEnv("VITE_SUPABASE_URL") ?? "",
+      getEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "",
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
     await db.from("admin_telegram_notifications").insert(
@@ -134,8 +135,8 @@ export async function resolveAdminNotifications(
   try {
     const { createClient } = await import("@supabase/supabase-js");
     const db = createClient(
-      process.env.VITE_SUPABASE_URL ?? "",
-      process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+      getEnv("VITE_SUPABASE_URL") ?? "",
+      getEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "",
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
