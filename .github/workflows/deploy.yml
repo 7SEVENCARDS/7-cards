@@ -152,6 +152,8 @@ jobs:
           _SUPPORT_EMAIL: ${{ secrets.SUPPORT_EMAIL }}
           _SUPPORT_TELEGRAM_CHAT_ID: ${{ secrets.SUPPORT_TELEGRAM_CHAT_ID }}
           _SUPPORT_WHATSAPP: ${{ secrets.SUPPORT_WHATSAPP }}
+          _RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          _ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
         run: |
           upload_secret() {
             local name="$1"
@@ -178,6 +180,8 @@ jobs:
           upload_secret SUPPORT_EMAIL             "$_SUPPORT_EMAIL"
           upload_secret SUPPORT_TELEGRAM_CHAT_ID  "$_SUPPORT_TELEGRAM_CHAT_ID"
           upload_secret SUPPORT_WHATSAPP          "$_SUPPORT_WHATSAPP"
+          upload_secret RESEND_API_KEY            "$_RESEND_API_KEY"
+          upload_secret ADMIN_EMAIL               "$_ADMIN_EMAIL"
 
       # ── Telegram & Dojah — placeholder until credentials are ready ─────────
       - name: Upload Telegram & Dojah secrets to Cloudflare Workers
@@ -259,4 +263,6 @@ jobs:
           if [ "$API_STATUS" != "200" ]; then
             echo "::warning::API worker health check returned $API_STATUS — check the deployment"
           fi
+          VENDOR_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://vendor.7evencards.xyz/" || echo "000")
+          echo "Vendor portal health check → HTTP $VENDOR_STATUS"
         continue-on-error: true
