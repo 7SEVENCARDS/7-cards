@@ -19,6 +19,7 @@
 
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
+import { getEnv } from "../lib/worker-env";
 import { requireUser } from "../lib/auth-server";
 
 type Message = {
@@ -41,7 +42,7 @@ async function forwardToTelegramSupport(opts: {
   category: string | null;
   body: string;
 }): Promise<void> {
-  const chatId = process.env.SUPPORT_TELEGRAM_CHAT_ID;
+  const chatId = getEnv("SUPPORT_TELEGRAM_CHAT_ID");
   if (!chatId) return;
 
   const { isAdminBotConfigured, sendAdminBotMessage } = await import("../lib/telegram");
@@ -221,8 +222,8 @@ export async function adminReplyToTicket(ticketId: string, replyBody: string, ad
   try {
     const { createClient } = await import("@supabase/supabase-js");
     const db = createClient(
-      process.env.VITE_SUPABASE_URL ?? "",
-      process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+      getEnv("VITE_SUPABASE_URL") ?? "",
+      getEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "",
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
