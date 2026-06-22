@@ -251,7 +251,7 @@ export default {
         console.warn("[Health] Missing critical secrets:", missing.join(", "));
       }
       return addSecurityHeaders(
-        new Response(JSON.stringify({ ok: allOk, ts: Date.now(), critical, optional, directCheck }), {
+        new Response(JSON.stringify({ ok: allOk, ts: Date.now(), critical, optional }), {
           status: allOk ? 200 : 503,
           headers: { "Content-Type": "application/json" },
         }),
