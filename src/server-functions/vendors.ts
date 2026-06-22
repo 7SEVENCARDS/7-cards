@@ -9,6 +9,7 @@ import { getRequest } from "@tanstack/react-start/server";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser, requireAdmin, requireVendorAuth } from "../lib/auth-server";
 import { clientIp, assertNotRateLimited, rlKey } from "../lib/rate-limiter";
+import { getEnv } from "../lib/worker-env";
 import {
   assertEmail, assertPassword, sanitizeStr, assertPhone,
 } from "../lib/validate";
@@ -682,9 +683,9 @@ export const provisionVirtualAccount = createServerFn({ method: "POST" })
     let bankCode = "035";
     let squadcoRef: string | null = null;
 
-    const squadcoKey = process.env.SQUADCO_SECRET_KEY ?? process.env.SQUADCO_API_KEY;
+    const squadcoKey = getEnv("SQUADCO_SECRET_KEY") ?? getEnv("SQUADCO_API_KEY");
     const squadcoBase =
-      (process.env.SQUADCO_ENV || "sandbox") === "production"
+      (getEnv("SQUADCO_ENV") || "sandbox") === "production"
         ? "https://api-d.squadco.com"
         : "https://sandbox-api-d.squadco.com";
 
@@ -727,7 +728,7 @@ export const provisionVirtualAccount = createServerFn({ method: "POST" })
     // Set SQUADCO_DEMO=true for local dev/sandbox testing only.
     if (!accountNumber) {
       const isDemoMode =
-        process.env.SQUADCO_DEMO === "true" && process.env.NODE_ENV !== "production";
+        getEnv("SQUADCO_DEMO") === "true" && process.env.NODE_ENV !== "production";
       if (!isDemoMode) {
         throw new Error(
           "Virtual account creation failed — Squad API unavailable. Check SQUADCO_SECRET_KEY and Squad dashboard."
@@ -1067,8 +1068,8 @@ export async function approveWithdrawalImpl(
     .single();
   if (!req) throw new Error("Request not found or already processed");
 
-  const squadcoKey = process.env.SQUADCO_SECRET_KEY ?? "";
-  const env = process.env.SQUADCO_ENV === "production" ? "api" : "sandbox";
+  const squadcoKey = getEnv("SQUADCO_SECRET_KEY") ?? "";
+  const env = getEnv("SQUADCO_ENV") === "production" ? "api" : "sandbox";
   const uniqueId = `7S-WD-${req.id.slice(0, 8)}-${Date.now()}`;
 
   const { fetchWithTimeout } = await import("../lib/fetch-with-timeout");
