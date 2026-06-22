@@ -2271,3 +2271,1567 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION open_monthly_billing_cycle TO service_role;
+
+-- ============================================================
+-- MIGRATIONS 015–023 (appended)
+-- Run these after the initial 001–014 block above
+-- ============================================================
+
+-- ============================================================
+-- 015_telegram_broadcast.sql
+-- ============================================================
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 015: Telegram-first vendor broadcast flow
+-- Adds: vendor_trade_broadcasts, vendor_broadcast_messages,
+--       card_pin on trades, VAN columns on vendor_card_assignments,
+--       atomic claim function.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ── 1. Store card PIN on trades so broadcast can carry it ────────────────────
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS card_pin TEXT;
+
+-- ── 2. VAN-per-assignment columns on vendor_card_assignments ─────────────────
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS trade_id UUID REFERENCES trades(id) ON DELETE SET NULL;
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS claimed_via_telegram BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS van_account_number TEXT;
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS van_bank_name TEXT;
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS van_amount_ngn NUMERIC(15,2);
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS van_paid BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS van_paid_at TIMESTAMPTZ;
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS van_squad_ref TEXT;
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS van_squad_account_id TEXT;
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ;
+
+-- ── 3. payout_method already used in code, ensure it exists ─────────────────
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS payout_method TEXT
+  CHECK (payout_method IN ('bank', 'wallet', 'vendor'));
+
+-- ── 4. vendor_trade_broadcasts — one row per trade broadcast ─────────────────
+CREATE TABLE IF NOT EXISTS vendor_trade_broadcasts (
+  id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  trade_id             UUID        NOT NULL REFERENCES trades(id) ON DELETE CASCADE,
+  brand                TEXT        NOT NULL,
+  amount_usd           NUMERIC(10,2) NOT NULL,
+  amount_ngn           NUMERIC(15,2) NOT NULL,
+  status               TEXT        NOT NULL DEFAULT 'pending'
+                         CHECK (status IN ('pending','claimed','expired','cancelled')),
+  claimed_by_vendor_id UUID        REFERENCES vendors(id),
+  assignment_id        UUID,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  claimed_at           TIMESTAMPTZ,
+  expires_at           TIMESTAMPTZ NOT NULL DEFAULT now() + INTERVAL '15 minutes',
+  CONSTRAINT vtb_trade_id_unique UNIQUE (trade_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vtb_status_expires
+  ON vendor_trade_broadcasts (status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_vtb_trade_id
+  ON vendor_trade_broadcasts (trade_id);
+
+-- ── 5. vendor_broadcast_messages — one row per Telegram message sent ─────────
+CREATE TABLE IF NOT EXISTS vendor_broadcast_messages (
+  id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  broadcast_id        UUID        NOT NULL REFERENCES vendor_trade_broadcasts(id) ON DELETE CASCADE,
+  vendor_id           UUID        NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+  telegram_message_id BIGINT,
+  sent_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_vbm_broadcast_id ON vendor_broadcast_messages (broadcast_id);
+
+-- ── 6. Atomic broadcast-claim function ───────────────────────────────────────
+-- Returns (claimed BOOLEAN, assignment_id UUID).
+-- Uses FOR UPDATE SKIP LOCKED to guarantee only the first caller succeeds.
+CREATE OR REPLACE FUNCTION claim_vendor_broadcast(
+  p_broadcast_id UUID,
+  p_vendor_id    UUID
+)
+RETURNS TABLE (claimed BOOLEAN, out_assignment_id UUID)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_trade_id     UUID;
+  v_brand        TEXT;
+  v_amount_usd   NUMERIC;
+  v_amount_ngn   NUMERIC;
+  v_card_code    TEXT;
+  v_card_pin     TEXT;
+  v_assignment_id UUID;
+BEGIN
+  -- Lock exactly one pending, non-expired broadcast row.
+  -- SKIP LOCKED means a concurrent caller gets nothing and returns claimed=false.
+  SELECT b.trade_id, b.brand, b.amount_usd, b.amount_ngn
+  INTO   v_trade_id, v_brand, v_amount_usd, v_amount_ngn
+  FROM   vendor_trade_broadcasts b
+  WHERE  b.id = p_broadcast_id
+    AND  b.status = 'pending'
+    AND  b.expires_at > now()
+  FOR UPDATE SKIP LOCKED;
+
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT FALSE, NULL::UUID;
+    RETURN;
+  END IF;
+
+  -- Pull card details from the trade
+  SELECT t.card_code, t.card_pin
+  INTO   v_card_code, v_card_pin
+  FROM   trades t
+  WHERE  t.id = v_trade_id;
+
+  -- Create the assignment
+  INSERT INTO vendor_card_assignments (
+    vendor_id, trade_id, brand, amount_usd, amount_ngn,
+    card_code, card_pin, status, claimed_via_telegram
+  ) VALUES (
+    p_vendor_id, v_trade_id, v_brand, v_amount_usd, v_amount_ngn,
+    v_card_code, v_card_pin, 'assigned', TRUE
+  )
+  RETURNING id INTO v_assignment_id;
+
+  -- Mark broadcast as claimed
+  UPDATE vendor_trade_broadcasts SET
+    status               = 'claimed',
+    claimed_by_vendor_id = p_vendor_id,
+    claimed_at           = now(),
+    assignment_id        = v_assignment_id
+  WHERE id = p_broadcast_id;
+
+  RETURN QUERY SELECT TRUE, v_assignment_id;
+END;
+$$;
+
+-- ── 7. Helper: expire stale broadcasts (called by cron or on-demand) ─────────
+CREATE OR REPLACE FUNCTION expire_stale_broadcasts()
+RETURNS INTEGER LANGUAGE plpgsql AS $$
+DECLARE v_count INTEGER;
+BEGIN
+  UPDATE vendor_trade_broadcasts
+  SET status = 'expired'
+  WHERE status = 'pending' AND expires_at <= now();
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
+-- ============================================================
+-- 016_immutable_audit.sql
+-- ============================================================
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 016: Immutable Truth Engine
+--
+-- Implements the three pillars of the cryptographic audit architecture:
+--
+-- Pillar 1 — Zero-Trust Cryptographic Logging
+--   trade_audit_log: append-only ledger. Every trade event produces a
+--   SHA-256 hash of (token_hash | server_ts_ms | vendor_id | trade_id | event).
+--   Unique constraint on payload_hash makes the log un-falsifiable —
+--   you cannot insert or overwrite an existing hash.
+--
+-- Pillar 2 — Multi-Point Timestamp Audit
+--   card_exposed_at_ms on vendor_card_assignments: exact millisecond the card
+--   code was delivered to the vendor via Telegram. vendor_disputes stores
+--   T_Exposure, T_Redeemed (from Reloadly re-query), and the full verdict.
+--
+-- Pillar 3 — Automated Capital Depreciation
+--   Verdict = FRAUD_CONFIRMED → existing forfeit_vendor_security_deposit RPC
+--   + record_vendor_failure auto-suspension fires atomically, zero human touch.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ── Pillar 1: Immutable cryptographic ledger ──────────────────────────────────
+CREATE TABLE IF NOT EXISTS trade_audit_log (
+  id             UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
+  trade_id       UUID,   -- nullable — some events pre-date a trade row
+  assignment_id  UUID,   -- nullable
+  event          TEXT    NOT NULL,
+  -- card_verified | card_exposed | card_claimed | van_created | van_paid
+  -- vendor_marked_redeemed | vendor_marked_failed
+  -- fraud_audit_initiated | fraud_confirmed | system_error | inconclusive
+  actor_type     TEXT    NOT NULL CHECK (actor_type IN ('system','vendor','user','admin')),
+  actor_id       TEXT,   -- supabase user_id or vendor UUID as text
+  server_ts_ms   BIGINT  NOT NULL,   -- Date.now() — ms precision, always server-set
+  payload_hash   TEXT    NOT NULL,   -- SHA-256 of canonical payload — THE KEY GUARANTEE
+  payload        JSONB   NOT NULL DEFAULT '{}',
+  CONSTRAINT trade_audit_log_hash_unique UNIQUE (payload_hash)
+  -- The UNIQUE constraint on payload_hash is the cryptographic guarantee:
+  -- a duplicate or tampered entry is mathematically rejected by the DB.
+);
+
+-- Append-only enforcement via RLS — even service role cannot UPDATE or DELETE
+-- (service role bypasses RLS for INSERT, but we set no UPDATE/DELETE policies)
+ALTER TABLE trade_audit_log ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "admin_read_audit_log"
+  ON trade_audit_log FOR SELECT
+  USING (EXISTS (
+    SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'
+  ));
+-- No UPDATE or DELETE policy → nobody can modify or remove audit entries
+
+CREATE INDEX IF NOT EXISTS idx_tal_trade_id     ON trade_audit_log (trade_id);
+CREATE INDEX IF NOT EXISTS idx_tal_assignment   ON trade_audit_log (assignment_id);
+CREATE INDEX IF NOT EXISTS idx_tal_event_ts     ON trade_audit_log (event, server_ts_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_tal_actor        ON trade_audit_log (actor_type, actor_id);
+CREATE INDEX IF NOT EXISTS idx_tal_ts           ON trade_audit_log (server_ts_ms DESC);
+
+-- ── Pillar 2: Exposure + Redeemed timestamps on assignments ───────────────────
+-- card_exposed_at_ms = T_Exposure: exact millisecond the card code landed in the
+-- vendor's Telegram chat (set the moment sendTelegramMessage() returns OK).
+ALTER TABLE vendor_card_assignments
+  ADD COLUMN IF NOT EXISTS card_exposed_at     TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS card_exposed_at_ms  BIGINT,      -- T_Exposure in ms
+  ADD COLUMN IF NOT EXISTS failure_reason      TEXT,
+  ADD COLUMN IF NOT EXISTS fraud_verdict       TEXT
+    CHECK (fraud_verdict IN ('pending','fraud_confirmed','system_error','cleared','inconclusive')),
+  ADD COLUMN IF NOT EXISTS fraud_verdict_at    TIMESTAMPTZ;
+
+-- ── Pillar 2: Forensic dispute records ───────────────────────────────────────
+CREATE TABLE IF NOT EXISTS vendor_disputes (
+  id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  assignment_id         UUID        NOT NULL,
+  vendor_id             UUID        NOT NULL REFERENCES vendors(id),
+  trade_id              UUID,
+  failure_reason        TEXT        NOT NULL,
+  -- Timestamp axis (all in milliseconds since Unix epoch for sub-second precision)
+  t_exposure_ms         BIGINT,     -- when card code hit vendor Telegram
+  t_audit_ms            BIGINT,     -- when forensic check ran
+  t_redeemed_ms         BIGINT,     -- inferred from Reloadly re-query result
+  -- Reloadly evidence
+  reloadly_audit_raw    JSONB,      -- raw API response at audit time
+  reloadly_card_status  TEXT,       -- 'VALID'|'REDEEMED'|'INVALID'|'UNKNOWN'
+  -- Verdict
+  verdict               TEXT        NOT NULL DEFAULT 'pending'
+    CHECK (verdict IN ('pending','fraud_confirmed','system_error','inconclusive')),
+  verdict_at            TIMESTAMPTZ,
+  verdict_evidence      JSONB,      -- full forensic evidence package
+  -- Enforcement
+  auto_actioned         BOOLEAN     NOT NULL DEFAULT FALSE,
+  deposit_forfeited_ngn NUMERIC(15,2) NOT NULL DEFAULT 0,
+  auto_suspended        BOOLEAN     NOT NULL DEFAULT FALSE,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE vendor_disputes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "admin_read_disputes"
+  ON vendor_disputes FOR SELECT
+  USING (EXISTS (
+    SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'
+  ));
+
+CREATE INDEX IF NOT EXISTS idx_disputes_vendor     ON vendor_disputes (vendor_id);
+CREATE INDEX IF NOT EXISTS idx_disputes_assignment ON vendor_disputes (assignment_id);
+CREATE INDEX IF NOT EXISTS idx_disputes_verdict    ON vendor_disputes (verdict, created_at DESC);
+
+-- ── Helper: verify a hash hasn't been tampered with ───────────────────────────
+-- Returns TRUE if the hash exists and the payload still hashes to the same value.
+-- Call this from any audit verification endpoint.
+CREATE OR REPLACE FUNCTION verify_audit_entry(p_hash TEXT, p_payload JSONB)
+RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM trade_audit_log
+    WHERE payload_hash = p_hash
+      AND payload = p_payload
+  );
+$$;
+
+-- ============================================================
+-- 017_vendor_rate_check.sql
+-- ============================================================
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 017: Vendor Rate Check System
+--
+-- Enables the 6-hourly Telegram rate-check flow:
+--   1. Cron hits /api/cron/rate-check every 6h
+--   2. Bot messages each active vendor: "Has your rate changed? YES / NO"
+--   3. YES → bot asks "Send new rate (₦ per $1)"
+--   4. Vendor replies with a number → saved here, admin alerted immediately
+--
+-- New columns on vendors:
+--   preferred_rate_ngn_per_usd  — current vendor rate (₦ per $1 USD)
+--   rate_last_updated_at        — when vendor last changed their rate
+--   last_rate_check_sent_at     — when we last sent the rate-check ping
+--   telegram_bot_state          — FSM state for multi-turn Telegram conversations
+--   telegram_bot_state_at       — when state was entered (for stale-state cleanup)
+--   telegram_bot_state_data     — JSON context for the current state (e.g. previous rate)
+--
+-- New table:
+--   vendor_rate_history         — immutable log of every rate change
+-- ─────────────────────────────────────────────────────────────────────────────
+
+ALTER TABLE vendors
+  ADD COLUMN IF NOT EXISTS preferred_rate_ngn_per_usd NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS rate_last_updated_at       TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS last_rate_check_sent_at    TIMESTAMPTZ,
+  -- Finite-state machine for multi-turn Telegram conversations.
+  -- NULL  = idle (normal broadcast flow)
+  -- rate_check_pending = we asked "has rate changed?" — awaiting YES/NO
+  -- awaiting_new_rate  = vendor said YES — awaiting the numeric value
+  ADD COLUMN IF NOT EXISTS telegram_bot_state      TEXT
+    CHECK (telegram_bot_state IN ('rate_check_pending', 'awaiting_new_rate')),
+  ADD COLUMN IF NOT EXISTS telegram_bot_state_at   TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS telegram_bot_state_data JSONB;
+
+-- ── Immutable rate change log ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS vendor_rate_history (
+  id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  vendor_id         UUID        NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+  old_rate          NUMERIC(10,2),            -- null on first-ever set
+  new_rate          NUMERIC(10,2) NOT NULL,
+  changed_via       TEXT        NOT NULL DEFAULT 'telegram'
+    CHECK (changed_via IN ('telegram', 'admin', 'portal')),
+  admin_notified_at TIMESTAMPTZ,              -- set when admin alert was sent
+  notes             TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE vendor_rate_history ENABLE ROW LEVEL SECURITY;
+
+-- Vendors can read their own history; admins can read all
+CREATE POLICY "vendor_read_own_rate_history"
+  ON vendor_rate_history FOR SELECT
+  USING (
+    EXISTS (SELECT 1 FROM vendors WHERE id = vendor_id AND user_id = auth.uid())
+    OR
+    EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin')
+  );
+
+CREATE INDEX IF NOT EXISTS idx_rate_history_vendor ON vendor_rate_history (vendor_id, created_at DESC);
+
+-- ── Auto-cleanup stale bot states ─────────────────────────────────────────────
+-- If a vendor never replies, their state would be stuck forever.
+-- This function resets states older than 2 hours — call it from the cron job.
+CREATE OR REPLACE FUNCTION cleanup_stale_bot_states() RETURNS void
+  LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  UPDATE vendors
+  SET
+    telegram_bot_state      = NULL,
+    telegram_bot_state_at   = NULL,
+    telegram_bot_state_data = NULL
+  WHERE
+    telegram_bot_state IS NOT NULL
+    AND telegram_bot_state_at < NOW() - INTERVAL '2 hours';
+END;
+$$;
+
+-- ── Index for cron: finding vendors due for a rate check ──────────────────────
+CREATE INDEX IF NOT EXISTS idx_vendors_rate_check
+  ON vendors (last_rate_check_sent_at NULLS FIRST)
+  WHERE status = 'active';
+
+-- ============================================================
+-- 018_card_batch_dispatch.sql
+-- ============================================================
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 018: Multi-Card Batch Dispatch
+--
+-- When a user submits N gift cards at once, each card becomes an independent
+-- trade. The batch-dispatch engine distributes cards across DIFFERENT vendors
+-- using round-robin rotation to reduce single-vendor exposure risk.
+--
+-- Dispatch strategies:
+--   round_robin  — card[i] goes to vendor[i % total_vendors]
+--   sequential   — only 1 vendor available; cards are queued and dispatched
+--                  one at a time (next dispatches only after current completes)
+--
+-- Each trade records which batch it belongs to and its position within the
+-- batch so the admin can reconstruct the full submission in order.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ── Batch metadata table ───────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS card_submission_batches (
+  id                UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id           UUID         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  brand             TEXT         NOT NULL,
+  amount_usd        NUMERIC(10,2) NOT NULL,
+  exchange_rate     NUMERIC(10,4) NOT NULL,
+  total_cards       INT          NOT NULL CHECK (total_cards >= 1),
+  verified_cards    INT          NOT NULL DEFAULT 0,
+  dispatched_cards  INT          NOT NULL DEFAULT 0,
+  failed_cards      INT          NOT NULL DEFAULT 0,
+  queued_cards      INT          NOT NULL DEFAULT 0,
+  status            TEXT         NOT NULL DEFAULT 'processing'
+    CHECK (status IN ('processing', 'completed', 'partial_failed', 'failed')),
+  payout_method     TEXT         NOT NULL DEFAULT 'bank'
+    CHECK (payout_method IN ('bank', 'wallet')),
+  dispatch_strategy TEXT         NOT NULL DEFAULT 'round_robin'
+    CHECK (dispatch_strategy IN ('round_robin', 'sequential')),
+  vendor_count      INT          NOT NULL DEFAULT 0, -- vendors available at dispatch time
+  created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+ALTER TABLE card_submission_batches ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "user_read_own_batches"
+  ON card_submission_batches FOR SELECT
+  USING (user_id = auth.uid());
+
+CREATE POLICY "admin_read_all_batches"
+  ON card_submission_batches FOR SELECT
+  USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+
+CREATE INDEX IF NOT EXISTS idx_batches_user ON card_submission_batches (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_batches_status ON card_submission_batches (status, created_at DESC);
+
+-- ── Link trades to their batch ─────────────────────────────────────────────────
+ALTER TABLE trades
+  ADD COLUMN IF NOT EXISTS batch_id       UUID REFERENCES card_submission_batches(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS batch_position INT,     -- 1-based position in the batch
+  ADD COLUMN IF NOT EXISTS batch_queued   BOOLEAN NOT NULL DEFAULT FALSE,
+  -- For direct (non-broadcast) vendor assignment in batch dispatch:
+  ADD COLUMN IF NOT EXISTS direct_vendor_id UUID REFERENCES vendors(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_trades_batch ON trades (batch_id, batch_position) WHERE batch_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_trades_direct_vendor ON trades (direct_vendor_id) WHERE direct_vendor_id IS NOT NULL;
+
+-- ── Update batch status when a trade changes ───────────────────────────────────
+-- Called after each trade in a batch changes status so the batch row stays current.
+CREATE OR REPLACE FUNCTION sync_batch_status(p_batch_id UUID) RETURNS void
+  LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  v_total       INT;
+  v_verified    INT;
+  v_dispatched  INT;
+  v_failed      INT;
+  v_queued      INT;
+  v_new_status  TEXT;
+BEGIN
+  SELECT
+    COUNT(*),
+    COUNT(*) FILTER (WHERE status IN ('verified','processing','paid','escrow')),
+    COUNT(*) FILTER (WHERE direct_vendor_id IS NOT NULL AND NOT batch_queued),
+    COUNT(*) FILTER (WHERE status IN ('invalid','failed')),
+    COUNT(*) FILTER (WHERE batch_queued = TRUE)
+  INTO v_total, v_verified, v_dispatched, v_failed, v_queued
+  FROM trades
+  WHERE batch_id = p_batch_id;
+
+  IF v_failed = v_total THEN
+    v_new_status := 'failed';
+  ELSIF (v_dispatched + v_failed) = v_total THEN
+    IF v_failed > 0 THEN v_new_status := 'partial_failed';
+    ELSE v_new_status := 'completed'; END IF;
+  ELSE
+    v_new_status := 'processing';
+  END IF;
+
+  UPDATE card_submission_batches
+  SET
+    verified_cards   = v_verified,
+    dispatched_cards = v_dispatched,
+    failed_cards     = v_failed,
+    queued_cards     = v_queued,
+    status           = v_new_status,
+    updated_at       = now()
+  WHERE id = p_batch_id;
+END;
+$$;
+
+-- ── Helper: get the next queued trade in a sequential batch ───────────────────
+-- Called by webhook/cron after a sequential-batch trade is marked completed.
+-- Returns the next trade_id to dispatch, or NULL if none.
+CREATE OR REPLACE FUNCTION get_next_queued_batch_trade(p_batch_id UUID)
+RETURNS UUID LANGUAGE sql STABLE AS $$
+  SELECT id
+  FROM trades
+  WHERE batch_id = p_batch_id
+    AND batch_queued = TRUE
+    AND status = 'verified'
+  ORDER BY batch_position ASC
+  LIMIT 1;
+$$;
+
+-- ============================================================
+-- 019_vendor_rate_approval.sql
+-- ============================================================
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 019: Vendor Rate Approval Workflow
+--
+-- When a vendor submits a new rate via Telegram, it now lands in a PENDING
+-- state rather than being applied to live trades immediately.
+-- The admin must review and approve, reject, or override it before it affects
+-- the round-robin vendor-dispatch engine.
+--
+-- Schema changes:
+--   vendors.pending_rate_ngn_per_usd      — rate submitted but not yet approved
+--   vendors.pending_rate_submitted_at     — when the pending rate was submitted
+--   vendors.pending_rate_history_id       — FK to the vendor_rate_history row
+--
+--   vendor_rate_history.status            — pending | approved | rejected | overridden
+--   vendor_rate_history.approved_by       — admin user who actioned it
+--   vendor_rate_history.actioned_at       — when the admin actioned it
+--   vendor_rate_history.admin_notes       — optional admin comment
+-- ─────────────────────────────────────────────────────────────────────────────
+
+ALTER TABLE vendors
+  ADD COLUMN IF NOT EXISTS pending_rate_ngn_per_usd   NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS pending_rate_submitted_at  TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS pending_rate_history_id    UUID;  -- set after history row inserted
+
+ALTER TABLE vendor_rate_history
+  ADD COLUMN IF NOT EXISTS status       TEXT NOT NULL DEFAULT 'approved'
+    CHECK (status IN ('pending', 'approved', 'rejected', 'overridden')),
+  ADD COLUMN IF NOT EXISTS approved_by  UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS actioned_at  TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS admin_notes  TEXT;
+
+-- Backfill existing history rows as approved (they were applied directly)
+UPDATE vendor_rate_history SET status = 'approved' WHERE status IS NULL OR status = 'approved';
+
+-- Index for the admin dashboard: find all pending rate submissions quickly
+CREATE INDEX IF NOT EXISTS idx_vendors_pending_rate
+  ON vendors (pending_rate_submitted_at DESC)
+  WHERE pending_rate_ngn_per_usd IS NOT NULL;
+
+-- Index for rate history by status
+CREATE INDEX IF NOT EXISTS idx_rate_history_status
+  ON vendor_rate_history (vendor_id, status, created_at DESC);
+
+-- ── Helper: approve a pending vendor rate ─────────────────────────────────────
+-- Sets preferred_rate to the pending value, clears pending fields,
+-- marks the history row as approved. Called by admin server function.
+CREATE OR REPLACE FUNCTION approve_vendor_rate(
+  p_vendor_id UUID,
+  p_admin_id  UUID,
+  p_notes     TEXT DEFAULT NULL
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  v_pending_rate     NUMERIC(10,2);
+  v_history_id       UUID;
+BEGIN
+  SELECT pending_rate_ngn_per_usd, pending_rate_history_id
+  INTO v_pending_rate, v_history_id
+  FROM vendors
+  WHERE id = p_vendor_id;
+
+  IF v_pending_rate IS NULL THEN
+    RAISE EXCEPTION 'No pending rate for vendor %', p_vendor_id;
+  END IF;
+
+  -- Apply rate
+  UPDATE vendors SET
+    preferred_rate_ngn_per_usd  = v_pending_rate,
+    rate_last_updated_at        = now(),
+    pending_rate_ngn_per_usd    = NULL,
+    pending_rate_submitted_at   = NULL,
+    pending_rate_history_id     = NULL
+  WHERE id = p_vendor_id;
+
+  -- Mark history row approved
+  IF v_history_id IS NOT NULL THEN
+    UPDATE vendor_rate_history SET
+      status      = 'approved',
+      approved_by = p_admin_id,
+      actioned_at = now(),
+      admin_notes = p_notes
+    WHERE id = v_history_id;
+  END IF;
+END;
+$$;
+
+-- ── Helper: reject a pending vendor rate ──────────────────────────────────────
+CREATE OR REPLACE FUNCTION reject_vendor_rate(
+  p_vendor_id UUID,
+  p_admin_id  UUID,
+  p_notes     TEXT DEFAULT NULL
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  v_history_id UUID;
+BEGIN
+  SELECT pending_rate_history_id INTO v_history_id FROM vendors WHERE id = p_vendor_id;
+
+  UPDATE vendors SET
+    pending_rate_ngn_per_usd  = NULL,
+    pending_rate_submitted_at = NULL,
+    pending_rate_history_id   = NULL
+  WHERE id = p_vendor_id;
+
+  IF v_history_id IS NOT NULL THEN
+    UPDATE vendor_rate_history SET
+      status      = 'rejected',
+      approved_by = p_admin_id,
+      actioned_at = now(),
+      admin_notes = p_notes
+    WHERE id = v_history_id;
+  END IF;
+END;
+$$;
+
+-- ============================================================
+-- 020_admin_telegram.sql
+-- ============================================================
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 020: Admin Telegram Bot + Telegram Support System
+--
+-- Adds tables for:
+--   1. Admin Telegram identity linking (expiring link codes)
+--   2. Admin Telegram notification tracking (fan-out + resolve)
+--   3. Support ticket routing via Telegram
+--   4. Vendor moniker table (privacy-preserving dispute comms)
+--   5. pending_review trade status support (P0-1 fix)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ── 1. Admin Telegram identity links ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS admin_telegram_links (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_id          UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  telegram_chat_id  BIGINT NOT NULL,
+  telegram_username TEXT,
+  linked_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT admin_telegram_links_chat_unique UNIQUE (telegram_chat_id)
+);
+
+CREATE TABLE IF NOT EXISTS admin_telegram_link_codes (
+  code        TEXT PRIMARY KEY,
+  admin_id    UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at  TIMESTAMPTZ NOT NULL,
+  used_at     TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_tg_link_codes_admin
+  ON admin_telegram_link_codes (admin_id, expires_at DESC);
+
+-- ── 2. Admin Telegram notification fan-out tracker ───────────────────────────
+-- One row per (item, chat). Lets us edit all admins' copies on resolution.
+CREATE TABLE IF NOT EXISTS admin_telegram_notifications (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  item_type           TEXT NOT NULL,   -- 'manual_review' | 'withdrawal' | 'kyc' | 'vendor_rate' | 'dispute' | 'fraud' | 'payout_failed'
+  item_id             UUID NOT NULL,
+  telegram_chat_id    BIGINT NOT NULL,
+  telegram_message_id BIGINT NOT NULL,
+  resolved_at         TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_tg_notif_item
+  ON admin_telegram_notifications (item_type, item_id, resolved_at);
+CREATE INDEX IF NOT EXISTS idx_admin_tg_notif_chat
+  ON admin_telegram_notifications (telegram_chat_id, created_at DESC);
+
+-- ── 3. Support tickets (Telegram-based support system) ───────────────────────
+-- Replaces FreeScout. Tickets route to a Telegram support group.
+CREATE TABLE IF NOT EXISTS support_tickets (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id          UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  category         TEXT,
+  status           TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved', 'closed')),
+  telegram_message_id BIGINT,          -- message ID in support group
+  telegram_thread_id  BIGINT,          -- thread/topic ID if using forum groups
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved_at      TIMESTAMPTZ,
+  CONSTRAINT support_tickets_user_one_open UNIQUE NULLS NOT DISTINCT (user_id, status)
+    DEFERRABLE INITIALLY DEFERRED
+);
+
+-- Drop incorrect unique constraint if it was created without NULLS NOT DISTINCT support
+-- (Postgres < 15 fallback)
+DO $$
+BEGIN
+  ALTER TABLE support_tickets DROP CONSTRAINT IF EXISTS support_tickets_user_one_open;
+EXCEPTION WHEN others THEN null;
+END$$;
+
+-- Simple open ticket index (no partial unique — just use index for lookups)
+CREATE INDEX IF NOT EXISTS idx_support_tickets_user
+  ON support_tickets (user_id, status, created_at DESC);
+
+-- ── 4. Vendor monikers (privacy-preserving dispute comms) ────────────────────
+-- Each vendor gets a stable, human-readable moniker used in admin/support comms
+-- so their real business name and details are never disclosed.
+CREATE TABLE IF NOT EXISTS vendor_monikers (
+  vendor_id  UUID PRIMARY KEY REFERENCES vendors(id) ON DELETE CASCADE,
+  moniker    TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ── 5. Ensure trades.status allows 'pending_review' ──────────────────────────
+-- The P0-1 fix introduces 'pending_review' as a real status distinct from 'verified'.
+-- We add it to the CHECK constraint if it's defined, or just note it for app logic.
+-- (Supabase typically uses TEXT without CHECK for status; this is a no-op if so.)
+DO $$
+BEGIN
+  -- Add DB-level guard: pending_review + paid cannot coexist
+  -- This is belt-and-suspenders alongside the app-level check.
+  -- We do this as a trigger rather than a constraint for compatibility.
+  NULL;
+END$$;
+
+CREATE OR REPLACE FUNCTION prevent_pending_review_payout()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status = 'paid' AND (OLD.requires_manual_review = true OR NEW.requires_manual_review = true) THEN
+    RAISE EXCEPTION 'Cannot mark trade as paid while requires_manual_review is true (trade %)', NEW.id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_prevent_pending_review_payout ON trades;
+CREATE TRIGGER trg_prevent_pending_review_payout
+  BEFORE UPDATE ON trades
+  FOR EACH ROW
+  EXECUTE FUNCTION prevent_pending_review_payout();
+
+-- ── 6. Moniker auto-generation function ──────────────────────────────────────
+-- Assigns a deterministic moniker to a vendor if they don't have one.
+-- Uses Greek alphabet + color combos for easy recall: "Crimson-Alpha", "Azure-Beta"
+CREATE OR REPLACE FUNCTION get_or_create_vendor_moniker(p_vendor_id UUID)
+RETURNS TEXT LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  v_moniker TEXT;
+  v_idx     INT;
+  colors    TEXT[] := ARRAY['Crimson','Azure','Jade','Amber','Cobalt','Coral','Indigo','Teal','Scarlet','Sage'];
+  names     TEXT[] := ARRAY['Alpha','Beta','Gamma','Delta','Epsilon','Zeta','Eta','Theta','Iota','Kappa',
+                             'Lambda','Mu','Nu','Xi','Omicron','Pi','Rho','Sigma','Tau','Upsilon'];
+BEGIN
+  SELECT moniker INTO v_moniker FROM vendor_monikers WHERE vendor_id = p_vendor_id;
+  IF v_moniker IS NOT NULL THEN
+    RETURN v_moniker;
+  END IF;
+
+  -- Generate a unique moniker using count of existing monikers
+  SELECT COUNT(*) INTO v_idx FROM vendor_monikers;
+  v_moniker := colors[(v_idx % array_length(colors,1)) + 1] || '-' || names[(v_idx % array_length(names,1)) + 1];
+
+  -- Handle collision by appending a number
+  WHILE EXISTS (SELECT 1 FROM vendor_monikers WHERE moniker = v_moniker) LOOP
+    v_idx := v_idx + 1;
+    v_moniker := colors[(v_idx % array_length(colors,1)) + 1] || '-' || names[(v_idx % array_length(names,1)) + 1] || '-' || v_idx;
+  END LOOP;
+
+  INSERT INTO vendor_monikers (vendor_id, moniker) VALUES (p_vendor_id, v_moniker)
+    ON CONFLICT (vendor_id) DO NOTHING;
+
+  RETURN v_moniker;
+END;
+$$;
+
+-- ============================================================
+-- 021_api_tenants.sql
+-- ============================================================
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 021 — Third-party API tenancy layer
+--
+-- Enables external trading companies to use 7SEVEN's vendor network and
+-- support staff as pure infrastructure. They submit gift cards → we verify
+-- + dispatch to vendors → they receive webhooks on every status change.
+--
+-- Auth model: SHA-256-hashed Bearer tokens stored in api_keys.
+-- Tenant isolation: api_tenant_trades + api_tenant_support_tickets join tables.
+-- All API server calls use the service role key (bypasses RLS).
+-- App-level admin policies are added for the admin dashboard.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ── 1. api_tenants ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS api_tenants (
+  id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  name             TEXT        NOT NULL,
+  contact_email    TEXT        NOT NULL,
+  status           TEXT        NOT NULL DEFAULT 'active'
+                     CHECK (status IN ('active', 'suspended', 'terminated')),
+  plan             TEXT        NOT NULL DEFAULT 'free'
+                     CHECK (plan IN ('free', 'pro', 'enterprise')),
+  rate_limit_rpm   INTEGER     NOT NULL DEFAULT 60,
+  notes            TEXT,
+  created_by       UUID        REFERENCES auth.users(id),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT api_tenants_email_unique UNIQUE (contact_email)
+);
+
+-- ── 2. api_keys ───────────────────────────────────────────────────────────────
+-- Keys are stored as SHA-256 hashes; plaintext is shown exactly once.
+CREATE TABLE IF NOT EXISTS api_keys (
+  id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id      UUID        NOT NULL REFERENCES api_tenants(id) ON DELETE CASCADE,
+  key_hash       TEXT        NOT NULL,          -- SHA-256(sk_live_...)
+  key_prefix     TEXT        NOT NULL,          -- first 16 chars shown in UI
+  label          TEXT        NOT NULL DEFAULT 'default',
+  last_used_at   TIMESTAMPTZ,
+  revoked_at     TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT api_keys_hash_unique UNIQUE (key_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_tenant
+  ON api_keys(tenant_id) WHERE revoked_at IS NULL;
+
+-- ── 3. api_webhook_endpoints ──────────────────────────────────────────────────
+-- TPOs register HTTPS URLs. We sign each delivery with HMAC-SHA256.
+CREATE TABLE IF NOT EXISTS api_webhook_endpoints (
+  id              UUID      PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id       UUID      NOT NULL REFERENCES api_tenants(id) ON DELETE CASCADE,
+  url             TEXT      NOT NULL,
+  events          TEXT[]    NOT NULL DEFAULT '{}',
+  signing_secret  TEXT      NOT NULL,          -- whsec_... (shown once at creation)
+  is_active       BOOLEAN   NOT NULL DEFAULT TRUE,
+  failure_count   INTEGER   NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_webhook_endpoints_tenant
+  ON api_webhook_endpoints(tenant_id) WHERE is_active = TRUE;
+
+-- ── 4. api_webhook_deliveries ─────────────────────────────────────────────────
+-- Delivery log with retry tracking. Retry schedule: 0s, 30s, 2m, 10m (max 4 attempts).
+CREATE TABLE IF NOT EXISTS api_webhook_deliveries (
+  id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  endpoint_id      UUID        NOT NULL REFERENCES api_webhook_endpoints(id) ON DELETE CASCADE,
+  event_type       TEXT        NOT NULL,
+  payload          JSONB       NOT NULL,
+  attempt_count    INTEGER     NOT NULL DEFAULT 0,
+  last_attempt_at  TIMESTAMPTZ,
+  last_status_code INTEGER,
+  last_response    TEXT,
+  delivered_at     TIMESTAMPTZ,             -- non-null = successfully delivered
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_webhook_deliveries_endpoint
+  ON api_webhook_deliveries(endpoint_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_api_webhook_deliveries_pending
+  ON api_webhook_deliveries(endpoint_id)
+  WHERE delivered_at IS NULL AND attempt_count < 4;
+
+-- ── 5. api_tenant_trades ──────────────────────────────────────────────────────
+-- Links trades to the tenant that submitted them + stores the TPO's customer ref.
+-- Trades themselves use a shared API_GATEWAY_USER_ID profile (see SETUP.md).
+CREATE TABLE IF NOT EXISTS api_tenant_trades (
+  id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id     UUID        NOT NULL REFERENCES api_tenants(id) ON DELETE CASCADE,
+  trade_id      UUID        NOT NULL REFERENCES trades(id) ON DELETE CASCADE,
+  customer_ref  TEXT,                       -- TPO's own reference for their customer
+  batch_ref     TEXT,                       -- TPO's batch reference (for batch submits)
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT api_tenant_trades_unique UNIQUE (tenant_id, trade_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_tenant_trades_tenant
+  ON api_tenant_trades(tenant_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_api_tenant_trades_customer
+  ON api_tenant_trades(tenant_id, customer_ref) WHERE customer_ref IS NOT NULL;
+
+-- ── 6. api_tenant_support_tickets ────────────────────────────────────────────
+-- Links support tickets to the tenant that opened them on behalf of a customer.
+CREATE TABLE IF NOT EXISTS api_tenant_support_tickets (
+  id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id      UUID        NOT NULL REFERENCES api_tenants(id) ON DELETE CASCADE,
+  ticket_id      UUID        NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+  customer_ref   TEXT,
+  customer_name  TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT api_tenant_tickets_unique UNIQUE (tenant_id, ticket_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_tenant_tickets_tenant
+  ON api_tenant_support_tickets(tenant_id, created_at DESC);
+
+-- ── 7. RLS ────────────────────────────────────────────────────────────────────
+-- The Express API server always uses the service role key (bypasses RLS).
+-- We only add authenticated policies for admin read access.
+
+ALTER TABLE api_tenants              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_keys                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_webhook_endpoints    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_webhook_deliveries   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_tenant_trades        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_tenant_support_tickets ENABLE ROW LEVEL SECURITY;
+
+-- Service role has full access (used by api-server Express app)
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_tenants' AND policyname = 'service_role_api_tenants'
+  ) THEN
+    CREATE POLICY service_role_api_tenants
+      ON api_tenants FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_keys' AND policyname = 'service_role_api_keys'
+  ) THEN
+    CREATE POLICY service_role_api_keys
+      ON api_keys FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_webhook_endpoints' AND policyname = 'service_role_api_webhooks'
+  ) THEN
+    CREATE POLICY service_role_api_webhooks
+      ON api_webhook_endpoints FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_webhook_deliveries' AND policyname = 'service_role_api_deliveries'
+  ) THEN
+    CREATE POLICY service_role_api_deliveries
+      ON api_webhook_deliveries FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_tenant_trades' AND policyname = 'service_role_tenant_trades'
+  ) THEN
+    CREATE POLICY service_role_tenant_trades
+      ON api_tenant_trades FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_tenant_support_tickets' AND policyname = 'service_role_tenant_tickets'
+  ) THEN
+    CREATE POLICY service_role_tenant_tickets
+      ON api_tenant_support_tickets FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+-- Admin read policies (for admin dashboard server functions)
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_tenants' AND policyname = 'admin_read_api_tenants'
+  ) THEN
+    CREATE POLICY admin_read_api_tenants
+      ON api_tenants FOR SELECT TO authenticated
+      USING (
+        EXISTS (
+          SELECT 1 FROM profiles
+          WHERE profiles.id = auth.uid() AND profiles.role = 'admin'
+        )
+      );
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'api_keys' AND policyname = 'admin_read_api_keys'
+  ) THEN
+    CREATE POLICY admin_read_api_keys
+      ON api_keys FOR SELECT TO authenticated
+      USING (
+        EXISTS (
+          SELECT 1 FROM profiles
+          WHERE profiles.id = auth.uid() AND profiles.role = 'admin'
+        )
+      );
+  END IF;
+END $$;
+
+-- ── 8. DB functions ───────────────────────────────────────────────────────────
+
+-- provision_api_tenant: admin-only, creates tenant + hashed API key in one TX.
+-- Returns plaintext key (shown ONCE — never stored).
+-- Requires pgcrypto extension (already enabled in Supabase).
+CREATE OR REPLACE FUNCTION provision_api_tenant(
+  p_name          TEXT,
+  p_contact_email TEXT,
+  p_created_by    UUID
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_tenant_id  UUID;
+  v_key_plain  TEXT;
+  v_key_prefix TEXT;
+  v_key_hash   TEXT;
+BEGIN
+  -- Admin guard
+  IF NOT EXISTS (
+    SELECT 1 FROM profiles WHERE id = p_created_by AND role = 'admin'
+  ) THEN
+    RAISE EXCEPTION 'forbidden: admin only';
+  END IF;
+
+  INSERT INTO api_tenants (name, contact_email, created_by)
+  VALUES (p_name, p_contact_email, p_created_by)
+  RETURNING id INTO v_tenant_id;
+
+  -- Generate key: sk_live_ + 32 lowercase hex chars = 40 chars total
+  v_key_plain  := 'sk_live_' || encode(gen_random_bytes(16), 'hex');
+  v_key_prefix := left(v_key_plain, 16);       -- e.g. sk_live_a3f9...
+  v_key_hash   := encode(digest(v_key_plain, 'sha256'), 'hex');
+
+  INSERT INTO api_keys (tenant_id, key_hash, key_prefix, label)
+  VALUES (v_tenant_id, v_key_hash, v_key_prefix, 'default');
+
+  RETURN jsonb_build_object(
+    'tenant_id',  v_tenant_id,
+    'api_key',    v_key_plain,     -- plaintext — shown once, never stored again
+    'key_prefix', v_key_prefix
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION provision_api_tenant TO authenticated;
+
+-- rotate_api_key: revoke old key, issue new one atomically.
+CREATE OR REPLACE FUNCTION rotate_api_key(
+  p_tenant_id UUID,
+  p_key_id    UUID,
+  p_admin_id  UUID
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_key_plain  TEXT;
+  v_key_prefix TEXT;
+  v_key_hash   TEXT;
+  v_new_id     UUID;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM profiles WHERE id = p_admin_id AND role = 'admin'
+  ) THEN
+    RAISE EXCEPTION 'forbidden: admin only';
+  END IF;
+
+  UPDATE api_keys
+  SET revoked_at = NOW()
+  WHERE id = p_key_id AND tenant_id = p_tenant_id AND revoked_at IS NULL;
+
+  v_key_plain  := 'sk_live_' || encode(gen_random_bytes(16), 'hex');
+  v_key_prefix := left(v_key_plain, 16);
+  v_key_hash   := encode(digest(v_key_plain, 'sha256'), 'hex');
+
+  INSERT INTO api_keys (tenant_id, key_hash, key_prefix, label)
+  VALUES (p_tenant_id, v_key_hash, v_key_prefix, 'rotated')
+  RETURNING id INTO v_new_id;
+
+  RETURN jsonb_build_object(
+    'key_id',     v_new_id,
+    'api_key',    v_key_plain,
+    'key_prefix', v_key_prefix
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION rotate_api_key TO authenticated;
+
+-- suspend / unsuspend tenant
+CREATE OR REPLACE FUNCTION set_tenant_status(
+  p_tenant_id UUID,
+  p_status    TEXT,
+  p_admin_id  UUID
+) RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM profiles WHERE id = p_admin_id AND role = 'admin'
+  ) THEN
+    RAISE EXCEPTION 'forbidden: admin only';
+  END IF;
+
+  IF p_status NOT IN ('active', 'suspended', 'terminated') THEN
+    RAISE EXCEPTION 'invalid status';
+  END IF;
+
+  UPDATE api_tenants SET status = p_status WHERE id = p_tenant_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION set_tenant_status TO authenticated;
+
+-- ============================================================
+-- 022_api_billing.sql
+-- ============================================================
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 022 — API Tenant Billing & Subscription Plans
+--
+-- Revenue model for third-party trading companies (TPOs) using 7SEVEN's
+-- vendor network and support staff as infrastructure:
+--
+--   • Monthly platform fee: starts at ₦20,000 (Starter plan)
+--   • Trade fee: 7% of each successfully dispatched trade's NGN value
+--     (decreases with higher plans — reward volume)
+--   • Support staff fee: ₦5,000/month per active staff slot
+--
+-- Architecture:
+--   api_subscription_plans  — plan catalogue with pricing in Naira
+--   api_tenant_billing_cycles — monthly invoice aggregates per tenant
+--   api_billing_transactions  — individual line items (trade fees, monthly fees)
+--   record_api_trade_fee()  — called by api-server on each dispatched trade
+--   open_monthly_billing_cycle() — called at month start (cron/manual)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ── 1. Subscription Plans ─────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS api_subscription_plans (
+  id                          TEXT        PRIMARY KEY,   -- 'starter','growth','professional','enterprise'
+  name                        TEXT        NOT NULL,
+  monthly_fee_ngn             NUMERIC(12,2) NOT NULL DEFAULT 0,
+  trade_fee_pct               NUMERIC(5,4) NOT NULL DEFAULT 0.0700, -- 7.00%
+  support_staff_slots         INT         NOT NULL DEFAULT 1,
+  support_staff_monthly_ngn   NUMERIC(12,2) NOT NULL DEFAULT 5000,  -- per slot
+  rate_limit_rpm              INT         NOT NULL DEFAULT 60,
+  description                 TEXT,
+  is_active                   BOOLEAN     NOT NULL DEFAULT TRUE,
+  sort_order                  INT         NOT NULL DEFAULT 0,
+  created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed the four tiers (idempotent)
+INSERT INTO api_subscription_plans
+  (id, name, monthly_fee_ngn, trade_fee_pct, support_staff_slots, support_staff_monthly_ngn, rate_limit_rpm, description, sort_order)
+VALUES
+  ('starter',      'Starter',      20000,  0.0700, 1,  5000, 60,   'Entry-level for small trading companies. ₦20,000/mo platform fee + 7% per trade.',       1),
+  ('growth',       'Growth',       35000,  0.0650, 2,  5000, 300,  'Growing trading desks. ₦35,000/mo + 6.5% per trade. 2 support staff slots.',              2),
+  ('professional', 'Professional', 65000,  0.0600, 3,  5000, 600,  'High-volume operations. ₦65,000/mo + 6% per trade. 3 staff slots, 600 req/min.',          3),
+  ('enterprise',   'Enterprise',   150000, 0.0500, 10, 5000, 1500, 'Custom enterprise deployments. ₦150,000/mo + 5% per trade. 10 staff slots, 1500 req/min.',4)
+ON CONFLICT (id) DO NOTHING;
+
+-- ── 2. Widen plan CHECK on api_tenants ───────────────────────────────────────
+-- Existing constraint only allowed 'free','pro','enterprise'. Add new plan IDs.
+ALTER TABLE api_tenants DROP CONSTRAINT IF EXISTS api_tenants_plan_check;
+ALTER TABLE api_tenants
+  ADD CONSTRAINT api_tenants_plan_check
+  CHECK (plan IN ('free','starter','growth','professional','enterprise'));
+
+-- Add support_staff_count to track how many staff slots a tenant is using
+ALTER TABLE api_tenants
+  ADD COLUMN IF NOT EXISTS support_staff_count INT NOT NULL DEFAULT 1;
+
+-- ── 3. Monthly Billing Cycles ─────────────────────────────────────────────────
+-- One row per tenant per calendar month. Aggregates all fees for invoicing.
+CREATE TABLE IF NOT EXISTS api_tenant_billing_cycles (
+  id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id         UUID        NOT NULL REFERENCES api_tenants(id) ON DELETE CASCADE,
+  plan_id           TEXT        NOT NULL REFERENCES api_subscription_plans(id),
+  billing_month     DATE        NOT NULL,   -- always the 1st of the month
+  platform_fee_ngn  NUMERIC(12,2) NOT NULL DEFAULT 0,
+  trade_fee_ngn     NUMERIC(12,2) NOT NULL DEFAULT 0,
+  support_fee_ngn   NUMERIC(12,2) NOT NULL DEFAULT 0,
+  trade_count       INT         NOT NULL DEFAULT 0,
+  trade_volume_ngn  NUMERIC(16,2) NOT NULL DEFAULT 0,
+  status            TEXT        NOT NULL DEFAULT 'open'
+                      CHECK (status IN ('open','invoiced','paid','overdue')),
+  invoiced_at       TIMESTAMPTZ,
+  paid_at           TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (tenant_id, billing_month)
+);
+
+CREATE INDEX IF NOT EXISTS idx_billing_cycles_tenant
+  ON api_tenant_billing_cycles(tenant_id, billing_month DESC);
+
+CREATE INDEX IF NOT EXISTS idx_billing_cycles_status
+  ON api_tenant_billing_cycles(status) WHERE status IN ('open','invoiced','overdue');
+
+-- ── 4. Individual Billing Line Items ──────────────────────────────────────────
+-- Audit trail: one row per trade fee, monthly platform fee, support fee, etc.
+CREATE TABLE IF NOT EXISTS api_billing_transactions (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id   UUID        NOT NULL REFERENCES api_tenants(id) ON DELETE CASCADE,
+  cycle_id    UUID        REFERENCES api_tenant_billing_cycles(id),
+  type        TEXT        NOT NULL
+                CHECK (type IN ('trade_fee','platform_fee','support_fee','adjustment','credit')),
+  amount_ngn  NUMERIC(12,2) NOT NULL,
+  description TEXT,
+  trade_id    UUID        REFERENCES trades(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_billing_txns_tenant
+  ON api_billing_transactions(tenant_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_billing_txns_cycle
+  ON api_billing_transactions(cycle_id, created_at DESC);
+
+-- ── 5. Fix api_webhook_deliveries — add status tracking columns ───────────────
+-- Migration 021 uses attempt_count/last_attempt_at/last_status_code/delivered_at
+-- for raw tracking. Add derived status columns to support the admin dashboard.
+ALTER TABLE api_webhook_deliveries
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending','delivered','failed','retrying')),
+  ADD COLUMN IF NOT EXISTS attempt_number INT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS response_code  INT,
+  ADD COLUMN IF NOT EXISTS attempted_at   TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS next_retry_at  TIMESTAMPTZ;
+
+-- Backfill existing rows from the raw tracking columns
+UPDATE api_webhook_deliveries SET
+  attempt_number = attempt_count,
+  response_code  = last_status_code,
+  attempted_at   = last_attempt_at,
+  status = CASE
+    WHEN delivered_at IS NOT NULL THEN 'delivered'
+    WHEN attempt_count >= 4       THEN 'failed'
+    WHEN attempt_count > 0        THEN 'retrying'
+    ELSE 'pending'
+  END
+WHERE attempt_number = 0 OR status = 'pending';
+
+-- ── 6. RLS ────────────────────────────────────────────────────────────────────
+ALTER TABLE api_subscription_plans      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_tenant_billing_cycles   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_billing_transactions    ENABLE ROW LEVEL SECURITY;
+
+-- Service role: full access (api-server uses service role key)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'api_subscription_plans' AND policyname = 'svc_plans') THEN
+    CREATE POLICY svc_plans ON api_subscription_plans FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'api_tenant_billing_cycles' AND policyname = 'svc_billing_cycles') THEN
+    CREATE POLICY svc_billing_cycles ON api_tenant_billing_cycles FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'api_billing_transactions' AND policyname = 'svc_billing_txns') THEN
+    CREATE POLICY svc_billing_txns ON api_billing_transactions FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+-- Admin read access
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'api_subscription_plans' AND policyname = 'admin_read_plans') THEN
+    CREATE POLICY admin_read_plans ON api_subscription_plans FOR SELECT TO authenticated
+      USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'api_tenant_billing_cycles' AND policyname = 'admin_read_billing_cycles') THEN
+    CREATE POLICY admin_read_billing_cycles ON api_tenant_billing_cycles FOR SELECT TO authenticated
+      USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'api_billing_transactions' AND policyname = 'admin_read_billing_txns') THEN
+    CREATE POLICY admin_read_billing_txns ON api_billing_transactions FOR SELECT TO authenticated
+      USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+  END IF;
+END $$;
+
+-- ── 7. record_api_trade_fee() ──────────────────────────────────────────────────
+-- Called by the API server (service role) after every successfully dispatched
+-- trade. Calculates the platform's cut (7% on Starter, down to 5% Enterprise)
+-- and appends it to the tenant's current monthly billing cycle.
+CREATE OR REPLACE FUNCTION record_api_trade_fee(
+  p_tenant_id   UUID,
+  p_trade_id    UUID,
+  p_amount_ngn  NUMERIC
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_plan_id  TEXT;
+  v_plan     api_subscription_plans%ROWTYPE;
+  v_fee_ngn  NUMERIC(12,2);
+  v_cycle_id UUID;
+  v_month    DATE;
+BEGIN
+  -- Resolve tenant's current plan
+  SELECT COALESCE(plan, 'starter') INTO v_plan_id
+  FROM api_tenants WHERE id = p_tenant_id;
+
+  SELECT * INTO v_plan FROM api_subscription_plans WHERE id = v_plan_id;
+  IF NOT FOUND THEN
+    SELECT * INTO v_plan FROM api_subscription_plans WHERE id = 'starter';
+  END IF;
+
+  v_fee_ngn := ROUND(p_amount_ngn * v_plan.trade_fee_pct, 2);
+  v_month   := date_trunc('month', NOW())::DATE;
+
+  -- Upsert the current month's billing cycle
+  INSERT INTO api_tenant_billing_cycles
+    (tenant_id, plan_id, billing_month, trade_fee_ngn, trade_count, trade_volume_ngn)
+  VALUES
+    (p_tenant_id, v_plan.id, v_month, v_fee_ngn, 1, p_amount_ngn)
+  ON CONFLICT (tenant_id, billing_month) DO UPDATE SET
+    trade_fee_ngn    = api_tenant_billing_cycles.trade_fee_ngn + v_fee_ngn,
+    trade_count      = api_tenant_billing_cycles.trade_count   + 1,
+    trade_volume_ngn = api_tenant_billing_cycles.trade_volume_ngn + p_amount_ngn,
+    updated_at       = NOW()
+  RETURNING id INTO v_cycle_id;
+
+  -- Record the line item
+  INSERT INTO api_billing_transactions
+    (tenant_id, cycle_id, type, amount_ngn, description, trade_id)
+  VALUES (
+    p_tenant_id, v_cycle_id, 'trade_fee', v_fee_ngn,
+    format('%s%% platform fee on ₦%s trade',
+      to_char(v_plan.trade_fee_pct * 100, 'FM990.9'),
+      to_char(p_amount_ngn, 'FM999,999,999')),
+    p_trade_id
+  );
+
+  RETURN jsonb_build_object('fee_ngn', v_fee_ngn, 'cycle_id', v_cycle_id);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION record_api_trade_fee TO service_role;
+
+-- ── 8. open_monthly_billing_cycle() ───────────────────────────────────────────
+-- Run at the start of each calendar month (e.g. via pg_cron or a Supabase Edge
+-- Function cron). Seeds platform + support fees for all active tenants.
+-- Idempotent: ON CONFLICT DO NOTHING means safe to run multiple times.
+CREATE OR REPLACE FUNCTION open_monthly_billing_cycle(
+  p_billing_month DATE DEFAULT date_trunc('month', NOW())::DATE
+) RETURNS INT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_tenant   RECORD;
+  v_plan     api_subscription_plans%ROWTYPE;
+  v_support  NUMERIC(12,2);
+  v_count    INT := 0;
+BEGIN
+  FOR v_tenant IN
+    SELECT t.id,
+           COALESCE(t.plan, 'starter') AS plan_id,
+           COALESCE(t.support_staff_count, 1) AS staff_count
+    FROM api_tenants t
+    WHERE t.status = 'active'
+  LOOP
+    SELECT * INTO v_plan FROM api_subscription_plans WHERE id = v_tenant.plan_id;
+    IF NOT FOUND THEN
+      SELECT * INTO v_plan FROM api_subscription_plans WHERE id = 'starter';
+    END IF;
+
+    v_support := v_plan.support_staff_monthly_ngn * v_tenant.staff_count;
+
+    -- Open the cycle (no-op if already exists)
+    INSERT INTO api_tenant_billing_cycles
+      (tenant_id, plan_id, billing_month, platform_fee_ngn, support_fee_ngn)
+    VALUES
+      (v_tenant.id, v_plan.id, p_billing_month, v_plan.monthly_fee_ngn, v_support)
+    ON CONFLICT (tenant_id, billing_month) DO NOTHING;
+
+    -- Platform fee line item (idempotent guard)
+    INSERT INTO api_billing_transactions
+      (tenant_id, type, amount_ngn, description)
+    SELECT
+      v_tenant.id, 'platform_fee', v_plan.monthly_fee_ngn,
+      format('Monthly API platform fee — %s plan (%s)',
+        v_plan.name, to_char(p_billing_month, 'Mon YYYY'))
+    WHERE NOT EXISTS (
+      SELECT 1 FROM api_billing_transactions
+      WHERE tenant_id = v_tenant.id
+        AND type = 'platform_fee'
+        AND date_trunc('month', created_at)::DATE = p_billing_month
+    );
+
+    -- Support fee line item
+    IF v_support > 0 THEN
+      INSERT INTO api_billing_transactions
+        (tenant_id, type, amount_ngn, description)
+      SELECT
+        v_tenant.id, 'support_fee', v_support,
+        format('Support staff — %s slot%s × ₦%s/mo (%s)',
+          v_tenant.staff_count,
+          CASE WHEN v_tenant.staff_count = 1 THEN '' ELSE 's' END,
+          to_char(v_plan.support_staff_monthly_ngn, 'FM999,999'),
+          to_char(p_billing_month, 'Mon YYYY'))
+      WHERE NOT EXISTS (
+        SELECT 1 FROM api_billing_transactions
+        WHERE tenant_id = v_tenant.id
+          AND type = 'support_fee'
+          AND date_trunc('month', created_at)::DATE = p_billing_month
+      );
+    END IF;
+
+    v_count := v_count + 1;
+  END LOOP;
+
+  RETURN v_count;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION open_monthly_billing_cycle TO service_role;
+
+-- ============================================================
+-- 023_multi_region_rates.sql
+-- ============================================================
+-- ─── Migration 023: Multi-region exchange rates ──────────────────────────────
+-- Adds UK, EU, and CA rate rows to exchange_rates.
+-- The rate_per_dollar column stays in NGN/USD terms.
+-- The frontend applies a per-region forex multiplier (REGION_FX) to derive
+-- NGN per local currency unit: nairaPerUnit = rate_per_dollar * forexMultiplier
+-- Also adds a `region` column to the trades table for analytics.
+
+-- 1. Normalise existing USA → US (old code used "USA", new code uses "US")
+UPDATE exchange_rates SET region = 'US' WHERE region = 'USA';
+
+-- 2. Seed United Kingdom (GBP) rates
+INSERT INTO exchange_rates (brand, region, rate_per_dollar, trend, source)
+VALUES
+  ('Google Play', 'UK', 1460, '+1.1%', 'manual'),
+  ('Steam',       'UK', 1380, '+0.9%', 'manual'),
+  ('Amazon',      'UK', 1420, '+1.3%', 'manual'),
+  ('Apple',       'UK', 1485, '+1.8%', 'manual'),
+  ('Netflix',     'UK', 1350, '+0.5%', 'manual'),
+  ('Spotify',     'UK', 1325, '+0.2%', 'manual')
+ON CONFLICT (brand, region) DO UPDATE
+  SET rate_per_dollar = EXCLUDED.rate_per_dollar,
+      trend           = EXCLUDED.trend,
+      updated_at      = now();
+
+-- 3. Seed Eurozone (EUR) rates
+INSERT INTO exchange_rates (brand, region, rate_per_dollar, trend, source)
+VALUES
+  ('Steam',       'EU', 1380, '-0.1%', 'manual'),
+  ('Google Play', 'EU', 1460, '+0.6%', 'manual'),
+  ('Amazon',      'EU', 1420, '+0.9%', 'manual'),
+  ('Apple',       'EU', 1485, '+1.2%', 'manual')
+ON CONFLICT (brand, region) DO UPDATE
+  SET rate_per_dollar = EXCLUDED.rate_per_dollar,
+      trend           = EXCLUDED.trend,
+      updated_at      = now();
+
+-- 4. Seed Canada (CAD) rates
+INSERT INTO exchange_rates (brand, region, rate_per_dollar, trend, source)
+VALUES
+  ('Apple',       'CA', 1485, '+0.8%', 'manual'),
+  ('Amazon',      'CA', 1420, '+0.6%', 'manual'),
+  ('Steam',       'CA', 1380, '-0.2%', 'manual'),
+  ('Google Play', 'CA', 1460, '+0.4%', 'manual'),
+  ('Xbox',        'CA', 1395, '+0.7%', 'manual'),
+  ('PlayStation', 'CA', 1410, '+0.3%', 'manual'),
+  ('Spotify',     'CA', 1325, '+0.1%', 'manual')
+ON CONFLICT (brand, region) DO UPDATE
+  SET rate_per_dollar = EXCLUDED.rate_per_dollar,
+      trend           = EXCLUDED.trend,
+      updated_at      = now();
+
+-- 5. Seed new US-only brands
+INSERT INTO exchange_rates (brand, region, rate_per_dollar, trend, source)
+VALUES
+  ('Razer Gold', 'US', 1300, '+0.3%', 'manual'),
+  ('Sephora',    'US', 1340, '+0.7%', 'manual'),
+  ('Nordstrom',  'US', 1310, '+0.4%', 'manual')
+ON CONFLICT (brand, region) DO UPDATE
+  SET rate_per_dollar = EXCLUDED.rate_per_dollar,
+      trend           = EXCLUDED.trend,
+      updated_at      = now();
+
+-- 6. Add region column to trades table (if not already present)
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS region TEXT DEFAULT 'US';
+
+-- 7. Update trades constraint — allow new region values
+-- (no constraint change needed; trades.region is freeform text)
+
+-- ============================================================
+-- 021_card_images.sql
+-- ============================================================
+-- ============================================================
+-- 021_card_images.sql
+-- Card image upload support for gift card trades
+-- Run in Supabase SQL Editor
+-- ============================================================
+
+-- ── 1. Add image path column to trades ──────────────────────────────────────
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS card_image_path TEXT;
+
+-- ── 2. Create private Supabase Storage bucket ────────────────────────────────
+-- Images stored under {userId}/{timestamp}.{ext}
+-- Private bucket — only signed URLs can be shared with vendors
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'card-images',
+  'card-images',
+  false,
+  5242880,  -- 5 MB max per image
+  ARRAY[
+    'image/jpeg', 'image/jpg', 'image/png',
+    'image/webp', 'image/heic', 'image/heif'
+  ]
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- ── 3. Storage RLS policies ───────────────────────────────────────────────────
+
+-- Users can upload their own images (path must start with their user ID)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'objects' AND schemaname = 'storage'
+    AND policyname = 'card_images_upload'
+  ) THEN
+    CREATE POLICY "card_images_upload"
+      ON storage.objects FOR INSERT
+      WITH CHECK (
+        bucket_id = 'card-images'
+        AND auth.role() = 'authenticated'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+      );
+  END IF;
+END $$;
+
+-- Users can view their own uploaded images
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'objects' AND schemaname = 'storage'
+    AND policyname = 'card_images_read_own'
+  ) THEN
+    CREATE POLICY "card_images_read_own"
+      ON storage.objects FOR SELECT
+      USING (
+        bucket_id = 'card-images'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+      );
+  END IF;
+END $$;
+
+-- Admins can view all card images
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'objects' AND schemaname = 'storage'
+    AND policyname = 'card_images_read_admin'
+  ) THEN
+    CREATE POLICY "card_images_read_admin"
+      ON storage.objects FOR SELECT
+      USING (
+        bucket_id = 'card-images'
+        AND EXISTS (
+          SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'
+        )
+      );
+  END IF;
+END $$;
+
+-- Users can delete their own images (e.g. resubmit)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'objects' AND schemaname = 'storage'
+    AND policyname = 'card_images_delete_own'
+  ) THEN
+    CREATE POLICY "card_images_delete_own"
+      ON storage.objects FOR DELETE
+      USING (
+        bucket_id = 'card-images'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+      );
+  END IF;
+END $$;

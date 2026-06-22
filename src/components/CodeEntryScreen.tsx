@@ -32,7 +32,8 @@ export function CodeEntryScreen({
 }: CodeEntryScreenProps) {
   const [cards, setCards] = useState<CardEntry[]>([{ code: "", pin: "", showPin: false }]);
   const [error, setError] = useState("");
-  const fileInputRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const cameraRefs  = useRef<Array<HTMLInputElement | null>>([]);
+  const galleryRefs = useRef<Array<HTMLInputElement | null>>([]);
 
   const BRAND_EMOJI: Record<string, string> = {
     Apple: "🍎", Amazon: "📦", Steam: "🎮", "Google Play": "▶️",
@@ -259,22 +260,45 @@ export function CodeEntryScreen({
                   )}
                 </div>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => fileInputRefs.current[i]?.click()}
-                  className="w-full flex items-center justify-center gap-2 border border-dashed border-border/60 rounded-xl py-2.5 text-xs text-muted-foreground hover:border-gold/40 hover:text-gold transition"
-                >
-                  <Camera className="size-3.5" />
-                  <span>Attach card photo</span>
-                  <ImagePlus className="size-3.5 ml-0.5 opacity-60" />
-                </button>
+                <div className="flex gap-2">
+                  {/* Take Photo — opens device camera directly */}
+                  <button
+                    type="button"
+                    onClick={() => cameraRefs.current[i]?.click()}
+                    className="flex-1 flex items-center justify-center gap-1.5 border border-dashed border-border/60 rounded-xl py-2.5 text-xs text-muted-foreground hover:border-gold/40 hover:text-gold transition"
+                  >
+                    <Camera className="size-3.5" />
+                    <span>Camera</span>
+                  </button>
+                  {/* Choose from Gallery — opens photo library */}
+                  <button
+                    type="button"
+                    onClick={() => galleryRefs.current[i]?.click()}
+                    className="flex-1 flex items-center justify-center gap-1.5 border border-dashed border-border/60 rounded-xl py-2.5 text-xs text-muted-foreground hover:border-gold/40 hover:text-gold transition"
+                  >
+                    <ImagePlus className="size-3.5" />
+                    <span>Gallery</span>
+                  </button>
+                </div>
               )}
-              {/* Hidden file input — accepts camera or gallery */}
+              {/* Camera input — forces device camera (capture="environment") */}
               <input
-                ref={(el) => { fileInputRefs.current[i] = el; }}
+                ref={(el) => { cameraRefs.current[i] = el; }}
                 type="file"
                 accept="image/*,image/heic,image/heif"
                 capture="environment"
+                className="sr-only"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleImageSelect(i, file);
+                  e.target.value = "";
+                }}
+              />
+              {/* Gallery input — opens photo library / file picker (no capture) */}
+              <input
+                ref={(el) => { galleryRefs.current[i] = el; }}
+                type="file"
+                accept="image/*,image/heic,image/heif"
                 className="sr-only"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
