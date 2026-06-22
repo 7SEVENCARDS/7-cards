@@ -6,6 +6,7 @@ import {
   Copy, Send, RefreshCw, ArrowRight, Plus, Building2,
   MessageCircle, ShieldCheck, TrendingUp, Gift, ChevronRight,
   AlertTriangle, Lock, Banknote, Star,
+  BarChart2, Bell, Activity, Zap, Target, Shield,
 } from "lucide-react";
 import {
   getVendorSession,
@@ -22,6 +23,9 @@ import {
   getMyWithdrawals,
   getMyBadges,
   getMyReferralInfo,
+  getMyVendorScore,
+  getVendorNotifications,
+  markNotificationRead,
 } from "../server-functions/vendors";
 import { getMyBroadcastClaims, getActiveBroadcasts, getMyRateHistory } from "../server-functions/vendor-broadcast";
 import type { ActiveBroadcastRow, RateHistoryRow } from "../server-functions/vendor-broadcast";
@@ -48,7 +52,22 @@ type Assignment = {
 };
 type WalletData = { wallet: { balance: number; total_funded: number } | null; transactions: Array<{ id: string; type: string; amount: number; description: string | null; created_at: string }> };
 
-type VendorTab = "dashboard" | "cards" | "wallet" | "profile";
+type VendorScoreResult = {
+  vendorId: string; businessName: string; tier: string;
+  totalScore: number; completionRate: number; accuracyRate: number;
+  speedScore: number; reliabilityScore: number; activityScore: number;
+  assignmentsLast90d: number; redeemedLast90d: number;
+  avgHoursToRedeem: number | null; consecutiveFailures: number;
+  totalRedeemed: number; totalVolumeNgn: number;
+  lastActiveAt: string | null; computedAt: string;
+};
+
+type VendorNotification = {
+  id: string; title: string; message: string;
+  type: string; read: boolean; created_at: string;
+};
+
+type VendorTab = "dashboard" | "cards" | "wallet" | "performance" | "profile";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtNgn(n: number) { return "₦" + Number(n).toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -286,13 +305,21 @@ function StatusGate({ status, onLogout }: { status: VendorStatus; onLogout: () =
 function DashboardTab({ vendor }: { vendor: VendorSession }) {
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [score, setScore] = useState<VendorScoreResult | null>(null);
+  const [notifications, setNotifications] = useState<VendorNotification[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
       getVendorWallet({ data: {} }) as Promise<WalletData>,
       getMyAssignments({ data: { limit: 5 } }) as Promise<Assignment[]>,
-    ]).then(([w, a]) => { setWallet(w); setAssignments(a); }).finally(() => setLoading(false));
+      (getMyVendorScore({ data: {} }) as Promise<VendorScoreResult>).catch(() => null),
+      (getVendorNotifications({ data: { limit: 5 } }) as Promise<VendorNotification[]>).catch(() => []),
+    ]).then(([w, a, s, n]) => {
+      setWallet(w); setAssignments(a);
+      if (s) setScore(s);
+      setNotifications(n);
+    }).finally(() => setLoading(false));
   }, []);
 
   if (loading) return <div className="flex-1 flex items-center justify-center"><Loader2 className="size-6 animate-spin text-gold" /></div>;
@@ -332,14 +359,87 @@ function DashboardTab({ vendor }: { vendor: VendorSession }) {
         </div>
       </div>
 
-      {/* Tier Badge */}
-      <div className={`rounded-2xl p-4 border flex items-center gap-3 ${vendor.tier === "premium" ? "bg-gold/8 border-gold/20" : "bg-secondary border-border/60"}`}>
-        <Star className={`size-5 shrink-0 ${vendor.tier === "premium" ? "text-gold" : "text-muted-foreground"}`} />
-        <div>
-          <p className="text-sm font-bold capitalize">{vendor.tier} Tier</p>
-          <p className="text-xs text-muted-foreground">{vendor.tier === "premium" ? "Priority card assignments, higher limits" : "Complete 10+ redemptions to unlock Premium tier"}</p>
+      {/* Trust Score + Tier row */}
+      <div className="grid grid-cols-2 gap-3">
+        {/* Trust Score card */}
+        {score !== null && (
+          <div className={`rounded-2xl p-4 border flex items-center gap-3 ${
+            score.totalScore >= 80 ? "bg-green-500/8 border-green-500/20" :
+            score.totalScore >= 60 ? "bg-gold/8 border-gold/20" :
+            "bg-red-500/8 border-red-500/20"
+          }`}>
+            <div className="relative size-11 shrink-0">
+              <svg className="size-11 -rotate-90" viewBox="0 0 36 36">
+                <circle cx="18" cy="18" r="15.9" fill="none" stroke="currentColor"
+                  className="text-border/40" strokeWidth="3" />
+                <circle cx="18" cy="18" r="15.9" fill="none"
+                  stroke={score.totalScore >= 80 ? "#4ade80" : score.totalScore >= 60 ? "#d4a017" : "#f87171"}
+                  strokeWidth="3" strokeDasharray={`${score.totalScore} 100`} strokeLinecap="round" />
+              </svg>
+              <span className="absolute inset-0 flex items-center justify-center text-[10px] font-extrabold">
+                {score.totalScore}
+              </span>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Trust Score</p>
+              <p className={`text-sm font-extrabold ${
+                score.totalScore >= 80 ? "text-green-400" :
+                score.totalScore >= 60 ? "text-gold" : "text-red-400"
+              }`}>
+                {score.totalScore >= 80 ? "Excellent" : score.totalScore >= 60 ? "Good" : "Needs Work"}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Tier badge */}
+        <div className={`rounded-2xl p-4 border flex items-center gap-3 ${vendor.tier === "premium" ? "bg-gold/8 border-gold/20" : "bg-secondary border-border/60"}`}>
+          <Star className={`size-5 shrink-0 ${vendor.tier === "premium" ? "text-gold" : "text-muted-foreground"}`} />
+          <div>
+            <p className="text-xs text-muted-foreground">Tier</p>
+            <p className="text-sm font-bold capitalize">{vendor.tier}</p>
+          </div>
         </div>
       </div>
+
+      {/* Notifications */}
+      {notifications.filter(n => !n.read).length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <Bell className="size-3.5 text-gold" />
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Alerts</p>
+            <span className="ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-gold/20 text-gold border border-gold/25">
+              {notifications.filter(n => !n.read).length} new
+            </span>
+          </div>
+          <div className="space-y-2">
+            {notifications.filter(n => !n.read).slice(0, 3).map(notif => (
+              <div key={notif.id} className={`rounded-xl border px-3 py-2.5 flex gap-2 ${
+                notif.type === "error" ? "border-red-500/20 bg-red-500/5" :
+                notif.type === "warning" ? "border-gold/20 bg-gold/5" :
+                "border-border/60 bg-secondary"
+              }`}>
+                <span className="text-sm mt-0.5 shrink-0">
+                  {notif.type === "error" ? "⛔" : notif.type === "warning" ? "⚠️" : "ℹ️"}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-bold leading-tight">{notif.title}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug line-clamp-2">{notif.message}</p>
+                </div>
+                <button
+                  onClick={() => {
+                    markNotificationRead({ data: { notificationId: notif.id } }).catch(() => {});
+                    setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n));
+                  }}
+                  className="shrink-0 text-muted-foreground hover:text-foreground transition mt-0.5"
+                >
+                  <XCircle className="size-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Live Broadcast Countdown */}
       <LiveBroadcastSection />
@@ -373,6 +473,200 @@ function DashboardTab({ vendor }: { vendor: VendorSession }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Performance Tab ──────────────────────────────────────────────────────────
+function PerformanceTab({ vendor }: { vendor: VendorSession }) {
+  const [score, setScore] = useState<VendorScoreResult | null>(null);
+  const [notifications, setNotifications] = useState<VendorNotification[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    Promise.all([
+      (getMyVendorScore({ data: {} }) as Promise<VendorScoreResult>).catch(() => null),
+      (getVendorNotifications({ data: { limit: 20 } }) as Promise<VendorNotification[]>).catch(() => []),
+    ]).then(([s, n]) => {
+      if (s) setScore(s);
+      setNotifications(n);
+    }).finally(() => setLoading(false));
+  }, []);
+
+  const dismiss = (id: string) => {
+    markNotificationRead({ data: { notificationId: id } }).catch(() => {});
+    setDismissedIds(prev => { const n = new Set(prev); n.add(id); return n; });
+  };
+
+  if (loading) return (
+    <div className="flex-1 flex items-center justify-center p-12">
+      <Loader2 className="size-6 animate-spin text-gold" />
+    </div>
+  );
+
+  const scoreColor = score && score.totalScore >= 80 ? "#4ade80"
+    : score && score.totalScore >= 60 ? "#d4a017" : "#f87171";
+  const scoreLabel = score && score.totalScore >= 80 ? "Excellent"
+    : score && score.totalScore >= 60 ? "Good" : "Needs Improvement";
+
+  const metrics: Array<{ label: string; value: number; icon: typeof Activity; max: number; description: string }> = score ? [
+    { label: "Completion Rate", value: score.completionRate * 100, icon: CheckCircle2, max: 100, description: "% of assigned cards successfully redeemed" },
+    { label: "Accuracy Rate",   value: score.accuracyRate * 100,   icon: Target,       max: 100, description: "All-time success rate including past assignments" },
+    { label: "Speed Score",     value: score.speedScore,            icon: Zap,          max: 100, description: `Avg ${score.avgHoursToRedeem !== null ? `${score.avgHoursToRedeem}h` : "—"} to redeem · 0h=100, 72h+=0` },
+    { label: "Reliability",     value: score.reliabilityScore,      icon: Shield,       max: 100, description: `${score.consecutiveFailures} consecutive failure${score.consecutiveFailures !== 1 ? "s" : ""} currently` },
+    { label: "Activity",        value: score.activityScore,         icon: Activity,     max: 100, description: `Last active: ${score.lastActiveAt ? timeAgo(score.lastActiveAt) : "never"}` },
+  ] : [];
+
+  const visible = notifications.filter(n => !dismissedIds.has(n.id));
+
+  return (
+    <div className="p-6 space-y-6">
+      <div>
+        <h2 className="text-xl font-extrabold">Performance Center</h2>
+        <p className="text-sm text-muted-foreground mt-0.5">Your vendor trust score and metrics (last 90 days)</p>
+      </div>
+
+      {score ? (
+        <>
+          {/* Big trust score ring */}
+          <div className="bg-card border border-border/60 rounded-3xl p-6 flex items-center gap-5">
+            <div className="relative size-20 shrink-0">
+              <svg className="size-20 -rotate-90" viewBox="0 0 36 36">
+                <circle cx="18" cy="18" r="15.9" fill="none" stroke="currentColor" className="text-border/40" strokeWidth="3" />
+                <circle cx="18" cy="18" r="15.9" fill="none" stroke={scoreColor}
+                  strokeWidth="3.5" strokeDasharray={`${score.totalScore} 100`} strokeLinecap="round" />
+              </svg>
+              <span className="absolute inset-0 flex items-center justify-center text-xl font-extrabold"
+                style={{ color: scoreColor }}>
+                {score.totalScore}
+              </span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-muted-foreground">Trust Score</p>
+              <p className="text-2xl font-extrabold" style={{ color: scoreColor }}>{scoreLabel}</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {score.redeemedLast90d} redeemed · {score.assignmentsLast90d} assigned (90d)
+              </p>
+            </div>
+            {vendor.tier === "premium" && (
+              <div className="shrink-0 text-center">
+                <Star className="size-6 text-gold mx-auto mb-0.5" />
+                <p className="text-[10px] font-bold text-gold">Premium</p>
+              </div>
+            )}
+          </div>
+
+          {/* Metric bars */}
+          <div className="space-y-3">
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Score Breakdown</p>
+            {metrics.map(m => (
+              <div key={m.label} className="bg-card border border-border/60 rounded-2xl px-4 py-3">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <m.icon className="size-3.5 text-muted-foreground shrink-0" />
+                  <p className="text-xs font-bold flex-1">{m.label}</p>
+                  <p className="text-xs font-extrabold tabular-nums">{Math.round(m.value)}/100</p>
+                </div>
+                <div className="h-1.5 rounded-full bg-secondary overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{
+                      width: `${Math.max(2, m.value)}%`,
+                      background: m.value >= 75 ? "#4ade80" : m.value >= 50 ? "#d4a017" : "#f87171",
+                    }}
+                  />
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-1">{m.description}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Strike warning */}
+          {score.consecutiveFailures > 0 && (
+            <div className={`rounded-2xl border px-4 py-3 flex items-start gap-3 ${
+              score.consecutiveFailures >= 2 ? "border-red-500/30 bg-red-500/5" : "border-gold/30 bg-gold/5"
+            }`}>
+              <AlertTriangle className={`size-4 shrink-0 mt-0.5 ${score.consecutiveFailures >= 2 ? "text-red-400" : "text-gold"}`} />
+              <div>
+                <p className="text-xs font-extrabold">
+                  {score.consecutiveFailures} Consecutive Failure{score.consecutiveFailures > 1 ? "s" : ""}
+                </p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  Auto-suspension triggers at 3 consecutive failures. {3 - score.consecutiveFailures} more will suspend your account.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* All-time stats */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-card border border-border/60 rounded-xl p-3 text-center">
+              <p className="text-lg font-extrabold text-gold">{score.totalRedeemed}</p>
+              <p className="text-[10px] text-muted-foreground">Total Redeemed</p>
+            </div>
+            <div className="bg-card border border-border/60 rounded-xl p-3 text-center">
+              <p className="text-lg font-extrabold text-purple-400">{fmtNgn(score.totalVolumeNgn).replace("₦", "₦").split(".")[0]}</p>
+              <p className="text-[10px] text-muted-foreground">Total Volume</p>
+            </div>
+            <div className="bg-card border border-border/60 rounded-xl p-3 text-center">
+              <p className="text-lg font-extrabold text-cyan">{score.avgHoursToRedeem !== null ? `${score.avgHoursToRedeem}h` : "—"}</p>
+              <p className="text-[10px] text-muted-foreground">Avg Speed</p>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="text-center py-12 rounded-2xl border border-border/60">
+          <BarChart2 className="size-12 text-muted-foreground/30 mx-auto mb-4" />
+          <p className="text-sm text-muted-foreground">Score data not available yet</p>
+          <p className="text-xs text-muted-foreground mt-1">Start redeeming cards to build your trust score</p>
+        </div>
+      )}
+
+      {/* Notification Centre */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <Bell className="size-3.5 text-gold" />
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Notification Centre</p>
+          {visible.filter(n => !n.read).length > 0 && (
+            <span className="ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-gold/20 text-gold border border-gold/25">
+              {visible.filter(n => !n.read).length} unread
+            </span>
+          )}
+        </div>
+
+        {visible.length === 0 ? (
+          <div className="text-center py-8 rounded-2xl border border-border/40 bg-secondary/50">
+            <Bell className="size-8 text-muted-foreground/30 mx-auto mb-2" />
+            <p className="text-xs text-muted-foreground">No notifications</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {visible.map(notif => (
+              <div key={notif.id} className={`rounded-xl border px-3 py-3 flex gap-3 transition-opacity ${
+                notif.read ? "opacity-50" : ""
+              } ${
+                notif.type === "error" ? "border-red-500/20 bg-red-500/5" :
+                notif.type === "warning" ? "border-gold/20 bg-gold/5" :
+                "border-border/60 bg-card"
+              }`}>
+                <span className="text-base shrink-0 mt-0.5">
+                  {notif.type === "error" ? "⛔" : notif.type === "warning" ? "⚠️" : "ℹ️"}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold">{notif.title}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">{notif.message}</p>
+                  <p className="text-[10px] text-muted-foreground/60 mt-1">{timeAgo(notif.created_at)}</p>
+                </div>
+                {!notif.read && (
+                  <button onClick={() => dismiss(notif.id)} className="shrink-0 text-muted-foreground hover:text-foreground transition">
+                    <XCircle className="size-4" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1188,10 +1482,11 @@ function VendorPortal() {
   }
 
   const tabs: { id: VendorTab; label: string; icon: typeof LayoutDashboard }[] = [
-    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { id: "cards",     label: "My Cards",  icon: CreditCard },
-    { id: "wallet",    label: "Wallet",    icon: Wallet2 },
-    { id: "profile",   label: "Profile",   icon: User },
+    { id: "dashboard",   label: "Dashboard",   icon: LayoutDashboard },
+    { id: "cards",       label: "My Cards",    icon: CreditCard },
+    { id: "wallet",      label: "Wallet",      icon: Wallet2 },
+    { id: "performance", label: "Performance", icon: BarChart2 },
+    { id: "profile",     label: "Profile",     icon: User },
   ];
 
   return (
@@ -1248,10 +1543,11 @@ function VendorPortal() {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto">
-          {tab === "dashboard" && <DashboardTab vendor={vendor} />}
-          {tab === "cards"     && <CardsTab />}
-          {tab === "wallet"    && <WalletTab />}
-          {tab === "profile"   && <ProfileTab vendor={vendor} onLogout={handleLogout} />}
+          {tab === "dashboard"   && <DashboardTab vendor={vendor} />}
+          {tab === "cards"       && <CardsTab />}
+          {tab === "wallet"      && <WalletTab />}
+          {tab === "performance" && <PerformanceTab vendor={vendor} />}
+          {tab === "profile"     && <ProfileTab vendor={vendor} onLogout={handleLogout} />}
         </div>
 
         {/* Mobile bottom nav */}

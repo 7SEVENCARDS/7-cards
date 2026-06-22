@@ -1940,6 +1940,43 @@ export const adminGetVendorScores = createServerFn({ method: "GET" })
       .sort((a, b) => b.totalScore - a.totalScore);
   });
 
+// ─── Get Vendor Notifications ─────────────────────────────────────────────────
+export const getVendorNotifications = createServerFn({ method: "GET" })
+  .validator((d: { limit?: number }) => d)
+  .handler(async ({ data }) => {
+    const userId = await requireVendorAuth();
+    const db = getServerSupabase();
+    const { data: rows, error } = await db
+      .from("notifications")
+      .select("id, title, message, type, read, created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(data.limit ?? 20);
+    if (error) return [];
+    return (rows ?? []) as Array<{
+      id: string;
+      title: string;
+      message: string;
+      type: string;
+      read: boolean;
+      created_at: string;
+    }>;
+  });
+
+// ─── Mark Notification Read ────────────────────────────────────────────────────
+export const markNotificationRead = createServerFn({ method: "POST" })
+  .validator((d: { notificationId: string }) => d)
+  .handler(async ({ data }) => {
+    const userId = await requireVendorAuth();
+    const db = getServerSupabase();
+    await db
+      .from("notifications")
+      .update({ read: true })
+      .eq("id", data.notificationId)
+      .eq("user_id", userId);
+    return { success: true };
+  });
+
 // ─── Admin: Auto-assign best available vendor for a trade ─────────────────────
 // Replaces manual selection with score-weighted dispatch.
 // Vendors with higher scores get priority when multiple vendors are eligible.
