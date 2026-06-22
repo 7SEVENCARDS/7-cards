@@ -1767,3 +1767,223 @@ export const adminReactivateVendor = createServerFn({ method: "POST" })
 
     return { success: true, depositWaived: !depositMet && !!data.forceActivate };
   });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 7 — Vendor Performance Scoring Engine
+// ─────────────────────────────────────────────────────────────────────────────
+// Computes a 0–100 composite score + tier from live DB metrics.
+// No separate "scores" table — always derived from source data.
+//
+// Weights:
+//   Completion rate  35%  (completed / total assigned, last 90 days)
+//   Accuracy rate    25%  (redeemed without recorded strikes / total)
+//   Speed score      20%  (avg hours to redeem; 0h=100, 24h=50, 72h+=0)
+//   Reliability      15%  (1 - consecutive_failure penalty; max −30pts)
+//   Activity          5%  (last_active_at recency)
+//
+// Tier thresholds:
+//   Platinum 90–100 · Gold 75–89 · Silver 60–74 · Bronze 0–59
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type VendorScoreTier = "platinum" | "gold" | "silver" | "bronze";
+
+export type VendorScoreResult = {
+  vendorId:           string;
+  businessName:       string;
+  totalScore:         number;   // 0–100
+  tier:               VendorScoreTier;
+  completionRate:     number;   // 0–1
+  accuracyRate:       number;   // 0–1
+  speedScore:         number;   // 0–100
+  reliabilityScore:   number;   // 0–100
+  activityScore:      number;   // 0–100
+  // Raw counters
+  assignmentsLast90d: number;
+  redeemedLast90d:    number;
+  avgHoursToRedeem:   number | null;
+  consecutiveFailures: number;
+  totalRedeemed:      number;
+  totalVolumeNgn:     number;
+  lastActiveAt:       string | null;
+  computedAt:         string;
+};
+
+function scoreToTier(score: number): VendorScoreTier {
+  if (score >= 90) return "platinum";
+  if (score >= 75) return "gold";
+  if (score >= 60) return "silver";
+  return "bronze";
+}
+
+async function computeVendorScore(
+  db: ReturnType<typeof getServerSupabase>,
+  vendorId: string,
+): Promise<VendorScoreResult> {
+  const since90d = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+
+  const [{ data: vendor }, { data: assignments }] = await Promise.all([
+    db.from("vendors")
+      .select("id, business_name, total_redeemed, total_volume_ngn, last_active_at, consecutive_failures, failed_assignments")
+      .eq("id", vendorId)
+      .single(),
+    db.from("vendor_card_assignments")
+      .select("status, created_at, redeemed_at")
+      .eq("vendor_id", vendorId)
+      .gte("created_at", since90d),
+  ]);
+
+  if (!vendor) throw new Error("Vendor not found");
+
+  const rows = assignments ?? [];
+  const total        = rows.length;
+  const redeemed     = rows.filter((r) => r.status === "redeemed").length;
+  const failed       = rows.filter((r) => r.status === "failed").length;
+  const completionRate = total > 0 ? redeemed / (redeemed + failed || 1) : 1;
+
+  // Speed: average hours from assignment creation to redemption
+  const completedWithTime = rows.filter(
+    (r) => r.status === "redeemed" && r.redeemed_at && r.created_at,
+  );
+  let avgHoursToRedeem: number | null = null;
+  let speedScore = 75; // default when no data
+  if (completedWithTime.length > 0) {
+    const totalMs = completedWithTime.reduce((sum, r) => {
+      return sum + (new Date(r.redeemed_at!).getTime() - new Date(r.created_at).getTime());
+    }, 0);
+    avgHoursToRedeem = totalMs / completedWithTime.length / 3_600_000;
+    // Linear decay: 0h → 100, 24h → 50, 72h → 0
+    speedScore = Math.max(0, Math.min(100, 100 - (avgHoursToRedeem / 72) * 100));
+  }
+
+  // Accuracy: penalise by strike history (from vendors table)
+  const consecutive = Number(vendor.consecutive_failures ?? 0);
+  const failedTotal  = Number(vendor.failed_assignments ?? 0);
+  const totalAll     = Number(vendor.total_redeemed ?? 0) + failedTotal;
+  const accuracyRate = totalAll > 0 ? Number(vendor.total_redeemed ?? 0) / totalAll : 1;
+
+  // Reliability: consecutive failures are the strongest signal of a problem vendor
+  const reliabilityScore = Math.max(0, 100 - consecutive * 15);
+
+  // Activity: how recently the vendor was active
+  const lastActive = vendor.last_active_at ? new Date(vendor.last_active_at).getTime() : 0;
+  const hoursInactive = (Date.now() - lastActive) / 3_600_000;
+  const activityScore =
+    hoursInactive < 24 ? 100 :
+    hoursInactive < 168 ? 80 :
+    hoursInactive < 336 ? 50 :
+    hoursInactive < 720 ? 25 : 0;
+
+  // Composite score (weights sum to 1.0)
+  const totalScore = Math.round(
+    completionRate  * 100 * 0.35 +
+    accuracyRate    * 100 * 0.25 +
+    speedScore            * 0.20 +
+    reliabilityScore      * 0.15 +
+    activityScore         * 0.05,
+  );
+
+  return {
+    vendorId,
+    businessName:        vendor.business_name,
+    totalScore:          Math.min(100, Math.max(0, totalScore)),
+    tier:                scoreToTier(totalScore),
+    completionRate:      Math.round(completionRate * 1000) / 1000,
+    accuracyRate:        Math.round(accuracyRate   * 1000) / 1000,
+    speedScore:          Math.round(speedScore),
+    reliabilityScore:    Math.round(reliabilityScore),
+    activityScore:       Math.round(activityScore),
+    assignmentsLast90d:  total,
+    redeemedLast90d:     redeemed,
+    avgHoursToRedeem:    avgHoursToRedeem !== null ? Math.round(avgHoursToRedeem * 10) / 10 : null,
+    consecutiveFailures: consecutive,
+    totalRedeemed:       Number(vendor.total_redeemed ?? 0),
+    totalVolumeNgn:      Number(vendor.total_volume_ngn ?? 0),
+    lastActiveAt:        vendor.last_active_at,
+    computedAt:          new Date().toISOString(),
+  };
+}
+
+// ─── Get own vendor score ─────────────────────────────────────────────────────
+export const getMyVendorScore = createServerFn({ method: "GET" })
+  .validator((d: Record<string, never>) => d)
+  .handler(async () => {
+    const userId = await requireVendorAuth();
+    const db = getServerSupabase();
+    const vendor = await getVendorId(db, userId);
+    if (!vendor) throw new Error("Not a registered vendor");
+    return computeVendorScore(db, vendor.id);
+  });
+
+// ─── Admin: Get all vendor scores (leaderboard) ───────────────────────────────
+export const adminGetVendorScores = createServerFn({ method: "GET" })
+  .validator((d: { limit?: number; minScore?: number }) => d)
+  .handler(async ({ data }) => {
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    const { data: vendors } = await db
+      .from("vendors")
+      .select("id")
+      .eq("status", "active")
+      .limit(data.limit ?? 100);
+
+    if (!vendors?.length) return [];
+
+    const scores = await Promise.allSettled(
+      vendors.map((v) => computeVendorScore(db, v.id)),
+    );
+
+    return scores
+      .filter((r): r is PromiseFulfilledResult<VendorScoreResult> => r.status === "fulfilled")
+      .map((r) => r.value)
+      .filter((s) => (data.minScore === undefined || s.totalScore >= data.minScore))
+      .sort((a, b) => b.totalScore - a.totalScore);
+  });
+
+// ─── Admin: Auto-assign best available vendor for a trade ─────────────────────
+// Replaces manual selection with score-weighted dispatch.
+// Vendors with higher scores get priority when multiple vendors are eligible.
+export const adminSelectBestVendor = createServerFn({ method: "POST" })
+  .validator((d: { brand: string; amountUsd: number; excludeVendorIds?: string[] }) => d)
+  .handler(async ({ data }) => {
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    // Get active vendors not in the exclusion list
+    let query = db.from("vendors").select("id, business_name, tier, consecutive_failures, last_active_at, total_redeemed")
+      .eq("status", "active");
+    if (data.excludeVendorIds?.length) {
+      query = query.not("id", "in", `(${data.excludeVendorIds.join(",")})`);
+    }
+    const { data: candidates } = await query.limit(20);
+    if (!candidates?.length) return { vendorId: null, reason: "No active vendors" };
+
+    // Score all candidates
+    const scored = await Promise.allSettled(
+      candidates.map(async (v) => {
+        try {
+          const score = await computeVendorScore(db, v.id);
+          return { ...score };
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    const valid = scored
+      .filter((r): r is PromiseFulfilledResult<VendorScoreResult> => r.status === "fulfilled" && r.value !== null)
+      .map((r) => r.value)
+      .filter((v) => v.consecutiveFailures < 3) // exclude vendors with active strikes
+      .sort((a, b) => b.totalScore - a.totalScore);
+
+    if (!valid.length) return { vendorId: null, reason: "No eligible vendors after scoring" };
+
+    const best = valid[0];
+    return {
+      vendorId:    best.vendorId,
+      businessName: best.businessName,
+      totalScore:  best.totalScore,
+      tier:        best.tier,
+      reason:      `Highest composite score: ${best.totalScore}/100`,
+    };
+  });

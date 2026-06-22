@@ -101,7 +101,7 @@ function tooManyRequests(retryAfterSecs = 60): Response {
   );
 }
 
-function addSecurityHeaders(res: Response): Response {
+function addSecurityHeaders(res: Response, reqId?: string): Response {
   const h = new Headers(res.headers);
   h.set("X-Content-Type-Options", "nosniff");
   h.set("X-Frame-Options", "DENY");
@@ -131,6 +131,7 @@ function addSecurityHeaders(res: Response): Response {
     ].join("; "),
   );
 
+  if (reqId) h.set('X-Request-ID', reqId);
   return new Response(res.body, {
     status: res.status,
     statusText: res.statusText,
@@ -156,6 +157,11 @@ export default {
     initWorkerEnv(env);
     // Fail-fast on first request if critical secrets are absent.
     runStartupValidation();
+
+    // ── Request trace ID — attach to every log line for correlation ──────────
+    // X-Request-ID echoed from client if provided; generated server-side if not.
+    // Enables log correlation across Cloudflare Logs, Supabase, and Squad.
+    const requestId = (request.headers.get('x-request-id') || crypto.randomUUID()).slice(0, 36);
 
     const url = new URL(request.url);
     const ip = clientIp(request);
