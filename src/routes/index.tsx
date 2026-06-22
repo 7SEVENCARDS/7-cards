@@ -61,12 +61,13 @@ import { supabase } from "../lib/supabase";
 import { createTrade, verifyGiftCard, processPayout, submitCardBatch, getTradeLimits } from "../server-functions/trades";
 import { getKYCStatus } from "../server-functions/kyc";
 import { lookupAccount, addPayoutAccount } from "../server-functions/payout-accounts";
+import { requestUserWithdrawal } from "../server-functions/wallet";
 
 export const Route = createFileRoute("/")({
   component: App,
 });
 
-type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "notifications" | "referral" | "premium" | "history" | "status" | "support" | "admin";
+type Tab = "home" | "sell" | "code" | "verify" | "league" | "wallet" | "profile" | "kyc" | "payout" | "withdraw" | "notifications" | "referral" | "premium" | "history" | "status" | "support" | "admin";
 
 type ActiveSell = {
   brand: string;
@@ -252,6 +253,9 @@ function App() {
           <HomeScreen
             onSell={() => setTab("sell")}
             onNotifications={() => setTab("notifications")}
+            onWithdraw={() => setTab("withdraw")}
+            onHistory={() => setTab("history")}
+            onLeague={() => setTab("league")}
             userName={userName}
             ngnBalance={ngnBalance}
             recentTrades={recentTrades as TradeRow[]}
@@ -321,6 +325,16 @@ function App() {
             wallets={wallets as WalletData[]}
             recentTrades={recentTrades as TradeRow[]}
             onViewHistory={() => setTab("history")}
+            onWithdraw={() => setTab("withdraw")}
+          />
+        )}
+        {tab === "withdraw" && user && (
+          <WithdrawScreen
+            userId={user.id}
+            ngnBalance={ngnBalance}
+            payoutAccounts={payoutAccounts as PayoutAccount[]}
+            onBack={() => setTab("wallet")}
+            onNavigatePayout={() => setTab("payout")}
           />
         )}
         {tab === "profile" && (
@@ -409,7 +423,7 @@ function App() {
           />
         )}
 
-        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "notifications" && tab !== "referral" && tab !== "premium" && tab !== "history" && tab !== "status" && tab !== "support" && tab !== "admin" && (
+        {tab !== "code" && tab !== "verify" && tab !== "kyc" && tab !== "payout" && tab !== "withdraw" && tab !== "notifications" && tab !== "referral" && tab !== "premium" && tab !== "history" && tab !== "status" && tab !== "support" && tab !== "admin" && (
           <BottomNav tab={tab} setTab={(t) => setTab(t as Tab)} />
         )}
       </div>
@@ -436,6 +450,9 @@ type PortfolioData = { totalNgn: number; changePercent: string };
 type ProfileData = {
   id: string; full_name: string; display_name?: string | null; phone: string | null; kyc_status: string; premium: boolean; role?: string;
 };
+type PayoutAccount = {
+  id: string; bank_name: string; bank_code: string; account_number: string; account_name: string; is_default: boolean;
+};
 
 /* ─────────────────────────────────── HOME ─────────────────────────────────── */
 
@@ -454,10 +471,10 @@ function timeAgo(iso: string): string {
 }
 
 function HomeScreen({
-  onSell, onNotifications, userName, ngnBalance, recentTrades, bestRate, xp, unreadCount,
+  onSell, onNotifications, onWithdraw, onHistory, onLeague, userName, ngnBalance, recentTrades, bestRate, xp, unreadCount,
 }: {
-  onSell: () => void; onNotifications: () => void; userName: string; ngnBalance: number;
-  recentTrades: TradeRow[]; bestRate: number; xp?: XPData; unreadCount: number;
+  onSell: () => void; onNotifications: () => void; onWithdraw: () => void; onHistory: () => void; onLeague: () => void;
+  userName: string; ngnBalance: number; recentTrades: TradeRow[]; bestRate: number; xp?: XPData; unreadCount: number;
 }) {
   const [hideBalance, setHideBalance] = useState(false);
   const [showCryptoSoon, setShowCryptoSoon] = useState(false);
@@ -515,7 +532,10 @@ function HomeScreen({
             >
               <Gift className="size-4" /> Sell Card
             </button>
-            <button className="bg-white/10 backdrop-blur text-white font-semibold py-3.5 rounded-2xl flex items-center justify-center gap-2 border border-white/15">
+            <button
+              onClick={onWithdraw}
+              className="bg-white/10 backdrop-blur text-white font-semibold py-3.5 rounded-2xl flex items-center justify-center gap-2 border border-white/15 active:scale-[0.98] transition"
+            >
               <Send className="size-4" /> Withdraw
             </button>
           </div>
@@ -576,7 +596,7 @@ function HomeScreen({
             { icon: Gift, label: "Gift Card", color: "bg-gold/15 text-gold", comingSoon: false, onClick: onSell },
             { icon: Bitcoin, label: "Crypto", color: "bg-cyan/15 text-cyan", comingSoon: true, onClick: () => setShowCryptoSoon(true) },
             { icon: ScanLine, label: "Scan", color: "bg-pink/15 text-pink", comingSoon: false, onClick: onSell },
-            { icon: Sparkles, label: "Rewards", color: "bg-orange/15 text-orange", comingSoon: false, onClick: undefined },
+            { icon: Sparkles, label: "Rewards", color: "bg-orange/15 text-orange", comingSoon: false, onClick: onLeague },
           ].map(({ icon: Icon, label, color, comingSoon, onClick }) => (
             <button key={label} onClick={onClick} className="flex flex-col items-center gap-2 relative">
               <div className="relative">
@@ -615,7 +635,7 @@ function HomeScreen({
       <div className="px-5 mt-6">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-bold">Recent Trades</h2>
-          <button className="text-xs text-gold font-semibold flex items-center gap-0.5">
+          <button onClick={onHistory} className="text-xs text-gold font-semibold flex items-center gap-0.5">
             History <ChevronRight className="size-3" />
           </button>
         </div>
@@ -1173,9 +1193,9 @@ function Badge({ icon, label, sub, earned }: { icon: string; label: string; sub:
 /* ─────────────────────────────────── WALLET ─────────────────────────────────── */
 
 function WalletScreen({
-  wallets, recentTrades, onViewHistory,
+  wallets, recentTrades, onViewHistory, onWithdraw,
 }: {
-  wallets: WalletData[]; recentTrades: TradeRow[]; onViewHistory: () => void;
+  wallets: WalletData[]; recentTrades: TradeRow[]; onViewHistory: () => void; onWithdraw: () => void;
 }) {
   const [activeTab, setActiveTab] = useState(0);
   const [showCryptoSoon, setShowCryptoSoon] = useState(false);
@@ -1197,6 +1217,12 @@ function WalletScreen({
             ₦ {ngnBalance.toLocaleString()}
           </h2>
           <p className="text-[11px] text-white/50 mt-1.5">Earned from gift card trades</p>
+          <button
+            onClick={onWithdraw}
+            className="mt-4 w-full bg-white/15 backdrop-blur border border-white/20 text-white font-bold py-3 rounded-2xl flex items-center justify-center gap-2 active:scale-[0.98] transition text-sm"
+          >
+            <Send className="size-4" /> Withdraw to Bank
+          </button>
         </div>
       </header>
 
@@ -2189,6 +2215,218 @@ function DetailRow({ label, value, highlight }: { label: string; value: string; 
     <div className="bg-secondary/40 rounded-xl p-2.5">
       <p className="text-[10px] text-muted-foreground font-medium">{label}</p>
       <p className={`text-xs font-extrabold ${highlight ? "text-gold" : ""}`}>{value}</p>
+    </div>
+  );
+}
+
+/* ─────────────────────────────── WITHDRAW ─────────────────────────────── */
+
+function WithdrawScreen({
+  ngnBalance, payoutAccounts, onBack, onNavigatePayout,
+}: {
+  userId: string; ngnBalance: number; payoutAccounts: PayoutAccount[];
+  onBack: () => void; onNavigatePayout: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [amount, setAmount] = useState("");
+  const [step, setStep] = useState<"form" | "loading" | "success" | "error">("form");
+  const [error, setError] = useState("");
+  const [txRef, setTxRef] = useState("");
+
+  const defaultAccount = payoutAccounts.find((a) => a.is_default) ?? payoutAccounts[0] ?? null;
+  const amountNum = Number(amount.replace(/,/g, "")) || 0;
+  const canWithdraw = amountNum >= 500 && amountNum <= ngnBalance && !!defaultAccount;
+  const QUICK = [500, 1_000, 5_000, 10_000];
+
+  const handleWithdraw = async () => {
+    if (!canWithdraw || !defaultAccount) return;
+    setStep("loading");
+    setError("");
+    try {
+      const result = await requestUserWithdrawal({
+        data: {
+          amountNgn: amountNum,
+          bankCode: defaultAccount.bank_code,
+          accountNumber: defaultAccount.account_number,
+          accountName: defaultAccount.account_name,
+          bankName: defaultAccount.bank_name,
+        },
+      });
+      setTxRef((result as { ref: string }).ref ?? "");
+      await queryClient.invalidateQueries({ queryKey: ["wallets"] });
+      setStep("success");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Withdrawal failed. Please try again.");
+      setStep("error");
+    }
+  };
+
+  if (step === "success") {
+    return (
+      <div className="flex flex-col min-h-dvh items-center justify-center px-6 text-center gap-6">
+        <div className="size-24 rounded-full bg-emerald-500/15 border border-emerald-500/30 grid place-items-center">
+          <CheckCircle2 className="size-12 text-emerald-400" />
+        </div>
+        <div>
+          <p className="text-2xl font-extrabold">Withdrawal Sent!</p>
+          <p className="text-sm text-muted-foreground mt-2">
+            ₦{amountNum.toLocaleString()} is on its way to{" "}
+            <span className="font-bold text-foreground">{defaultAccount?.account_name}</span>
+            {" "}· {defaultAccount?.bank_name}
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">Usually arrives within 5 minutes.</p>
+          {txRef && <p className="text-[10px] text-muted-foreground mt-2 font-mono">Ref: {txRef}</p>}
+        </div>
+        <button
+          onClick={onBack}
+          className="bg-gradient-gold text-jungle-deep font-extrabold px-8 py-3.5 rounded-2xl shadow-glow-gold active:scale-[0.98] transition"
+        >
+          Back to Wallet
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col pb-28">
+      {/* Header */}
+      <header className="px-5 pt-safe-top pb-6 bg-gradient-hero rounded-b-[2rem] shadow-glow-jungle relative overflow-hidden">
+        <div className="absolute -right-8 -top-8 size-40 rounded-full bg-gold/10 blur-2xl" />
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="size-10 rounded-2xl bg-white/10 grid place-items-center active:scale-90 transition">
+            <ChevronLeft className="size-5 text-white" />
+          </button>
+          <h1 className="text-xl font-extrabold text-white">Withdraw</h1>
+        </div>
+
+        {/* Balance pill */}
+        <div className="mt-5 bg-white/10 backdrop-blur rounded-2xl px-5 py-4 border border-white/15">
+          <p className="text-xs text-white/60 font-medium">Available Balance</p>
+          <p className="text-3xl font-extrabold text-white mt-0.5 tracking-tight">
+            ₦{ngnBalance.toLocaleString()}
+          </p>
+        </div>
+      </header>
+
+      <div className="px-5 mt-6 space-y-5">
+        {/* No bank account state */}
+        {!defaultAccount ? (
+          <div className="rounded-3xl bg-card border border-border p-6 text-center space-y-4">
+            <div className="size-16 mx-auto rounded-2xl bg-gold/10 grid place-items-center">
+              <Wallet className="size-8 text-gold" />
+            </div>
+            <div>
+              <p className="font-extrabold text-base">Add a Bank Account First</p>
+              <p className="text-xs text-muted-foreground mt-1.5">You need a saved Nigerian bank account to withdraw your Naira balance.</p>
+            </div>
+            <button
+              onClick={onNavigatePayout}
+              className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-3.5 rounded-2xl shadow-glow-gold active:scale-[0.98] transition"
+            >
+              Add Bank Account →
+            </button>
+          </div>
+        ) : (
+          <>
+            {/* Amount input */}
+            <div>
+              <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-3">Amount (₦)</p>
+              <div className="bg-card border border-border rounded-2xl px-4 py-3.5 flex items-center gap-2">
+                <span className="text-xl font-extrabold text-muted-foreground">₦</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="0"
+                  min={500}
+                  max={ngnBalance}
+                  className="flex-1 bg-transparent text-2xl font-extrabold outline-none text-foreground placeholder-muted-foreground/40"
+                />
+                {amount && (
+                  <button onClick={() => setAmount("")} className="text-muted-foreground">
+                    <XCircle className="size-5" />
+                  </button>
+                )}
+              </div>
+              {amountNum > ngnBalance && (
+                <p className="text-xs text-pink mt-1.5 font-semibold">Amount exceeds your balance</p>
+              )}
+              {amountNum > 0 && amountNum < 500 && (
+                <p className="text-xs text-orange/80 mt-1.5 font-semibold">Minimum withdrawal is ₦500</p>
+              )}
+            </div>
+
+            {/* Quick amounts */}
+            <div className="grid grid-cols-4 gap-2">
+              {QUICK.map((q) => (
+                <button
+                  key={q}
+                  onClick={() => setAmount(String(q))}
+                  disabled={q > ngnBalance}
+                  className={`rounded-xl py-2 text-xs font-bold border transition active:scale-95 ${
+                    amountNum === q
+                      ? "bg-gold text-jungle-deep border-gold"
+                      : "bg-card border-border text-muted-foreground disabled:opacity-40"
+                  }`}
+                >
+                  ₦{q >= 1000 ? `${q / 1000}k` : q}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setAmount(String(ngnBalance))}
+              disabled={ngnBalance < 500}
+              className="w-full rounded-xl py-2 text-xs font-bold border border-dashed border-gold/40 text-gold bg-gold/5 active:scale-95 transition disabled:opacity-40"
+            >
+              Withdraw All · ₦{ngnBalance.toLocaleString()}
+            </button>
+
+            {/* Bank account card */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide">Sending To</p>
+                <button onClick={onNavigatePayout} className="text-xs text-gold font-semibold">Change →</button>
+              </div>
+              <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3">
+                <div className="size-11 rounded-xl bg-cyan/15 grid place-items-center">
+                  <Wallet className="size-5 text-cyan" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold truncate">{defaultAccount.account_name}</p>
+                  <p className="text-xs text-muted-foreground">{defaultAccount.bank_name} · {defaultAccount.account_number}</p>
+                </div>
+                <CheckCircle2 className="size-5 text-cyan shrink-0" />
+              </div>
+            </div>
+
+            {/* Error state */}
+            {step === "error" && error && (
+              <div className="bg-pink/10 border border-pink/30 rounded-2xl p-4 flex items-start gap-3">
+                <AlertCircle className="size-5 text-pink shrink-0 mt-0.5" />
+                <p className="text-sm text-pink font-semibold">{error}</p>
+              </div>
+            )}
+
+            {/* Confirm button */}
+            <button
+              onClick={handleWithdraw}
+              disabled={!canWithdraw || step === "loading"}
+              className="w-full bg-gradient-gold text-jungle-deep font-extrabold py-4 rounded-2xl shadow-glow-gold flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.98] transition text-base"
+            >
+              {step === "loading" ? (
+                <><Loader2 className="size-5 animate-spin" /> Processing…</>
+              ) : (
+                <><Send className="size-5" /> Withdraw ₦{amountNum > 0 ? amountNum.toLocaleString() : "—"}</>
+              )}
+            </button>
+
+            <p className="text-center text-[11px] text-muted-foreground">
+              Powered by Squad · No withdrawal fee · Arrives within 5 mins
+            </p>
+          </>
+        )}
+      </div>
     </div>
   );
 }
