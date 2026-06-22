@@ -131,6 +131,14 @@ function addSecurityHeaders(res: Response, reqId?: string): Response {
     ].join("; "),
   );
 
+  // Prevent browsers / CDN edges from caching API JSON responses.
+  // Static assets served by Cloudflare Assets binding bypass this function,
+  // so setting no-store here only affects our server-rendered and API responses.
+  if (h.get("Content-Type")?.includes("application/json")) {
+    h.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    h.set("Pragma", "no-cache");
+  }
+
   if (reqId) h.set('X-Request-ID', reqId);
   return new Response(res.body, {
     status: res.status,

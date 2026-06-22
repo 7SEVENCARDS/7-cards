@@ -92,6 +92,14 @@ zone_name = "7evencards.xyz"
 pattern   = "vendor.7evencards.xyz/*"
 zone_name = "7evencards.xyz"
 
+# ─── Cron Triggers ────────────────────────────────────────────────────────────
+# Fires every 6 hours — invokes the scheduled() export (injected post-build by
+# scripts/patch-cf-scheduled.mjs) which self-calls /api/cron/rate-check so all
+# vendor rate-check logic stays in server.ts behind CRON_SECRET guard.
+# Cron expression: minute hour * * * (0 */6 = top-of-every-6th-hour: 00:00,06:00,12:00,18:00)
+[env.production.triggers]
+crons = ["0 */6 * * *"]
+
 # ─── Workers Rate Limiting (distributed, edge-level) ─────────────────────────
 # The app currently uses per-isolate in-process rate limiting (src/lib/rate-limiter.ts).
 # To upgrade to true distributed rate limiting that spans all Worker instances,

@@ -88,6 +88,13 @@ jobs:
           ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
           VITE_ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
 
+      # ── Inject Cloudflare Workers scheduled() handler ───────────────────────
+      # Nitro does not generate a scheduled() export — this post-build script
+      # rewrites .output/server/index.mjs to add one. It self-calls the existing
+      # /api/cron/rate-check HTTP endpoint so all business logic stays in server.ts.
+      - name: Inject scheduled() into Cloudflare Worker output
+        run: node scripts/patch-cf-scheduled.mjs
+
       - name: Deploy to Cloudflare Workers
         run: pnpm exec wrangler deploy --config wrangler.toml --env production
         env:
