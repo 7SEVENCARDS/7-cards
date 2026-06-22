@@ -53,9 +53,10 @@ export async function creditReferrerCommissionFn(
     commission_rate: COMMISSION_RATE,
   });
 
-  // ── First-trade ₦500 bonus for both parties ──────────────────────────────
+  // ── First-trade ₦500 + 100 XP bonus for both parties ───────────────────
   if (isFirstTrade) {
     const BONUS_NGN = 500;
+    const BONUS_XP  = 100;
 
     // Credit ₦500 to referrer
     await db.rpc("increment_wallet_balance", {
@@ -71,18 +72,40 @@ export async function creditReferrerCommissionFn(
       p_amount: BONUS_NGN,
     });
 
+    // Award 100 XP to referrer
+    await db.rpc("award_trade_xp", { p_user_id: trader.referred_by, p_xp: BONUS_XP });
+
+    // Award 100 XP to referee
+    await db.rpc("award_trade_xp", { p_user_id: traderId, p_xp: BONUS_XP });
+
+    // Fetch referrer display_name for notification (never expose full_name)
+    const { data: referrerProfile } = await db
+      .from("profiles")
+      .select("display_name")
+      .eq("id", trader.referred_by)
+      .single();
+    const referrerMoniker = referrerProfile?.display_name ?? "a friend";
+
+    // Fetch referee display_name for referrer notification
+    const { data: tradersProfile } = await db
+      .from("profiles")
+      .select("display_name")
+      .eq("id", traderId)
+      .single();
+    const refereeMoniker = tradersProfile?.display_name ?? "your referral";
+
     // Notify both users
     await db.from("notifications").insert([
       {
         user_id: trader.referred_by,
         title: "Referral Bonus Unlocked! 🎉",
-        message: `₦500 bonus credited! Your referral (${trader.full_name ?? "your friend"}) just completed their first trade. Plus ₦${commissionNgn.toLocaleString()} (5%) commission.`,
+        message: `₦500 + 100 XP bonus credited! ${refereeMoniker} just completed their first trade. Plus ₦${commissionNgn.toLocaleString()} (5%) commission.`,
         type: "success",
       },
       {
         user_id: traderId,
         title: "Welcome Bonus! 🎁",
-        message: `₦500 bonus credited to your wallet for completing your first trade on 7SEVEN CARDS!`,
+        message: `₦500 + 100 XP bonus credited for completing your first trade on 7SEVEN CARDS! Your referrer ${referrerMoniker} also earned their bonus.`,
         type: "success",
       },
     ]);
@@ -104,10 +127,18 @@ export async function creditReferrerCommissionFn(
   }
 
   // Standard commission notification (not first trade)
+  // Fetch referee display_name — never expose full_name publicly
+  const { data: refProfile } = await db
+    .from("profiles")
+    .select("display_name")
+    .eq("id", traderId)
+    .single();
+  const refMoniker = refProfile?.display_name ?? "your referral";
+
   await db.from("notifications").insert({
     user_id: trader.referred_by,
     title: "Commission Earned! 💰",
-    message: `₦${commissionNgn.toLocaleString()} (5%) commission from ${trader.full_name ?? "your referral"}'s trade.`,
+    message: `₦${commissionNgn.toLocaleString()} (5%) commission from ${refMoniker}'s trade.`,
     type: "success",
   });
 

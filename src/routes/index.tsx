@@ -152,7 +152,7 @@ function App() {
   // ── Derived helpers ───────────────────────────────────────────────────────
   const ngnWallet = wallets.find((w) => w.currency === "NGN");
   const ngnBalance = Number(ngnWallet?.balance ?? 0);
-  const userName = (profile?.full_name ?? "").split(" ")[0] || "User";
+  const userName = profile?.display_name ?? (profile?.full_name ?? "").split(" ")[0] || "7Trader";
   const defaultPayoutAccount = (payoutAccounts as Array<{bank_code:string;account_number:string;account_name:string}>)[0];
   const emailVerified = !!(user as { email_confirmed_at?: string | null }).email_confirmed_at;
 
@@ -329,6 +329,7 @@ function App() {
             xp={xp as XPData | undefined}
             emailVerified={emailVerified}
             userEmail={user?.email ?? ""}
+            userId={user?.id}
             onSignOut={handleSignOut}
             onNavigateKYC={() => setTab("kyc")}
             onNavigatePayout={() => setTab("payout")}
@@ -372,7 +373,7 @@ function App() {
           <PremiumScreen
             userId={user.id}
             userEmail={user.email ?? ""}
-            userName={(profile as ProfileData | null | undefined)?.full_name ?? "User"}
+            userName={(profile as ProfileData | null | undefined)?.display_name ?? (profile as ProfileData | null | undefined)?.full_name ?? "7Trader"}
             onBack={() => setTab("profile")}
           />
         )}
@@ -397,7 +398,7 @@ function App() {
           <SupportScreen
             userId={user.id}
             isPremium={(profile as ProfileData | null | undefined)?.premium ?? false}
-            userName={(profile as ProfileData | null | undefined)?.full_name ?? "User"}
+            userName={(profile as ProfileData | null | undefined)?.display_name ?? (profile as ProfileData | null | undefined)?.full_name ?? "7Trader"}
             onBack={() => setTab("profile")}
           />
         )}
@@ -427,13 +428,13 @@ type XPData = {
   streakDays: number; tradeCount: number; weeklyRank: number; allTimeRank: number;
 };
 type LeaderEntry = {
-  id: string; full_name: string; total_xp: number; weekly_xp: number;
+  id: string; display_name: string; full_name?: string; total_xp: number; weekly_xp: number;
   level: number; streak_days: number; weekly_rank: number;
 };
 type WalletData = { currency: string; balance: number; locked_balance: number };
 type PortfolioData = { totalNgn: number; changePercent: string };
 type ProfileData = {
-  id: string; full_name: string; phone: string | null; kyc_status: string; premium: boolean; role?: string;
+  id: string; full_name: string; display_name?: string | null; phone: string | null; kyc_status: string; premium: boolean; role?: string;
 };
 
 /* ─────────────────────────────────── HOME ─────────────────────────────────── */
@@ -1067,10 +1068,15 @@ function LeagueScreen({
           podiumOrder.map((l, i) => (
             <div key={l?.id ?? i} className={`rounded-2xl ${podiumColor[i]} p-3 text-center border border-border ${i === 1 ? "pb-8 -mb-4 scale-105" : ""}`}>
               <div className="text-3xl">{podiumEmoji[i]}</div>
-              <div className="size-12 mx-auto rounded-full bg-gradient-gold mt-2 grid place-items-center font-extrabold text-jungle-deep">
-                {(l?.full_name ?? "?")[0]}
+              <div className="size-12 mx-auto rounded-full bg-gradient-gold mt-2 overflow-hidden grid place-items-center font-extrabold text-jungle-deep">
+                <img
+                  src={`https://api.dicebear.com/9.x/bottts-neutral/svg?seed=${encodeURIComponent(l?.id ?? l?.display_name ?? "")}&backgroundColor=transparent`}
+                  alt={l?.display_name ?? "Trader"}
+                  className="size-12 object-cover"
+                  onError={(e) => { const t = e.target as HTMLImageElement; t.style.display="none"; }}
+                />
               </div>
-              <p className="text-xs font-bold mt-2 truncate">{l?.full_name ?? "—"}</p>
+              <p className="text-xs font-bold mt-2 truncate">{l?.display_name ?? "7Trader"}</p>
               <p className="text-[10px] text-muted-foreground">{(l?.weekly_xp ?? 0).toLocaleString()} XP</p>
             </div>
           ))
@@ -1124,12 +1130,17 @@ function LeagueScreen({
                 <span className={`text-sm font-bold w-6 text-center ${isMe ? "text-gold" : "text-muted-foreground"}`}>
                   {u.weekly_rank}
                 </span>
-                <div className="size-9 rounded-full bg-secondary grid place-items-center text-sm font-bold">
-                  {(u.full_name ?? "?")[0]}
+                <div className="size-9 rounded-full bg-secondary overflow-hidden grid place-items-center text-sm font-bold">
+                  <img
+                    src={`https://api.dicebear.com/9.x/bottts-neutral/svg?seed=${encodeURIComponent(u.id ?? u.display_name ?? "")}&backgroundColor=transparent`}
+                    alt={u.display_name ?? "Trader"}
+                    className="size-9 object-cover"
+                    onError={(e) => { const t = e.target as HTMLImageElement; t.style.display="none"; }}
+                  />
                 </div>
                 <div className="flex-1">
                   <p className={`text-sm font-semibold ${isMe ? "text-gold" : ""}`}>
-                    {u.full_name}{isMe ? " (You)" : ""}
+                    {u.display_name ?? "7Trader"}{isMe ? " (You)" : ""}
                   </p>
                   <p className="text-[11px] text-muted-foreground">{(u.weekly_xp ?? 0).toLocaleString()} XP</p>
                 </div>
@@ -1345,13 +1356,15 @@ function CircleBtn({ icon: Icon, label, onClick }: { icon: React.ComponentType<{
 /* ─────────────────────────────────── PROFILE ─────────────────────────────────── */
 
 function ProfileScreen({
-  profile, xp, emailVerified, userEmail, onSignOut, onNavigateKYC, onNavigatePayout, onNavigateReferral, onNavigatePremium, onNavigateSupport, onNavigateLeague, onNavigateAdmin,
+  profile, xp, emailVerified, userEmail, userId, onSignOut, onNavigateKYC, onNavigatePayout, onNavigateReferral, onNavigatePremium, onNavigateSupport, onNavigateLeague, onNavigateAdmin,
 }: {
-  profile?: ProfileData | null; xp?: XPData; emailVerified?: boolean; userEmail?: string; onSignOut: () => void; onNavigateKYC: () => void; onNavigatePayout: () => void; onNavigateReferral: () => void; onNavigatePremium: () => void; onNavigateSupport: () => void; onNavigateLeague?: () => void; onNavigateAdmin?: () => void;
+  profile?: ProfileData | null; xp?: XPData; emailVerified?: boolean; userEmail?: string; userId?: string; onSignOut: () => void; onNavigateKYC: () => void; onNavigatePayout: () => void; onNavigateReferral: () => void; onNavigatePremium: () => void; onNavigateSupport: () => void; onNavigateLeague?: () => void; onNavigateAdmin?: () => void;
 }) {
-  const firstName = (profile?.full_name ?? "User").split(" ")[0];
-  const initial = firstName[0]?.toUpperCase() ?? "?";
+  const moniker = profile?.display_name ?? (profile?.full_name ?? "").split(" ")[0] || "7Trader";
   const levelName = (xp?.level ?? 1) >= 15 ? "Boss" : (xp?.level ?? 1) >= 10 ? "Pro" : "Rookie";
+  const avatarSeed = userId ?? profile?.id ?? moniker;
+  const avatarUrl = `https://api.dicebear.com/9.x/bottts-neutral/svg?seed=${encodeURIComponent(avatarSeed)}&backgroundColor=transparent&radius=24`;
+  const [avatarFailed, setAvatarFailed] = useState(false);
 
   return (
     <div className="flex flex-col">
@@ -1360,17 +1373,21 @@ function ProfileScreen({
         <h1 className="text-2xl font-extrabold text-white">Profile</h1>
 
         <div className="mt-5 flex items-center gap-4">
-          <div className="size-20 rounded-3xl bg-gradient-gold grid place-items-center font-extrabold text-jungle-deep text-3xl shadow-glow-gold shrink-0">
-            {initial}
+          <div className="size-20 rounded-3xl bg-gradient-gold overflow-hidden shadow-glow-gold shrink-0 flex items-center justify-center">
+            {!avatarFailed ? (
+              <img
+                src={avatarUrl}
+                alt={moniker}
+                className="size-20 object-cover"
+                onError={() => setAvatarFailed(true)}
+              />
+            ) : (
+              <span className="font-extrabold text-jungle-deep text-3xl">{moniker[0]?.toUpperCase() ?? "7"}</span>
+            )}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-lg font-extrabold text-white truncate">{profile?.full_name ?? "—"}</p>
-            {userEmail && (
-              <p className="text-xs text-white/60 truncate mt-0.5">{userEmail}</p>
-            )}
-            {profile?.phone && (
-              <p className="text-xs text-white/60 truncate">{profile.phone}</p>
-            )}
+            <p className="text-lg font-extrabold text-white truncate">{moniker}</p>
+            <p className="text-[11px] text-white/40 truncate mt-0.5 font-mono">ID verified • private account</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {emailVerified ? (
                 <span className="px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 text-[10px] font-bold flex items-center gap-1">

@@ -37,7 +37,7 @@ export const getReferralStats = createServerFn({ method: "GET" })
 
     const { data: referred } = await db
       .from("profiles")
-      .select("id, full_name, created_at")
+      .select("id, display_name, created_at")
       .eq("referred_by", userId)
       .order("created_at", { ascending: false });
 
@@ -77,9 +77,9 @@ export const getReferralStats = createServerFn({ method: "GET" })
       totalEarnedNgn += c.amount_ngn;
     }
 
-    // Strip raw UUIDs and phone numbers — return only display-safe fields
+    // Use cybermoniker (display_name) — never expose real name
     const friends: ReferredUser[] = referred.map((r) => ({
-      display_name: r.full_name ? r.full_name.split(" ")[0] + " ****" : "Anonymous",
+      display_name: (r as { display_name?: string | null }).display_name ?? "7Trader",
       joined_at: r.created_at,
       has_traded: (tradeCountMap.get(r.id) ?? 0) > 0,
       trade_count: tradeCountMap.get(r.id) ?? 0,
@@ -122,7 +122,7 @@ export const applyReferralCode = createServerFn({ method: "POST" })
 
     const { data: referrer } = await db
       .from("profiles")
-      .select("id, full_name")
+      .select("id, display_name")
       .eq("referral_code", data.code.toUpperCase())
       .single();
 
@@ -131,6 +131,8 @@ export const applyReferralCode = createServerFn({ method: "POST" })
     }
 
     await db.from("profiles").update({ referred_by: referrer.id }).eq("id", userId);
+
+    const referrerMoniker = (referrer as { display_name?: string | null }).display_name ?? "a friend";
 
     await db.from("notifications").insert([
       {
@@ -142,12 +144,12 @@ export const applyReferralCode = createServerFn({ method: "POST" })
       {
         user_id: userId,
         title: "Referral Code Applied! 🔗",
-        message: `You're now linked to ${referrer.full_name ?? "a friend"}. Complete your first trade to unlock ₦500 bonus for both of you!`,
+        message: `You're now linked to ${referrerMoniker}. Complete your first trade to unlock ₦500 + 100 XP bonus for both of you!`,
         type: "success",
       },
     ]);
 
-    return { success: true, referrerName: referrer.full_name ?? "a friend" };
+    return { success: true, referrerName: referrerMoniker };
   });
 
 // ─── Recurring referral commission ────────────────────────────────────────────
