@@ -231,6 +231,21 @@ export default {
 
     // ── Health check — shows config status without exposing secret values ──
     if (url.pathname === "/api/health") {
+      // Diagnostic: check what's in the raw env object directly.
+      const rawEnv = env as Record<string, unknown>;
+      const directCheck = {
+        env_type:     typeof env,
+        env_is_null:  env === null,
+        env_keys_own: env && typeof env === "object" ? Object.getOwnPropertyNames(env).slice(0, 20) : [],
+        env_keys_enum: env && typeof env === "object" ? Object.keys(env).slice(0, 20) : [],
+        APP_SECRET_direct: typeof rawEnv?.["APP_SECRET"],
+        VITE_SUPABASE_URL_direct: typeof rawEnv?.["VITE_SUPABASE_URL"],
+        CRON_SECRET_direct: typeof rawEnv?.["CRON_SECRET"],
+        ASSETS_direct: typeof rawEnv?.["ASSETS"],
+        NODE_ENV_direct: typeof rawEnv?.["NODE_ENV"],
+      };
+      console.log("[Health:diag]", JSON.stringify(directCheck));
+
       // Critical: all must be present for 200. Optional: logged but won't cause 503.
       const critical = {
         supabase:   !!(getEnv("VITE_SUPABASE_URL") && getEnv("SUPABASE_SERVICE_ROLE_KEY")),
@@ -251,7 +266,7 @@ export default {
         console.warn("[Health] Missing critical secrets:", missing.join(", "));
       }
       return addSecurityHeaders(
-        new Response(JSON.stringify({ ok: allOk, ts: Date.now(), critical, optional }), {
+        new Response(JSON.stringify({ ok: allOk, ts: Date.now(), critical, optional, directCheck }), {
           status: allOk ? 200 : 503,
           headers: { "Content-Type": "application/json" },
         }),
