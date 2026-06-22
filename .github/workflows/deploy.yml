@@ -213,40 +213,40 @@ jobs:
             RECORDS_JSON=$(echo "$DOMAIN_DETAIL" | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));console.log(JSON.stringify(r.records||[]))}catch{console.log('[]')} })")
           fi
 
-          # Add DNS records to Cloudflare
+          # Add DNS records to Cloudflare (jq-based loop — no heredoc needed)
           if [ -n "$ZONE_ID" ] && [ -n "$RECORDS_JSON" ] && [ "$RECORDS_JSON" != "[]" ]; then
             echo "Adding Resend DNS records to Cloudflare..."
-            echo "$RECORDS_JSON" | node - <<'NODESCRIPT'
-              const readline = require('readline');
-              const chunks = [];
-              process.stdin.on('data', c => chunks.push(c));
-              process.stdin.on('end', async () => {
-                const records = JSON.parse(chunks.join(''));
-                const zoneId = process.env.ZONE_ID;
-                const token  = process.env.CLOUDFLARE_API_TOKEN;
-                for (const rec of records) {
-                  if (!rec.name || !rec.value) continue;
-                  const existing = await fetch(
-                    `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records?type=${rec.type}&name=${encodeURIComponent(rec.name)}`,
-                    { headers: { Authorization: `Bearer ${token}` } }
-                  ).then(r => r.json());
-                  if (existing.result?.length > 0) {
-                    console.log(`✓ Already exists: ${rec.type} ${rec.name}`);
-                    continue;
-                  }
-                  const body = { type: rec.type, name: rec.name, content: rec.value, ttl: 1 };
-                  if (rec.priority) body.priority = rec.priority;
-                  const res = await fetch(
-                    `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`,
-                    { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                      body: JSON.stringify(body) }
-                  ).then(r => r.json());
-                  console.log(res.success
-                    ? `✓ Created: ${rec.type} ${rec.name}`
-                    : `✗ Error: ${rec.type} ${rec.name} — ${JSON.stringify(res.errors)}`);
-                }
-              });
-NODESCRIPT
+            RECORD_COUNT=$(echo "$RECORDS_JSON" | jq 'length')
+            for i in $(seq 0 $((RECORD_COUNT - 1))); do
+              REC_TYPE=$(echo  "$RECORDS_JSON" | jq -r ".[$i].type  // empty")
+              REC_NAME=$(echo  "$RECORDS_JSON" | jq -r ".[$i].name  // empty")
+              REC_VALUE=$(echo "$RECORDS_JSON" | jq -r ".[$i].value // empty")
+              REC_PRIORITY=$(echo "$RECORDS_JSON" | jq -r ".[$i].priority // empty")
+              [ -z "$REC_NAME" ] || [ -z "$REC_VALUE" ] && continue
+              EXISTING_COUNT=$(curl -s \
+                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=${REC_TYPE}&name=${REC_NAME}" \
+                | jq '.result | length')
+              if [ "${EXISTING_COUNT:-0}" -gt "0" ]; then
+                echo "✓ Already exists: $REC_TYPE $REC_NAME"
+                continue
+              fi
+              BODY=$(jq -n \
+                --arg type    "$REC_TYPE" \
+                --arg name    "$REC_NAME" \
+                --arg content "$REC_VALUE" \
+                '{type: $type, name: $name, content: $content, ttl: 1}')
+              if [ -n "$REC_PRIORITY" ]; then
+                BODY=$(echo "$BODY" | jq --argjson pri "$REC_PRIORITY" '. + {priority: $pri}')
+              fi
+              RESULT=$(curl -s -X POST \
+                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                -H "Content-Type: application/json" \
+                "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
+                -d "$BODY" \
+                | jq -r 'if .success then "✓ Created: \(.result.type) \(.result.name)" else "✗ Error: \(.errors | tostring)" end')
+              echo "$RESULT"
+            done
           else
             echo "– Skipping DNS record creation (no zone ID or no records)"
           fi
