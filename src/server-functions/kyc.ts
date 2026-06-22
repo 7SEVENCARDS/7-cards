@@ -5,36 +5,26 @@ import { assertNotRateLimited, rlKey } from "../lib/rate-limiter";
 import { assertBvn, assertNin } from "../lib/validate";
 
 // ─── Name-match helper ────────────────────────────────────────────────────────
-// Returns true if the Dojah identity name loosely matches the registered name.
-// We normalise both sides and check for shared tokens to allow for ordering
-// differences (e.g. "John Doe" vs "Doe John").
 function namesMatch(registered: string | null, dojahFirst: string, dojahLast: string): boolean {
-  if (!registered) return true; // no registered name to compare — pass through
+  if (!registered) return true;
   const norm = (s: string) =>
-    s
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z\s]/g, "")
-      .trim();
+    s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z\s]/g, "").trim();
 
   const regTokens = new Set(norm(registered).split(/\s+/).filter(Boolean));
   const dojahFull = norm(`${dojahFirst} ${dojahLast}`);
   const dojahTokens = dojahFull.split(/\s+/).filter(Boolean);
 
   const shared = dojahTokens.filter((t) => regTokens.has(t)).length;
-  return shared >= 1; // at least one name token must match
+  return shared >= 1;
 }
 
 // ─── BVN Verification ─────────────────────────────────────────────────────────
 export const verifyBVN = createServerFn({ method: "POST" })
   .validator((d: { bvn: string }) => d)
   .handler(async ({ data }) => {
-    // Throw 422 with clear message before touching auth or Dojah
     assertBvn(data.bvn);
 
     const userId = await requireUser();
-    // 10 Dojah lookups per user per 10 minutes — prevents downstream API abuse
     assertNotRateLimited(rlKey("verifyBVN", userId), 10, 10 * 60_000);
 
     try {
@@ -43,14 +33,12 @@ export const verifyBVN = createServerFn({ method: "POST" })
 
       const db = getServerSupabase();
 
-      // Fetch registered name for cross-check
       const { data: profile } = await db
         .from("profiles")
         .select("full_name, kyc_nin")
         .eq("id", userId)
         .single();
 
-      // Name cross-check — reject if clearly different
       if (!namesMatch(profile?.full_name ?? null, result.first_name ?? "", result.last_name ?? "")) {
         return {
           success: false,
@@ -58,7 +46,6 @@ export const verifyBVN = createServerFn({ method: "POST" })
         };
       }
 
-      // Store MASKED BVN — raw value must never be stored
       await db.from("profiles").update({
         kyc_bvn: maskBVN(data.bvn),
         kyc_status: "submitted",
@@ -82,7 +69,22 @@ export const verifyBVN = createServerFn({ method: "POST" })
         } catch { /* non-critical */ }
       }
 
-      // Return only the minimum necessary for the UI — no raw PII
+      // Admin email notification — fire-and-forget
+      const displayName = profile?.full_name ?? `${result.first_name ?? ""} ${result.last_name ?? ""}`.trim();
+      import("../lib/email").then(async ({ sendAdminEmail, buildKYCSubmissionEmailHtml }) => {
+        await sendAdminEmail({
+          subject: autoApproved
+            ? `[7SEVEN CARDS] KYC Auto-Approved — ${displayName}`
+            : `[7SEVEN CARDS] KYC Submitted (BVN) — ${displayName}`,
+          html: buildKYCSubmissionEmailHtml({
+            userId,
+            fullName: displayName,
+            kycType: autoApproved ? "both" : "bvn",
+            autoApproved,
+          }),
+        });
+      }).catch(() => {});
+
       return {
         success: true,
         autoApproved,
@@ -96,7 +98,6 @@ export const verifyBVN = createServerFn({ method: "POST" })
       const isConfig = msg.includes("not configured");
 
       if (isConfig) {
-        // Demo mode — blocked in production
         if (process.env.NODE_ENV === "production") {
           return { success: false, error: "Verification service not available." };
         }
@@ -147,7 +148,6 @@ export const verifyNIN = createServerFn({ method: "POST" })
     assertNin(data.nin);
 
     const userId = await requireUser();
-    // 10 Dojah lookups per user per 10 minutes — prevents downstream API abuse
     assertNotRateLimited(rlKey("verifyNIN", userId), 10, 10 * 60_000);
 
     try {
@@ -156,7 +156,6 @@ export const verifyNIN = createServerFn({ method: "POST" })
 
       const db = getServerSupabase();
 
-      // Fetch registered name for cross-check
       const { data: profile } = await db
         .from("profiles")
         .select("full_name, kyc_bvn")
@@ -191,6 +190,22 @@ export const verifyNIN = createServerFn({ method: "POST" })
           pushNotify(userId, "KYC Verified! ✅", "Identity confirmed — start trading now.");
         } catch { /* non-critical */ }
       }
+
+      // Admin email notification — fire-and-forget
+      const displayName = profile?.full_name ?? `${result.first_name ?? ""} ${result.last_name ?? ""}`.trim();
+      import("../lib/email").then(async ({ sendAdminEmail, buildKYCSubmissionEmailHtml }) => {
+        await sendAdminEmail({
+          subject: autoApproved
+            ? `[7SEVEN CARDS] KYC Auto-Approved — ${displayName}`
+            : `[7SEVEN CARDS] KYC Submitted (NIN) — ${displayName}`,
+          html: buildKYCSubmissionEmailHtml({
+            userId,
+            fullName: displayName,
+            kycType: autoApproved ? "both" : "nin",
+            autoApproved,
+          }),
+        });
+      }).catch(() => {});
 
       return {
         success: true,
@@ -256,6 +271,19 @@ export const submitKYC = createServerFn({ method: "POST" })
       message: "Your identity documents are under review. You'll be notified within 24 hours.",
       type: "info",
     });
+
+    // Admin email — fire-and-forget
+    import("../lib/email").then(async ({ sendAdminEmail, buildKYCSubmissionEmailHtml }) => {
+      await sendAdminEmail({
+        subject: `[7SEVEN CARDS] KYC Submitted — Manual Review Required`,
+        html: buildKYCSubmissionEmailHtml({
+          userId,
+          fullName: "User",
+          kycType: "submitted",
+          autoApproved: false,
+        }),
+      });
+    }).catch(() => {});
 
     return { success: true };
   });
