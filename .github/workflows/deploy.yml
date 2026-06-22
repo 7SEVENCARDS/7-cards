@@ -94,40 +94,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-
       # ── Auto-generate APP_SECRET + CRON_SECRET on first deploy ──────────────
-      # If these secrets are not in the GitHub repo, generate them once with
-      # openssl, upload to Cloudflare Workers immediately, then save back to
-      # GitHub Secrets so every future deploy reuses the same stable values.
-      - name: Provision vendor.7evencards.xyz DNS record (CNAME, proxied)
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: |
-          ZONE_ID=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/zones?name=7evencards.xyz" \
-            | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const z=JSON.parse(d.join(''));console.log(z.result[0]?.id||'')}catch{console.log('')} })")
-          if [ -z "$ZONE_ID" ]; then
-            echo "::warning::Could not get Cloudflare Zone ID — skipping vendor DNS"
-            exit 0
-          fi
-          echo "Zone ID: $ZONE_ID"
-          # Check if CNAME already exists
-          EXISTING=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=CNAME&name=vendor.7evencards.xyz" \
-            | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));console.log(r.result?.length>0?r.result[0].id:'')}catch{console.log('')} })")
-          if [ -n "$EXISTING" ]; then
-            echo "✓ vendor CNAME already exists (ID: $EXISTING) — skipping"
-          else
-            RESULT=$(curl -s -X POST \
-              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              -H "Content-Type: application/json" \
-              "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
-              -d '{"type":"CNAME","name":"vendor","content":"7evencards.xyz","proxied":true,"ttl":1}' \
-              | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));console.log(r.success?'created:'+r.result.id:'err:'+JSON.stringify(r.errors))}catch{console.log('parse error')} })")
-            echo "vendor CNAME: $RESULT"
-          fi
-        continue-on-error: true
-
       - name: Auto-generate APP_SECRET and CRON_SECRET (if missing)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -136,7 +103,6 @@ jobs:
           _APP_SECRET: ${{ secrets.APP_SECRET }}
           _CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          # Fetch list of secrets already in Cloudflare — source of truth
           CF_SECRETS=$(pnpm exec wrangler secret list --env production 2>/dev/null | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).map(s=>s.name).join(' '))}catch{console.log('')}})" || echo "")
           echo "Existing CF secrets: $CF_SECRETS"
           if [ -z "$_APP_SECRET" ] && ! echo "$CF_SECRETS" | grep -qw APP_SECRET; then
@@ -144,7 +110,6 @@ jobs:
             echo "Generating APP_SECRET"
             printf '%s' "$APP_SECRET" | pnpm exec wrangler secret put APP_SECRET --env production
             gh secret set APP_SECRET --body "$APP_SECRET" --repo ${{ github.repository }} || echo "⚠️  Could not save APP_SECRET to GitHub Secrets"
-            echo "✓ APP_SECRET in Cloudflare"
           else
             echo "– APP_SECRET already present, skipping"
           fi
@@ -153,15 +118,11 @@ jobs:
             echo "Generating CRON_SECRET"
             printf '%s' "$CRON_SECRET" | pnpm exec wrangler secret put CRON_SECRET --env production
             gh secret set CRON_SECRET --body "$CRON_SECRET" --repo ${{ github.repository }} || echo "⚠️  Could not save CRON_SECRET to GitHub Secrets"
-            echo "✓ CRON_SECRET in Cloudflare"
           else
             echo "– CRON_SECRET already present, skipping"
           fi
 
       # ── Upload runtime secrets to the production Worker ────────────────────
-      # These are never baked into the build — they are injected at runtime by
-      # Cloudflare Workers. Must be re-uploaded on every deploy so new secrets
-      # take effect without manual intervention in the dashboard.
       - name: Upload secrets to Cloudflare Workers (main app)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -197,22 +158,109 @@ jobs:
           upload_secret VITE_SUPABASE_URL          "$_VITE_SUPABASE_URL"
           upload_secret VITE_SUPABASE_ANON_KEY     "$_VITE_SUPABASE_ANON_KEY"
           upload_secret SUPABASE_SERVICE_ROLE_KEY  "$_SUPABASE_SERVICE_ROLE_KEY"
-          upload_secret SQUADCO_SECRET_KEY        "$_SQUADCO_SECRET_KEY"
-          upload_secret RELOADLY_CLIENT_ID        "$_RELOADLY_CLIENT_ID"
-          upload_secret RELOADLY_CLIENT_SECRET    "$_RELOADLY_CLIENT_SECRET"
-          upload_secret BUSHA_API_KEY             "$_BUSHA_API_KEY"
-          upload_secret APP_SECRET                "$_APP_SECRET"
-          upload_secret ONESIGNAL_APP_ID          "$_ONESIGNAL_APP_ID"
-          upload_secret ONESIGNAL_REST_API_KEY    "$_ONESIGNAL_REST_API_KEY"
-          upload_secret CRON_SECRET               "$_CRON_SECRET"
+          upload_secret SQUADCO_SECRET_KEY         "$_SQUADCO_SECRET_KEY"
+          upload_secret RELOADLY_CLIENT_ID         "$_RELOADLY_CLIENT_ID"
+          upload_secret RELOADLY_CLIENT_SECRET     "$_RELOADLY_CLIENT_SECRET"
+          upload_secret BUSHA_API_KEY              "$_BUSHA_API_KEY"
+          upload_secret APP_SECRET                 "$_APP_SECRET"
+          upload_secret ONESIGNAL_APP_ID           "$_ONESIGNAL_APP_ID"
+          upload_secret ONESIGNAL_REST_API_KEY     "$_ONESIGNAL_REST_API_KEY"
+          upload_secret CRON_SECRET                "$_CRON_SECRET"
           upload_secret ONESIGNAL_ANDROID_CHANNEL_ID "$_ONESIGNAL_ANDROID_CHANNEL_ID"
-          upload_secret SUPPORT_EMAIL             "$_SUPPORT_EMAIL"
-          upload_secret SUPPORT_TELEGRAM_CHAT_ID  "$_SUPPORT_TELEGRAM_CHAT_ID"
-          upload_secret SUPPORT_WHATSAPP          "$_SUPPORT_WHATSAPP"
-          upload_secret RESEND_API_KEY            "$_RESEND_API_KEY"
-          upload_secret ADMIN_EMAIL               "$_ADMIN_EMAIL"
+          upload_secret SUPPORT_EMAIL              "$_SUPPORT_EMAIL"
+          upload_secret SUPPORT_TELEGRAM_CHAT_ID   "$_SUPPORT_TELEGRAM_CHAT_ID"
+          upload_secret SUPPORT_WHATSAPP           "$_SUPPORT_WHATSAPP"
+          upload_secret RESEND_API_KEY             "$_RESEND_API_KEY"
+          upload_secret ADMIN_EMAIL                "$_ADMIN_EMAIL"
 
-      # ── Telegram & Dojah — placeholder until credentials are ready ─────────
+      # ── Setup Resend email domain for custom branding ─────────────────────
+      # Creates 7evencards.xyz domain in Resend (if not present), retrieves
+      # DKIM/SPF DNS records, and automatically adds them to Cloudflare DNS.
+      - name: Setup Resend email domain (7evencards.xyz)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: |
+          if [ -z "$RESEND_API_KEY" ]; then
+            echo "– RESEND_API_KEY not set — skipping Resend domain setup"
+            exit 0
+          fi
+
+          # Get Cloudflare zone ID for 7evencards.xyz
+          ZONE_ID=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/zones?name=7evencards.xyz" \
+            | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const z=JSON.parse(d.join(''));console.log(z.result[0]?.id||'')}catch{console.log('')} })")
+          echo "CF Zone ID: $ZONE_ID"
+
+          # Check if domain already registered in Resend
+          DOMAINS_RESP=$(curl -s -H "Authorization: Bearer $RESEND_API_KEY" "https://api.resend.com/domains")
+          DOMAIN_ID=$(echo "$DOMAINS_RESP" | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));const dom=(r.data||[]).find(d=>d.name==='7evencards.xyz');console.log(dom?.id||'')}catch{console.log('')} })")
+          DOMAIN_STATUS=$(echo "$DOMAINS_RESP" | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));const dom=(r.data||[]).find(d=>d.name==='7evencards.xyz');console.log(dom?.status||'')}catch{console.log('')} })")
+
+          if [ -z "$DOMAIN_ID" ]; then
+            echo "Creating 7evencards.xyz domain in Resend..."
+            CREATE_RESP=$(curl -s -X POST \
+              -H "Authorization: Bearer $RESEND_API_KEY" \
+              -H "Content-Type: application/json" \
+              "https://api.resend.com/domains" \
+              -d '{"name":"7evencards.xyz","region":"us-east-1"}')
+            DOMAIN_ID=$(echo "$CREATE_RESP" | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));console.log(r.id||'')}catch{console.log('')} })")
+            RECORDS_JSON=$(echo "$CREATE_RESP" | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));console.log(JSON.stringify(r.records||[]))}catch{console.log('[]')} })")
+            echo "Domain created in Resend: $DOMAIN_ID"
+          else
+            echo "Domain already in Resend (id: $DOMAIN_ID, status: $DOMAIN_STATUS)"
+            DOMAIN_DETAIL=$(curl -s -H "Authorization: Bearer $RESEND_API_KEY" "https://api.resend.com/domains/$DOMAIN_ID")
+            RECORDS_JSON=$(echo "$DOMAIN_DETAIL" | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));console.log(JSON.stringify(r.records||[]))}catch{console.log('[]')} })")
+          fi
+
+          # Add DNS records to Cloudflare
+          if [ -n "$ZONE_ID" ] && [ -n "$RECORDS_JSON" ] && [ "$RECORDS_JSON" != "[]" ]; then
+            echo "Adding Resend DNS records to Cloudflare..."
+            echo "$RECORDS_JSON" | node - <<'NODESCRIPT'
+              const readline = require('readline');
+              const chunks = [];
+              process.stdin.on('data', c => chunks.push(c));
+              process.stdin.on('end', async () => {
+                const records = JSON.parse(chunks.join(''));
+                const zoneId = process.env.ZONE_ID;
+                const token  = process.env.CLOUDFLARE_API_TOKEN;
+                for (const rec of records) {
+                  if (!rec.name || !rec.value) continue;
+                  const existing = await fetch(
+                    `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records?type=${rec.type}&name=${encodeURIComponent(rec.name)}`,
+                    { headers: { Authorization: `Bearer ${token}` } }
+                  ).then(r => r.json());
+                  if (existing.result?.length > 0) {
+                    console.log(`✓ Already exists: ${rec.type} ${rec.name}`);
+                    continue;
+                  }
+                  const body = { type: rec.type, name: rec.name, content: rec.value, ttl: 1 };
+                  if (rec.priority) body.priority = rec.priority;
+                  const res = await fetch(
+                    `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`,
+                    { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                      body: JSON.stringify(body) }
+                  ).then(r => r.json());
+                  console.log(res.success
+                    ? `✓ Created: ${rec.type} ${rec.name}`
+                    : `✗ Error: ${rec.type} ${rec.name} — ${JSON.stringify(res.errors)}`);
+                }
+              });
+NODESCRIPT
+          else
+            echo "– Skipping DNS record creation (no zone ID or no records)"
+          fi
+
+          # Trigger domain verification in Resend
+          if [ -n "$DOMAIN_ID" ]; then
+            VERIFY=$(curl -s -X POST \
+              -H "Authorization: Bearer $RESEND_API_KEY" \
+              "https://api.resend.com/domains/$DOMAIN_ID/verify")
+            echo "Verification: $(echo $VERIFY | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));console.log(r.object||JSON.stringify(r))}catch{console.log('')} })")"
+          fi
+        continue-on-error: true
+
+      # ── Telegram & Dojah secrets ───────────────────────────────────────────
       - name: Upload Telegram & Dojah secrets to Cloudflare Workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -244,7 +292,7 @@ jobs:
           upload_secret ADMIN_TELEGRAM_WEBHOOK_SECRET   "$_ADMIN_TELEGRAM_WEBHOOK_SECRET"
           upload_secret DOJAH_APP_ID                    "$_DOJAH_APP_ID"
           upload_secret DOJAH_SECRET_KEY                "$_DOJAH_SECRET_KEY"
-        continue-on-error: true   # Don't fail deploy if Telegram/Dojah not set yet
+        continue-on-error: true
 
       - name: Register Telegram Webhooks
         run: |
@@ -264,7 +312,34 @@ jobs:
           TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
           ADMIN_TELEGRAM_BOT_TOKEN: ${{ secrets.ADMIN_TELEGRAM_BOT_TOKEN }}
           ADMIN_TELEGRAM_WEBHOOK_SECRET: ${{ secrets.ADMIN_TELEGRAM_WEBHOOK_SECRET }}
-        continue-on-error: true   # Don't fail deploy if bot tokens not set yet
+        continue-on-error: true
+
+      - name: Provision vendor.7evencards.xyz DNS record (CNAME, proxied)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          ZONE_ID=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/zones?name=7evencards.xyz" \
+            | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const z=JSON.parse(d.join(''));console.log(z.result[0]?.id||'')}catch{console.log('')} })")
+          if [ -z "$ZONE_ID" ]; then
+            echo "::warning::Could not get Cloudflare Zone ID — skipping vendor DNS"
+            exit 0
+          fi
+          EXISTING=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=CNAME&name=vendor.7evencards.xyz" \
+            | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));console.log(r.result?.length>0?r.result[0].id:'')}catch{console.log('')} })")
+          if [ -n "$EXISTING" ]; then
+            echo "✓ vendor CNAME already exists (ID: $EXISTING) — skipping"
+          else
+            RESULT=$(curl -s -X POST \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
+              -d '{"type":"CNAME","name":"vendor","content":"7evencards.xyz","proxied":true,"ttl":1}' \
+              | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));console.log(r.success?'created:'+r.result.id:'err:'+JSON.stringify(r.errors))}catch{console.log('parse error')} })")
+            echo "vendor CNAME: $RESULT"
+          fi
+        continue-on-error: true
 
       - name: Build API Worker (api.7evencards.xyz)
         run: node build-worker.mjs
@@ -289,9 +364,6 @@ jobs:
           fi
           API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://api.7evencards.xyz/api/healthz")
           echo "API worker health check → HTTP $API_STATUS"
-          if [ "$API_STATUS" != "200" ]; then
-            echo "::warning::API worker health check returned $API_STATUS — check the deployment"
-          fi
           VENDOR_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://vendor.7evencards.xyz/" || echo "000")
           echo "Vendor portal health check → HTTP $VENDOR_STATUS"
         continue-on-error: true
