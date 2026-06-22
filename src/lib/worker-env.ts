@@ -7,15 +7,19 @@
 // the top of every fetch() call) and expose getEnv() for all server-side code
 // that needs runtime credentials.
 // server.ts calls initWorkerEnv(env) at the very top of every fetch() call.
+//
+// IMPORTANT: Cloudflare Workers env bindings are NON-ENUMERABLE. Do NOT use
+// Object.entries(env) or Object.keys(env) — they return empty arrays. Instead,
+// store the raw env object and access keys directly with env[key].
 
-let _env: Record<string, string> = {};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _env: Record<string, any> | null = null;
 
 export function initWorkerEnv(env: unknown): void {
   if (env && typeof env === "object") {
-    _env = {};
-    for (const [k, v] of Object.entries(env as Record<string, unknown>)) {
-      if (typeof v === "string") _env[k] = v;
-    }
+    // Store the raw env object — do NOT spread or Object.entries it.
+    // CF Worker env bindings are non-enumerable; only direct key access works.
+    _env = env as Record<string, unknown>;
   }
 }
 
@@ -24,5 +28,9 @@ export function initWorkerEnv(env: unknown): void {
  * per-request via initWorkerEnv) with a fallback to process.env for local dev.
  */
 export function getEnv(key: string): string | undefined {
-  return _env[key] ?? process.env[key];
+  if (_env !== null) {
+    const val = _env[key];
+    if (typeof val === "string") return val;
+  }
+  return process.env[key];
 }
