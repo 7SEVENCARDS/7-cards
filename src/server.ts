@@ -231,21 +231,6 @@ export default {
 
     // ── Health check — shows config status without exposing secret values ──
     if (url.pathname === "/api/health") {
-      // Diagnostic: verify globalThis.__env__ has the CF Worker secrets.
-      const gbl = globalThis as Record<string, unknown>;
-      const nitroEnv = gbl["__env__"] as Record<string, unknown> | undefined;
-      const directCheck = {
-        __env___type:           typeof nitroEnv,
-        __env___APP_SECRET:     typeof nitroEnv?.["APP_SECRET"],
-        __env___VITE_SUP:       typeof nitroEnv?.["VITE_SUPABASE_URL"],
-        __env___CRON:           typeof nitroEnv?.["CRON_SECRET"],
-        __env___ASSETS:         typeof nitroEnv?.["ASSETS"],
-        __env___NODE_ENV:       nitroEnv?.["NODE_ENV"],
-        __env___own_keys:       nitroEnv ? Object.getOwnPropertyNames(nitroEnv).slice(0, 30) : [],
-        __nitro___type:         typeof gbl["__nitro__"],
-      };
-      console.log("[Health:diag]", JSON.stringify(directCheck));
-
       // Critical: all must be present for 200. Optional: logged but won't cause 503.
       const critical = {
         supabase:   !!(getEnv("VITE_SUPABASE_URL") && getEnv("SUPABASE_SERVICE_ROLE_KEY")),
