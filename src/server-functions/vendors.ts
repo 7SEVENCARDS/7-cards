@@ -1940,6 +1940,72 @@ export const adminGetVendorScores = createServerFn({ method: "GET" })
       .sort((a, b) => b.totalScore - a.totalScore);
   });
 
+// ─── Submit Rate Proposal (vendor → pending admin approval) ──────────────────
+// Vendors propose a new exchange rate from the portal. It lands as `pending`
+// and must be approved by admin before it applies to live trades.
+export const submitVendorRate = createServerFn({ method: "POST" })
+  .validator((d: { rateNgn: number }) => d)
+  .handler(async ({ data }) => {
+    const userId = await requireVendorAuth();
+    const db = getServerSupabase();
+
+    if (data.rateNgn < 100 || data.rateNgn > 10_000) {
+      return { success: false as const, error: "Rate must be between ₦100 and ₦10,000 per $1" };
+    }
+
+    const vendor = await getVendorId(db, userId);
+    if (!vendor) return { success: false as const, error: "Vendor profile not found" };
+
+    // Fetch current + pending rates
+    const { data: v } = await db
+      .from("vendors")
+      .select("preferred_rate_ngn_per_usd, pending_rate_ngn_per_usd")
+      .eq("id", vendor.id)
+      .single() as {
+        data: {
+          preferred_rate_ngn_per_usd: number | null;
+          pending_rate_ngn_per_usd: number | null;
+        } | null;
+      };
+
+    if (v?.pending_rate_ngn_per_usd != null) {
+      return {
+        success: false as const,
+        error: "You already have a rate awaiting admin approval. Please wait for it to be reviewed before submitting another.",
+      };
+    }
+
+    // Insert history row with status = pending, changed_via = portal
+    const { data: historyRow, error: histErr } = await db
+      .from("vendor_rate_history")
+      .insert({
+        vendor_id:   vendor.id,
+        old_rate:    v?.preferred_rate_ngn_per_usd ?? null,
+        new_rate:    data.rateNgn,
+        changed_via: "portal",
+        status:      "pending",
+      })
+      .select("id")
+      .single();
+
+    if (histErr || !historyRow) {
+      return { success: false as const, error: "Failed to record rate proposal — please try again" };
+    }
+
+    // Set pending rate on vendor row
+    const { error: updErr } = await db.from("vendors").update({
+      pending_rate_ngn_per_usd:  data.rateNgn,
+      pending_rate_submitted_at: new Date().toISOString(),
+      pending_rate_history_id:   (historyRow as { id: string }).id,
+    }).eq("id", vendor.id);
+
+    if (updErr) {
+      return { success: false as const, error: "Failed to save pending rate — please try again" };
+    }
+
+    return { success: true as const };
+  });
+
 // ─── Get Vendor Notifications ─────────────────────────────────────────────────
 export const getVendorNotifications = createServerFn({ method: "GET" })
   .validator((d: { limit?: number }) => d)

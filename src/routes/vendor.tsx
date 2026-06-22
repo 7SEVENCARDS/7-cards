@@ -26,6 +26,7 @@ import {
   getMyVendorScore,
   getVendorNotifications,
   markNotificationRead,
+  submitVendorRate,
 } from "../server-functions/vendors";
 import { getMyBroadcastClaims, getActiveBroadcasts, getMyRateHistory } from "../server-functions/vendor-broadcast";
 import type { ActiveBroadcastRow, RateHistoryRow } from "../server-functions/vendor-broadcast";
@@ -1210,16 +1211,55 @@ function ProfileTab({ vendor, onLogout }: { vendor: VendorSession; onLogout: () 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [badges, setBadges] = useState<{ earned: BadgeItem[]; locked: BadgeItem[] } | null>(null);
-  const [rateData, setRateData] = useState<{ currentRate: number | null; history: RateHistoryRow[] } | null>(null);
+  const [rateData, setRateData] = useState<{
+    currentRate: number | null;
+    pendingRate: number | null;
+    pendingSubmittedAt: string | null;
+    history: RateHistoryRow[];
+  } | null>(null);
+  const [rateInput, setRateInput] = useState("");
+  const [rateSubmitting, setRateSubmitting] = useState(false);
+  const [rateError, setRateError] = useState("");
+  const [rateSuccess, setRateSuccess] = useState(false);
+  const [showRateForm, setShowRateForm] = useState(false);
 
   useEffect(() => {
     getMyBadges({ data: {} })
       .then(r => setBadges(r as { earned: BadgeItem[]; locked: BadgeItem[] }))
       .catch(() => {});
     getMyRateHistory({ data: {} })
-      .then(r => setRateData(r as { currentRate: number | null; history: RateHistoryRow[] }))
+      .then(r => setRateData(r as {
+        currentRate: number | null;
+        pendingRate: number | null;
+        pendingSubmittedAt: string | null;
+        history: RateHistoryRow[];
+      }))
       .catch(() => {});
   }, []);
+
+  const handleRateSubmit = async () => {
+    const n = parseFloat(rateInput.replace(/[^\d.]/g, ""));
+    if (isNaN(n) || n < 100 || n > 10_000) {
+      setRateError("Enter a valid rate between ₦100 and ₦10,000");
+      return;
+    }
+    setRateSubmitting(true); setRateError("");
+    try {
+      const res = await submitVendorRate({ data: { rateNgn: n } }) as { success: boolean; error?: string };
+      if (!res.success) { setRateError(res.error ?? "Submission failed"); return; }
+      setRateSuccess(true);
+      setRateData(prev => prev ? {
+        ...prev,
+        pendingRate: n,
+        pendingSubmittedAt: new Date().toISOString(),
+      } : prev);
+      setShowRateForm(false);
+      setRateInput("");
+      setTimeout(() => setRateSuccess(false), 3000);
+    } catch (e) {
+      setRateError(e instanceof Error ? e.message : "Submission failed");
+    } finally { setRateSubmitting(false); }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -1249,20 +1289,122 @@ function ProfileTab({ vendor, onLogout }: { vendor: VendorSession; onLogout: () 
 
         {/* Current rate card */}
         <div className={`rounded-2xl border p-4 mb-3 ${rateData?.currentRate ? "border-gold/25 bg-gold/5" : "border-border/60 bg-secondary/50"}`}>
-          <p className="text-xs text-muted-foreground mb-1">Current rate</p>
+          <p className="text-xs text-muted-foreground mb-1">Current approved rate</p>
           <p className={`text-2xl font-extrabold tabular-nums ${rateData?.currentRate ? "text-gold" : "text-muted-foreground"}`}>
             {rateData?.currentRate
               ? `₦${Number(rateData.currentRate).toLocaleString("en-NG")}/$1`
               : "Not set yet"}
           </p>
           <p className="text-[10px] text-muted-foreground mt-1.5">
-            7SEVEN bot asks every 6 hours via Telegram. Reply <b>YES</b> then send your new number to update instantly.
+            Set via portal below, or via Telegram — the bot asks every 6 hours (reply <b>YES</b> then your number).
           </p>
         </div>
 
+        {/* Pending rate banner */}
+        {rateData?.pendingRate != null && (
+          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/8 px-4 py-3 mb-3 flex items-start gap-3">
+            <Clock className="size-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-extrabold text-amber-300">
+                ₦{Number(rateData.pendingRate).toLocaleString("en-NG")}/$1 — Awaiting Admin Approval
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                Submitted {rateData.pendingSubmittedAt ? timeAgo(rateData.pendingSubmittedAt) : "recently"}.
+                This will apply to your trades once an admin approves it.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Rate success banner */}
+        {rateSuccess && (
+          <div className="rounded-2xl border border-green-500/30 bg-green-500/8 px-4 py-3 mb-3 flex items-center gap-2">
+            <CheckCircle2 className="size-4 text-green-400 shrink-0" />
+            <p className="text-xs font-bold text-green-400">Rate proposal submitted! Admin will review it shortly.</p>
+          </div>
+        )}
+
+        {/* Propose new rate — only when no pending rate outstanding */}
+        {rateData?.pendingRate == null && !rateSuccess && (
+          <>
+            {!showRateForm ? (
+              <button
+                onClick={() => setShowRateForm(true)}
+                className="w-full flex items-center justify-center gap-2 border border-dashed border-border/60 rounded-xl py-2.5 text-xs text-muted-foreground hover:border-gold/40 hover:text-gold transition"
+              >
+                <TrendingUp className="size-3.5" />
+                Propose a new rate
+              </button>
+            ) : (
+              <div className="rounded-2xl border border-border/60 bg-card p-4 space-y-3">
+                <div>
+                  <label className="text-xs font-bold text-muted-foreground block mb-1.5">
+                    New rate (₦ per $1)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-muted-foreground">₦</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={rateInput}
+                      onChange={e => { setRateInput(e.target.value); setRateError(""); }}
+                      onKeyDown={e => e.key === "Enter" && handleRateSubmit()}
+                      placeholder="e.g. 1510"
+                      autoFocus
+                      className="w-full bg-secondary border border-border/60 rounded-xl pl-8 pr-4 py-3 text-lg font-bold font-mono outline-none focus:border-gold/40"
+                    />
+                  </div>
+                  {rateData?.currentRate && (
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      Current: ₦{Number(rateData.currentRate).toLocaleString("en-NG")}/$1
+                      {rateInput && !isNaN(parseFloat(rateInput)) && (() => {
+                        const diff = parseFloat(rateInput) - Number(rateData.currentRate);
+                        const pct = (diff / Number(rateData.currentRate) * 100).toFixed(1);
+                        return (
+                          <span className={`ml-1.5 font-bold ${diff >= 0 ? "text-green-400" : "text-red-400"}`}>
+                            {diff >= 0 ? "▲" : "▼"} {Math.abs(Number(pct))}%
+                          </span>
+                        );
+                      })()}
+                    </p>
+                  )}
+                </div>
+
+                {rateError && (
+                  <p className="text-xs text-red-400 font-bold flex items-center gap-1.5">
+                    <AlertTriangle className="size-3.5 shrink-0" />
+                    {rateError}
+                  </p>
+                )}
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleRateSubmit}
+                    disabled={rateSubmitting || !rateInput}
+                    className="flex-1 flex items-center justify-center gap-1.5 bg-gold text-jungle-deep font-extrabold text-sm py-2.5 rounded-xl disabled:opacity-50"
+                  >
+                    {rateSubmitting ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                    {rateSubmitting ? "Submitting…" : "Submit for Approval"}
+                  </button>
+                  <button
+                    onClick={() => { setShowRateForm(false); setRateInput(""); setRateError(""); }}
+                    className="px-4 py-2.5 rounded-xl border border-border/60 text-sm text-muted-foreground"
+                  >
+                    Cancel
+                  </button>
+                </div>
+
+                <p className="text-[10px] text-muted-foreground text-center">
+                  Your proposal goes to admin for review. Current rate stays active until approved.
+                </p>
+              </div>
+            )}
+          </>
+        )}
+
         {/* Rate history */}
         {rateData && rateData.history.length > 0 && (
-          <div>
+          <div className="mt-3">
             <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-2">Rate History</p>
             <div className="space-y-2">
               {rateData.history.slice(0, 5).map(r => {
@@ -1270,14 +1412,23 @@ function ProfileTab({ vendor, onLogout }: { vendor: VendorSession; onLogout: () 
                   ? ((Number(r.new_rate) - Number(r.old_rate)) / Number(r.old_rate) * 100).toFixed(1)
                   : null;
                 const up = change ? Number(change) >= 0 : null;
+                const statusStyle = r.status === "approved" ? "bg-green-500/15 text-green-400"
+                  : r.status === "rejected" ? "bg-red-500/15 text-red-400"
+                  : r.status === "pending" ? "bg-amber-500/15 text-amber-400"
+                  : "bg-secondary text-muted-foreground";
                 return (
                   <div key={r.id} className="bg-secondary/60 rounded-xl px-3 py-2.5 flex items-center gap-3">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <p className="text-sm font-extrabold">₦{Number(r.new_rate).toLocaleString("en-NG")}/$1</p>
                         {change && (
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${up ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"}`}>
                             {up ? "▲" : "▼"} {Math.abs(Number(change))}%
+                          </span>
+                        )}
+                        {r.status && (
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full capitalize ${statusStyle}`}>
+                            {r.status}
                           </span>
                         )}
                       </div>
@@ -1289,9 +1440,6 @@ function ProfileTab({ vendor, onLogout }: { vendor: VendorSession; onLogout: () 
                     </div>
                     <div className="text-right shrink-0">
                       <p className="text-[10px] text-muted-foreground">{timeAgo(r.created_at)}</p>
-                      {r.admin_notified_at && (
-                        <p className="text-[9px] text-green-400 mt-0.5">Admin notified ✓</p>
-                      )}
                     </div>
                   </div>
                 );
@@ -1300,9 +1448,9 @@ function ProfileTab({ vendor, onLogout }: { vendor: VendorSession; onLogout: () 
           </div>
         )}
 
-        {rateData && rateData.history.length === 0 && (
-          <p className="text-xs text-muted-foreground text-center py-3">
-            No rate changes yet. The bot will ask you every 6 hours via Telegram.
+        {rateData && rateData.history.length === 0 && rateData.pendingRate == null && (
+          <p className="text-xs text-muted-foreground text-center py-3 mt-2">
+            No rate history yet. Use the form above or the Telegram bot to set your rate.
           </p>
         )}
       </div>

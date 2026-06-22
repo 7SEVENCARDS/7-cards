@@ -587,33 +587,48 @@ export type RateHistoryRow = {
   old_rate: number | null;
   new_rate: number;
   changed_via: string;
+  status?: string;          // pending | approved | rejected | overridden
   admin_notified_at: string | null;
   created_at: string;
 };
 
 export const getMyRateHistory = createServerFn({ method: "GET" })
-  .handler(async (): Promise<{ currentRate: number | null; history: RateHistoryRow[] }> => {
+  .handler(async (): Promise<{
+    currentRate: number | null;
+    pendingRate: number | null;
+    pendingSubmittedAt: string | null;
+    history: RateHistoryRow[];
+  }> => {
     const userId = await requireVendorAuth();
     const db = getServerSupabase();
 
     const { data: vendor } = await db
       .from("vendors")
-      .select("id, preferred_rate_ngn_per_usd")
+      .select("id, preferred_rate_ngn_per_usd, pending_rate_ngn_per_usd, pending_rate_submitted_at")
       .eq("user_id", userId)
-      .single() as { data: { id: string; preferred_rate_ngn_per_usd: number | null } | null };
+      .single() as {
+        data: {
+          id: string;
+          preferred_rate_ngn_per_usd: number | null;
+          pending_rate_ngn_per_usd: number | null;
+          pending_rate_submitted_at: string | null;
+        } | null;
+      };
 
-    if (!vendor) return { currentRate: null, history: [] };
+    if (!vendor) return { currentRate: null, pendingRate: null, pendingSubmittedAt: null, history: [] };
 
     const { data: history } = await db
       .from("vendor_rate_history")
-      .select("id, old_rate, new_rate, changed_via, admin_notified_at, created_at")
+      .select("id, old_rate, new_rate, changed_via, status, admin_notified_at, created_at")
       .eq("vendor_id", vendor.id)
       .order("created_at", { ascending: false })
       .limit(10) as { data: RateHistoryRow[] | null };
 
     return {
-      currentRate: vendor.preferred_rate_ngn_per_usd,
-      history: history ?? [],
+      currentRate:        vendor.preferred_rate_ngn_per_usd,
+      pendingRate:        vendor.pending_rate_ngn_per_usd,
+      pendingSubmittedAt: vendor.pending_rate_submitted_at,
+      history:            history ?? [],
     };
   });
 
