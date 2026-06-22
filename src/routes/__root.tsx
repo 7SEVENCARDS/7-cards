@@ -131,6 +131,12 @@ function RootComponent() {
   const oneSignalInit = useRef(false);
 
   useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
     if (oneSignalInit.current) return;
     const appId = import.meta.env.VITE_ONESIGNAL_APP_ID as string | undefined;
     if (!appId) return;

@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>7SEVEN CARDS — You're Offline</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --midnight: #0a1220;
+      --jungle:   #1a4a32;
+      --gold:     #f0c040;
+      --cyan:     #60e8d0;
+      --pink:     #e040a0;
+      --card:     #16202e;
+      --border:   #2a3545;
+      --fg:       #f5f0e8;
+      --muted:    #6b7a90;
+    }
+
+    html, body {
+      min-height: 100vh;
+      min-height: 100dvh;
+      background: var(--midnight);
+      color: var(--fg);
+      font-family: "Inter", system-ui, -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overscroll-behavior: none;
+    }
+
+    .page {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100dvh;
+      padding: max(2rem, env(safe-area-inset-top)) 1.5rem max(2rem, env(safe-area-inset-bottom));
+      text-align: center;
+      gap: 0;
+    }
+
+    /* Mascot / logo area */
+    .mascot-wrap {
+      position: relative;
+      margin-bottom: 2rem;
+    }
+
+    .logo-ring {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      border: 3px solid var(--gold);
+      background: var(--jungle);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto;
+      position: relative;
+      box-shadow: 0 0 40px rgba(240,192,64,0.25);
+      animation: float 3s ease-in-out infinite;
+    }
+
+    .logo-ring img {
+      width: 80px;
+      height: 80px;
+      object-fit: contain;
+      border-radius: 50%;
+    }
+
+    .wifi-badge {
+      position: absolute;
+      bottom: -6px;
+      right: -6px;
+      width: 36px;
+      height: 36px;
+      background: var(--midnight);
+      border: 2px solid var(--border);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50%       { transform: translateY(-8px); }
+    }
+
+    /* Dots animation */
+    .dots {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 2.5rem;
+    }
+    .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      animation: blink 1.4s ease-in-out infinite;
+    }
+    .dot:nth-child(1) { background: var(--gold);  animation-delay: 0s; }
+    .dot:nth-child(2) { background: var(--cyan);  animation-delay: 0.2s; }
+    .dot:nth-child(3) { background: var(--pink);  animation-delay: 0.4s; }
+    @keyframes blink {
+      0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+      40%            { opacity: 1;   transform: scale(1.2); }
+    }
+
+    h1 {
+      font-family: "Sora", system-ui, sans-serif;
+      font-size: 1.75rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--fg);
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      font-size: 0.9rem;
+      color: var(--muted);
+      line-height: 1.5;
+      max-width: 280px;
+      margin: 0 auto 2rem;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 1.25rem;
+      padding: 1.25rem;
+      max-width: 320px;
+      width: 100%;
+      margin-bottom: 1.5rem;
+      text-align: left;
+    }
+
+    .card-label {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+    }
+
+    .tip {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      margin-bottom: 0.6rem;
+    }
+    .tip:last-child { margin-bottom: 0; }
+
+    .tip-icon {
+      font-size: 1rem;
+      flex-shrink: 0;
+      margin-top: 0.05rem;
+    }
+
+    .tip-text {
+      font-size: 0.8rem;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .tip-text strong {
+      color: var(--fg);
+      font-weight: 600;
+    }
+
+    .retry-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      width: 100%;
+      max-width: 320px;
+      padding: 1rem;
+      border-radius: 1rem;
+      background: linear-gradient(135deg, #f0c040, #e07820);
+      color: #0a1e10;
+      font-size: 0.9rem;
+      font-weight: 800;
+      border: none;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      transition: transform 0.15s, opacity 0.15s;
+    }
+    .retry-btn:active { transform: scale(0.97); opacity: 0.9; }
+
+    .brand {
+      margin-top: 2rem;
+      font-size: 0.7rem;
+      color: var(--muted);
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+
+    .brand span { color: var(--gold); }
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@800&family=Inter:wght@400;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+<div class="page">
+
+  <div class="mascot-wrap">
+    <div class="logo-ring">
+      <img src="/logo-badge.png" alt="7SEVEN CARDS" onerror="this.style.display='none';this.parentElement.innerHTML+='<span style=&quot;font-size:2.5rem;font-weight:900;color:#f0c040&quot;>7</span>'" />
+      <div class="wifi-badge">📵</div>
+    </div>
+  </div>
+
+  <div class="dots">
+    <div class="dot"></div>
+    <div class="dot"></div>
+    <div class="dot"></div>
+  </div>
+
+  <h1>You're Offline</h1>
+  <p class="subtitle">
+    No internet connection detected.<br />
+    Your trades are safe — reconnect to continue.
+  </p>
+
+  <div class="card">
+    <p class="card-label">While you wait</p>
+    <div class="tip">
+      <span class="tip-icon">📶</span>
+      <p class="tip-text"><strong>Check your data</strong> — try switching between mobile data and Wi-Fi.</p>
+    </div>
+    <div class="tip">
+      <span class="tip-icon">✈️</span>
+      <p class="tip-text"><strong>Airplane mode</strong> — toggle it off if it's accidentally on.</p>
+    </div>
+    <div class="tip">
+      <span class="tip-icon">🔁</span>
+      <p class="tip-text"><strong>Pending trades</strong> are stored and will sync the moment you're back online.</p>
+    </div>
+  </div>
+
+  <button class="retry-btn" onclick="window.location.reload()">
+    ↻&nbsp; Try Again
+  </button>
+
+  <p class="brand"><span>7SEVEN CARDS</span> · Verify Fast. Get Paid Faster.</p>
+</div>
+</body>
+</html>
