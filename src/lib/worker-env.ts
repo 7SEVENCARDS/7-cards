@@ -1,36 +1,37 @@
 // ─── Cloudflare Workers env singleton ────────────────────────────────────────
 // Vite/Nitro inlines process.env.X at build time, so secrets not available
 // during the build step are compiled as `undefined`. Runtime injection via
-// Object.assign(process.env, ...) does not help because the identifier
-// references are already substituted with literals in the bundle. Instead, we
-// store the Worker's env object in this module-level singleton (refreshed at
-// the top of every fetch() call) and expose getEnv() for all server-side code
-// that needs runtime credentials.
-// server.ts calls initWorkerEnv(env) at the very top of every fetch() call.
+// Object.assign(process.env, ...) does not help.
 //
-// IMPORTANT: Cloudflare Workers env bindings are NON-ENUMERABLE. Do NOT use
-// Object.entries(env) or Object.keys(env) — they return empty arrays. Instead,
-// store the raw env object and access keys directly with env[key].
+// ROOT CAUSE: Nitro's cloudflare-module preset generates its own CF Worker
+// entry that receives `fetch(request, env, ctx)` from Cloudflare, stores the
+// env on globalThis.__env__, then calls our server.ts fetch WITHOUT passing
+// env as the second argument (env === undefined in our handler). So we must
+// read secrets from globalThis.__env__ — not from the fetch() parameter.
+//
+// server.ts still calls initWorkerEnv(env) (a no-op now) for compatibility,
+// but getEnv() reads directly from globalThis.__env__.
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _env: Record<string, any> | null = null;
-
-export function initWorkerEnv(env: unknown): void {
-  if (env && typeof env === "object") {
-    // Store the raw env object — do NOT spread or Object.entries it.
-    // CF Worker env bindings are non-enumerable; only direct key access works.
-    _env = env as Record<string, unknown>;
-  }
+export function initWorkerEnv(_env: unknown): void {
+  // No-op: Nitro stores the CF env on globalThis.__env__ directly.
+  // We read from there in getEnv() instead.
 }
 
 /**
- * Get a runtime env var — reads from the Worker's env binding object (set
- * per-request via initWorkerEnv) with a fallback to process.env for local dev.
+ * Get a runtime env var — reads from Nitro's globalThis.__env__ (set by
+ * Nitro's generated Cloudflare Workers entry before our handler is called).
+ * Falls back to process.env for local dev.
  */
 export function getEnv(key: string): string | undefined {
-  if (_env !== null) {
-    const val = _env[key];
+  // Nitro's cloudflare-module preset stores CF Worker env on globalThis.__env__
+  // before dispatching to the server entry handler.
+  const nitroEnv = (globalThis as Record<string, unknown>)["__env__"] as
+    | Record<string, unknown>
+    | undefined;
+  if (nitroEnv) {
+    const val = nitroEnv[key];
     if (typeof val === "string") return val;
   }
+  // Fallback: process.env for local dev (NODE_ENV, SQUADCO_ENV, etc.)
   return process.env[key];
 }
