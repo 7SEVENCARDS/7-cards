@@ -231,8 +231,17 @@ export default {
 
     // ── Health check — shows config status without exposing secret values ──
     if (url.pathname === "/api/health") {
-      // Diagnostic: check what's in the raw env object directly.
+      // Diagnostic: check what's in the raw env object & globalThis for CF env storage.
       const rawEnv = env as Record<string, unknown>;
+      const gbl = globalThis as Record<string, unknown>;
+      // Look for CF env stored by Nitro on globalThis
+      const nitroGlobalKeys = Object.getOwnPropertyNames(gbl).filter(k =>
+        k.startsWith("__") || k.includes("nitro") || k.includes("cloud") || k.includes("_env") || k.includes("cf_") || k.includes("Ctx") || k.includes("worker")
+      );
+      const cfCandidates: Record<string, string> = {};
+      for (const k of nitroGlobalKeys) {
+        cfCandidates[k] = typeof gbl[k];
+      }
       const directCheck = {
         env_type:     typeof env,
         env_is_null:  env === null,
@@ -243,6 +252,11 @@ export default {
         CRON_SECRET_direct: typeof rawEnv?.["CRON_SECRET"],
         ASSETS_direct: typeof rawEnv?.["ASSETS"],
         NODE_ENV_direct: typeof rawEnv?.["NODE_ENV"],
+        global_nitro_keys: nitroGlobalKeys.slice(0, 30),
+        global_cf_candidates: cfCandidates,
+        // Check process.env for inlined values
+        process_env_keys: typeof process !== "undefined" ? Object.keys(process.env ?? {}).slice(0, 20) : [],
+        process_APP_SECRET: typeof process !== "undefined" ? typeof (process.env ?? {})["APP_SECRET"] : "no-process",
       };
       console.log("[Health:diag]", JSON.stringify(directCheck));
 
