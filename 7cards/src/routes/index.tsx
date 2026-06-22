@@ -1430,6 +1430,10 @@ const BRAND_LOGOS = [
   { name: "Xbox",        emoji: "🟢", color: "from-green-700 to-green-900" },
   { name: "PlayStation", emoji: "🎯", color: "from-blue-600 to-blue-900" },
   { name: "Netflix",     emoji: "🎬", color: "from-red-700 to-red-950" },
+  { name: "Spotify",     emoji: "🎵", color: "from-green-500 to-green-800" },
+  { name: "Razer Gold",  emoji: "🟡", color: "from-yellow-500 to-green-700" },
+  { name: "Sephora",     emoji: "💄", color: "from-pink-700 to-rose-900" },
+  { name: "Nordstrom",   emoji: "🛍️", color: "from-neutral-600 to-neutral-900" },
 ];
 
 function VerifyScreen({
@@ -1663,20 +1667,36 @@ function VerifyScreen({
               }}
             >
               {BRAND_LOGOS.map((b, i) => {
-                const angle = (i / 7) * 2 * Math.PI - Math.PI / 2;
+                const n = BRAND_LOGOS.length;
+                const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
                 const radius = 96;
                 const x = Math.cos(angle) * radius;
                 const y = Math.sin(angle) * radius;
+                const rotateDeg = (i / n) * 360;
                 return (
                   <div
                     key={b.name}
-                    className={`absolute top-1/2 left-1/2 -mt-7 -ml-5 w-10 h-14 rounded-lg bg-gradient-to-br ${b.color} shadow-card grid place-items-center text-lg ring-1 ring-white/30`}
+                    className={`absolute top-1/2 left-1/2 -mt-7 -ml-5 w-10 h-14 rounded-lg bg-gradient-to-br ${b.color} shadow-card flex flex-col items-center justify-center gap-0.5 ring-1 ring-white/30 overflow-hidden`}
                     style={{
-                      transform: `translate(${x}px, ${y}px) rotate(${(i / 7) * 360}deg)`,
+                      transform: `translate(${x}px, ${y}px) rotate(${rotateDeg}deg)`,
                       animation: state === "scanning" ? `card-pulse 1.4s ${i * 0.15}s ease-in-out infinite` : "none",
                     }}
                   >
-                    <span style={{ transform: `rotate(${-(i / 7) * 360}deg)` }}>{b.emoji}</span>
+                    <div style={{ transform: `rotate(${-rotateDeg}deg)` }} className="flex flex-col items-center justify-center size-full">
+                      {BRAND_LOGO_URLS[b.name] ? (
+                        <img
+                          src={BRAND_LOGO_URLS[b.name]}
+                          alt={b.name}
+                          className="size-6 object-contain drop-shadow-sm"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).style.display = "none";
+                            const fb = (e.currentTarget as HTMLImageElement).nextElementSibling as HTMLElement | null;
+                            if (fb) fb.style.display = "block";
+                          }}
+                        />
+                      ) : null}
+                      <span style={{ display: BRAND_LOGO_URLS[b.name] ? "none" : "block", fontSize: "1.1rem" }}>{b.emoji}</span>
+                    </div>
                   </div>
                 );
               })}
