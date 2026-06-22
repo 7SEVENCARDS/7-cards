@@ -6,13 +6,25 @@
 
 import { fetchWithTimeout } from "./fetch-with-timeout";
 import { DEFAULT_NGN_RATE } from "./constants";
+import { getEnv } from "./worker-env";
 
-const RELOADLY_ENV = process.env.RELOADLY_ENV || "sandbox";
+// ── Lazy getters — must not read env at module load time because Vite inlines
+// process.env.X at build time; read from the Worker env singleton instead. ──────
+function getReloadlyEnv(): string {
+  return getEnv("RELOADLY_ENV") || "sandbox";
+}
 
-const BASE_URL =
-  RELOADLY_ENV === "production"
+function getBaseUrl(): string {
+  return getReloadlyEnv() === "production"
     ? "https://giftcards.reloadly.com"
     : "https://giftcards-sandbox.reloadly.com";
+}
+
+function getAudience(): string {
+  return getReloadlyEnv() === "production"
+    ? "https://giftcards.reloadly.com"
+    : "https://giftcards-sandbox.reloadly.com";
+}
 
 const AUTH_URL = "https://auth.reloadly.com/oauth/token";
 
@@ -24,17 +36,12 @@ async function getAccessToken(): Promise<string> {
     return cachedToken.token;
   }
 
-  const clientId = process.env.RELOADLY_CLIENT_ID;
-  const clientSecret = process.env.RELOADLY_CLIENT_SECRET;
+  const clientId = getEnv("RELOADLY_CLIENT_ID");
+  const clientSecret = getEnv("RELOADLY_CLIENT_SECRET");
 
   if (!clientId || clientId.includes("YOUR_")) {
     throw new Error("[Reloadly] RELOADLY_CLIENT_ID not configured");
   }
-
-  const audience =
-    RELOADLY_ENV === "production"
-      ? "https://giftcards.reloadly.com"
-      : "https://giftcards-sandbox.reloadly.com";
 
   const res = await fetchWithTimeout(AUTH_URL, {
     method: "POST",
@@ -43,7 +50,7 @@ async function getAccessToken(): Promise<string> {
       client_id: clientId,
       client_secret: clientSecret,
       grant_type: "client_credentials",
-      audience,
+      audience: getAudience(),
     }),
   });
 
@@ -63,7 +70,7 @@ async function getAccessToken(): Promise<string> {
 
 async function reloadlyFetch(path: string, options: RequestInit = {}) {
   const token = await getAccessToken();
-  const res = await fetchWithTimeout(`${BASE_URL}${path}`, {
+  const res = await fetchWithTimeout(`${getBaseUrl()}${path}`, {
     ...options,
     headers: {
       Authorization: `Bearer ${token}`,
