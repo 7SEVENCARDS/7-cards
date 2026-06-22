@@ -14,6 +14,7 @@ import {
   Timer,
   RotateCcw,
 } from "lucide-react";
+import { toast } from "sonner";
 import { getTradeStatus, processPayout } from "../server-functions/trades";
 
 type TradeDetail = {
@@ -199,7 +200,7 @@ export function TradeStatusScreen({ tradeId, userId, onBack, payoutBankCode, pay
       navigator.share({ title: "7SEVEN Trade Receipt", text }).catch(() => {});
     } else {
       navigator.clipboard.writeText(text)
-        .then(() => alert("Receipt copied!"))
+        .then(() => toast.success("Receipt copied to clipboard"))
         .catch(() => {});
     }
   };

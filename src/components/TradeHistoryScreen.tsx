@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Zap,
 } from "lucide-react";
+import { toast } from "sonner";
 import { getTradeHistory } from "../server-functions/trades";
 
 type Trade = {
@@ -254,7 +255,7 @@ export function TradeHistoryScreen({ userId, onBack, onViewStatus }: Props) {
     if (navigator.share) {
       navigator.share({ title: "7SEVEN Trade Receipt", text }).catch(() => {});
     } else {
-      navigator.clipboard.writeText(text).then(() => alert("Receipt copied to clipboard!")).catch(() => {});
+      navigator.clipboard.writeText(text).then(() => toast.success("Receipt copied to clipboard")).catch(() => {});
     }
   };
 

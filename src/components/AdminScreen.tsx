@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { toast } from "sonner";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -1523,7 +1524,7 @@ function VendorsTab({ adminId }: { adminId: string }) {
       await adminApproveWithdrawal({ data: { requestId: id } });
       await loadWithdrawals();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Payout failed");
+      toast.error(e instanceof Error ? e.message : "Payout failed");
     } finally { setActingWithdrawal(null); }
   };
 
@@ -1535,7 +1536,7 @@ function VendorsTab({ adminId }: { adminId: string }) {
       setRejectModal(null); setRejectReason("");
       await loadWithdrawals();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Rejection failed");
+      toast.error(e instanceof Error ? e.message : "Rejection failed");
     } finally { setActingWithdrawal(null); }
   };
 
@@ -1547,7 +1548,7 @@ function VendorsTab({ adminId }: { adminId: string }) {
         setVendors(prev => prev.map(v => v.id === vendorId ? { ...v, tier: toTier } : v));
         setLeaderboard(prev => prev.map(v => v.id === vendorId ? { ...v, tier: toTier } : v));
       }
-    } catch (e) { alert(e instanceof Error ? e.message : "Promotion failed"); }
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Promotion failed"); }
     finally { setPromoting(null); }
   };
 
@@ -1594,11 +1595,11 @@ function VendorsTab({ adminId }: { adminId: string }) {
       if (result.success) {
         const tlg = result.telegramResult;
         const msg = tlg?.ok ? " ✅ Telegram sent!" : tlg?.error ? ` ⚠️ Telegram: ${tlg.error}` : "";
-        alert(`Card assigned successfully!${msg}`);
+        toast.success(`Card assigned successfully!${msg}`);
         setAssignModal(null);
         setAssignForm({ brand: "Apple", amountUsd: "", amountNgn: "", cardCode: "", cardPin: "", tradeId: "", notifyTelegram: true });
       }
-    } catch (e) { alert(e instanceof Error ? e.message : "Assignment failed"); }
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Assignment failed"); }
     finally { setAssigning(false); }
   };
 
@@ -1606,7 +1607,7 @@ function VendorsTab({ adminId }: { adminId: string }) {
     setActing(assignmentId);
     try {
       const res = await adminSendTelegramNotification({ data: { assignmentId } }) as { ok: boolean; error?: string };
-      alert(res.ok ? "✅ Telegram notification sent!" : `⚠️ ${res.error}`);
+      res.ok ? toast.success("Telegram notification sent!") : toast.error(res.error ?? "Telegram failed");
     } finally { setActing(null); }
   };
 

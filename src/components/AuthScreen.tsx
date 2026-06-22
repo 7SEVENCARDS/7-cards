@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Mail, Lock, User, ArrowRight, Eye, EyeOff, ShieldCheck } from "lucide-react";
+import { Mail, Lock, User, ArrowRight, Eye, EyeOff, ShieldCheck, CheckCircle2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import logoFullAsset from "../assets/logo-full.png.asset.json";
 
@@ -19,6 +19,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [resetSent, setResetSent] = useState(false);
 
   const switchMode = (next: AuthMode) => {
     setMode(next);
@@ -82,7 +83,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
       });
       if (err) throw err;
       setError("");
-      alert(`Password reset email sent to ${email.trim()}. Check your inbox.`);
+      setResetSent(true);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to send reset email");
     } finally {
@@ -228,15 +229,22 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             )}
           </button>
 
-          {/* Forgot password */}
+          {/* Forgot password / reset sent */}
           {mode === "signin" && (
-            <button
-              onClick={handleForgotPassword}
-              disabled={loading}
-              className="text-xs text-muted-foreground font-semibold text-center hover:text-foreground transition"
-            >
-              Forgot password?
-            </button>
+            resetSent ? (
+              <div className="flex items-center justify-center gap-2 rounded-2xl bg-jungle/20 border border-jungle/40 px-4 py-3">
+                <CheckCircle2 className="size-4 text-cyan shrink-0" />
+                <p className="text-xs text-cyan font-semibold">Reset link sent — check your inbox</p>
+              </div>
+            ) : (
+              <button
+                onClick={handleForgotPassword}
+                disabled={loading}
+                className="text-xs text-muted-foreground font-semibold text-center hover:text-foreground transition"
+              >
+                Forgot password?
+              </button>
+            )
           )}
 
           <p className="text-center text-[11px] text-muted-foreground mt-auto pt-2">
