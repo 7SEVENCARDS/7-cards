@@ -11,6 +11,7 @@ export function useExchangeRates() {
     queryFn: () => getExchangeRates(),
     staleTime: 5 * 60 * 1000, // 5 min
     refetchInterval: 5 * 60 * 1000,
+    enabled: typeof window !== "undefined",
   });
 }
 
@@ -58,6 +59,7 @@ export function useLeaderboard(limit = 20) {
     queryKey: ["leaderboard", limit],
     queryFn: () => getLeaderboard({ data: { limit } }),
     staleTime: 2 * 60 * 1000,
+    enabled: typeof window !== "undefined",
   });
 }
 
