@@ -399,6 +399,7 @@ export default {
         admin_telegram:  !!getEnv("ADMIN_TELEGRAM_BOT_TOKEN"),
         resend:          !!getEnv("RESEND_API_KEY"),
         dojah:           !!(getEnv("DOJAH_APP_ID") && getEnv("DOJAH_SECRET_KEY")),
+        mono:            !!(getEnv("MONO_SECRET_KEY") && !getEnv("MONO_SECRET_KEY")?.includes("YOUR_")),
         sentry:          !!getEnv("SENTRY_DSN"),
       };
 

@@ -82,6 +82,7 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
           VITE_ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
+          VITE_MONO_PUBLIC_KEY: ${{ secrets.MONO_PUBLIC_KEY }}
           VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           VITE_SENTRY_RELEASE: ${{ github.sha }}
           SENTRY_RELEASE: ${{ github.sha }}
@@ -295,8 +296,8 @@ jobs:
           fi
         continue-on-error: true
 
-      # ── Telegram & Dojah secrets ───────────────────────────────────────────
-      - name: Upload Telegram & Dojah secrets to Cloudflare Workers
+      # ── Telegram, Dojah & Mono secrets ────────────────────────────────────
+      - name: Upload Telegram, Dojah & Mono secrets to Cloudflare Workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -308,6 +309,8 @@ jobs:
           _ADMIN_TELEGRAM_WEBHOOK_SECRET: ${{ secrets.ADMIN_TELEGRAM_WEBHOOK_SECRET }}
           _DOJAH_APP_ID: ${{ secrets.DOJAH_APP_ID }}
           _DOJAH_SECRET_KEY: ${{ secrets.DOJAH_SECRET_KEY }}
+          _MONO_SECRET_KEY: ${{ secrets.MONO_SECRET_KEY }}
+          _MONO_PUBLIC_KEY: ${{ secrets.MONO_PUBLIC_KEY }}
         run: |
           upload_secret() {
             local name="$1"
@@ -327,6 +330,8 @@ jobs:
           upload_secret ADMIN_TELEGRAM_WEBHOOK_SECRET   "$_ADMIN_TELEGRAM_WEBHOOK_SECRET"
           upload_secret DOJAH_APP_ID                    "$_DOJAH_APP_ID"
           upload_secret DOJAH_SECRET_KEY                "$_DOJAH_SECRET_KEY"
+          upload_secret MONO_SECRET_KEY                 "$_MONO_SECRET_KEY"
+          upload_secret MONO_PUBLIC_KEY                 "$_MONO_PUBLIC_KEY"
         continue-on-error: true
 
       - name: Register Telegram Webhooks

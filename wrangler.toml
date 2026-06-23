@@ -25,6 +25,8 @@
 #   RELOADLY_CLIENT_SECRET    — Reloadly dashboard
 #   DOJAH_APP_ID              — Dojah dashboard → Apps → API Keys
 #   DOJAH_SECRET_KEY          — Dojah dashboard → Apps → API Keys
+#   MONO_SECRET_KEY           — Mono dashboard → Apps → API Keys (identity primary + payment fallback)
+#   MONO_PUBLIC_KEY           — Mono dashboard → Apps → API Keys (client-side Connect SDK)
 #   APP_SECRET                — Any strong random string (session signing)
 #   ADMIN_TELEGRAM_BOT_TOKEN  — BotFather
 #   ADMIN_TELEGRAM_BOT_USERNAME — BotFather (without @)
