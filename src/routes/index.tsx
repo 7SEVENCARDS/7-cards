@@ -157,7 +157,7 @@ function App() {
   // ── Derived helpers ───────────────────────────────────────────────────────
   const ngnWallet = wallets.find((w) => w.currency === "NGN");
   const ngnBalance = Number(ngnWallet?.balance ?? 0);
-  const userName = profile?.display_name ?? (profile?.full_name ?? "").split(" ")[0] || "7Trader";
+  const userName = (profile?.display_name ?? (profile?.full_name ?? "").split(" ")[0]) || "7Trader";
   const defaultPayoutAccount = (payoutAccounts as Array<{bank_code:string;account_number:string;account_name:string}>)[0];
   const emailVerified = !!(user as { email_confirmed_at?: string | null }).email_confirmed_at;
 
@@ -1544,7 +1544,7 @@ function ProfileScreen({
 }: {
   profile?: ProfileData | null; xp?: XPData; emailVerified?: boolean; userEmail?: string; userId?: string; onSignOut: () => void; onNavigateKYC: () => void; onNavigatePayout: () => void; onNavigateReferral: () => void; onNavigatePremium: () => void; onNavigateSupport: () => void; onNavigateLeague?: () => void; onNavigateAdmin?: () => void;
 }) {
-  const moniker = profile?.display_name ?? (profile?.full_name ?? "").split(" ")[0] || "7Trader";
+  const moniker = (profile?.display_name ?? (profile?.full_name ?? "").split(" ")[0]) || "7Trader";
   const levelName = (xp?.level ?? 1) >= 15 ? "Boss" : (xp?.level ?? 1) >= 10 ? "Pro" : "Rookie";
   const avatarSeed = userId ?? profile?.id ?? moniker;
   const avatarUrl = `https://api.dicebear.com/9.x/bottts-neutral/svg?seed=${encodeURIComponent(avatarSeed)}&backgroundColor=transparent&radius=24`;
