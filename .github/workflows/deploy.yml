@@ -104,12 +104,13 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       # ── Notify Sentry of successful deploy ────────────────────────────────
-      # Creates a Sentry release tagged with the git SHA, associates commits
-      # (so Sentry can show which files changed and auto-resolve issues fixed
-      # in this deploy), seals the release, and marks it as deployed to
-      # production. Runs only when the CF Workers deploy succeeded.
+      # Creates a Sentry release tagged with the git SHA, associates commits,
+      # seals the release, and marks it as deployed to production.
+      # continue-on-error: Sentry API unavailability (504, unknown repo, etc.)
+      # must never block a successful Cloudflare Workers deploy.
       - name: Create Sentry release & mark deployed
         if: success()
+        continue-on-error: true
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
