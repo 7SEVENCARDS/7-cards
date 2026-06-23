@@ -93,12 +93,15 @@ pattern   = "vendor.7evencards.xyz/*"
 zone_name = "7evencards.xyz"
 
 # ─── Cron Triggers ────────────────────────────────────────────────────────────
-# Fires every 6 hours — invokes the scheduled() export (injected post-build by
-# scripts/patch-cf-scheduled.mjs) which self-calls /api/cron/rate-check so all
-# vendor rate-check logic stays in server.ts behind CRON_SECRET guard.
-# Cron expression: minute hour * * * (0 */6 = top-of-every-6th-hour: 00:00,06:00,12:00,18:00)
+# Both crons invoke the scheduled() export (injected post-build by
+# scripts/patch-cf-scheduled.mjs). The handler checks event.cron to route to
+# the correct /api/cron/* endpoint behind CRON_SECRET guard.
+#
+# "0 */6 * * *"  — every 6 hours → /api/cron/rate-check (vendor rate updates)
+# "0 18 * * 4"   — Thursday 18:00 UTC (= 19:00 WAT = 7pm Nigerian Time)
+#                  → /api/cron/weekly-commission (₦500 to qualifying traders)
 [env.production.triggers]
-crons = ["0 */6 * * *"]
+crons = ["0 */6 * * *", "0 18 * * 4"]
 
 # ─── Workers Rate Limiting (distributed, edge-level) ─────────────────────────
 # The app currently uses per-isolate in-process rate limiting (src/lib/rate-limiter.ts).
