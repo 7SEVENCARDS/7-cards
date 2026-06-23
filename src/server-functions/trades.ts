@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
+import { getEnv } from "../lib/worker-env";
 
 // ─── Input whitelists (server-side) ──────────────────────────────────────────
 const ALLOWED_BRANDS = new Set([
@@ -710,8 +711,8 @@ export const processPayout = createServerFn({ method: "POST" })
       const isConfig = msg.includes("not configured");
 
       if (isConfig) {
-        // Demo mode — only allowed outside production
-        if (process.env.NODE_ENV === "production") {
+        // Demo mode — only allowed when IS_DEMO_MODE=true
+        if (getEnv("IS_DEMO_MODE") !== "true") {
           await db.from("trades").update({
             status: "failed",
             failure_reason: "Payment provider not configured",
