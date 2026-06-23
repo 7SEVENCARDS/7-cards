@@ -5,7 +5,7 @@ on:
 
 jobs:
   seed:
-    name: Create admin account
+    name: Apply migrations + create admin account
     runs-on: ubuntu-latest
 
     steps:
@@ -24,10 +24,13 @@ jobs:
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
-          echo "Running migrations against Supabase database..."
+          echo "Applying migrations to Supabase database..."
           for f in $(ls supabase/migrations/*.sql | grep -v COMBINED | sort); do
-            echo "  → $(basename $f)"
-            psql "$SUPABASE_DB_URL" -f "$f" 2>&1 | grep -vE "^(NOTICE|SET|CREATE|ALTER|INSERT|UPDATE|DROP|GRANT|REVOKE|BEGIN|COMMIT|DO)" || true
+            name=$(basename "$f")
+            echo "  → $name"
+            PGSSLMODE=require psql "$SUPABASE_DB_URL" -f "$f" 2>&1 \
+              | grep -vE "^(NOTICE|SET|CREATE|ALTER|INSERT 0|UPDATE|DROP|GRANT|REVOKE|BEGIN|COMMIT|DO \\$\\$)" \
+              || true
           done
           echo "✓ Migrations complete"
 
@@ -38,4 +41,5 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
-        run: node scripts/seed-admin.mjs
+        run: |
+          PGSSLMODE=require node scripts/seed-admin.mjs
