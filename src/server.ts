@@ -10,6 +10,7 @@ import {
   handleTelegramWebhook,
 } from "./server-functions/webhooks";
 import { handleAdminTelegramWebhook } from "./server-functions/admin-telegram-webhook";
+import { handleMobileApiV1 } from "./server-functions/mobile-api";
 import { allow, clientIp, rlKey } from "./lib/rate-limiter";
 
 // ─── Startup validation — runs once on first Worker invocation ───────────────
@@ -354,6 +355,32 @@ export default {
         );
       }
 
+      // ── Cron: daily reconciliation (every day at 02:00 UTC) ──────────────────
+      // Checks unreconciled trades, stale assignments, wallet discrepancies,
+      // and duplicate settlements. Writes results to reconciliation_runs table.
+      // Trigger: CF Cron "0 2 * * *"  (02:00 UTC daily)
+      if (url.pathname === "/api/cron/reconcile") {
+        const secret   = request.headers.get("x-cron-secret");
+        const expected = getEnv("CRON_SECRET");
+        if (!expected || secret !== expected) {
+          return addSecurityHeaders(
+            new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } }),
+            requestId,
+          );
+        }
+        const { getServerSupabase } = await import("./lib/supabase.server");
+        const { runReconciliation }  = await import("./lib/reconciliation");
+        const db = getServerSupabase();
+        const cronWork = runReconciliation(db)
+          .then(r => console.info("[Cron] Reconciliation complete:", { status: r.status, issues: r.total_issues }))
+          .catch(e => console.error("[Cron] Reconciliation failed:", e instanceof Error ? e.message : e));
+        (ctx as { waitUntil?: (p: Promise<unknown>) => void }).waitUntil?.(cronWork);
+        return addSecurityHeaders(
+          new Response(JSON.stringify({ ok: true, started: true }), { headers: { "Content-Type": "application/json" } }),
+          requestId,
+        );
+      }
+
       // ── Cron: weekly trade commission (every Thursday 18:00 UTC = 7pm WAT) ──
       // Business rule: ₦500 credited to every user who traded ≥$25 (≥₦7,000)
       // in the previous 7 days. Paid once per ISO week; duplicate-safe via DB.
@@ -458,6 +485,30 @@ export default {
         }),
         requestId,
       );
+    }
+
+    // ── Mobile API v1 — REST API for iOS/Android apps (Phase 13) ────────────
+    // Handles /api/v1/* with Bearer token auth (no cookies needed for mobile).
+    if (url.pathname.startsWith("/api/v1/")) {
+      if (!allow(rlKey("mobile_api", ip), 300, 60_000)) {
+        return addSecurityHeaders(tooManyRequests(60), requestId);
+      }
+      try {
+        const mobileResponse = await handleMobileApiV1(request);
+        if (mobileResponse) {
+          return addSecurityHeaders(mobileResponse, requestId);
+        }
+        // null = no matching route in v1 — fall through to SSR
+      } catch (error) {
+        captureServerException(error, { route: "mobile_api_v1" });
+        return addSecurityHeaders(
+          new Response(JSON.stringify({ error: "Internal server error" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          }),
+          requestId,
+        );
+      }
     }
 
     // ── All other routes → TanStack React Start ─────────────────────────────

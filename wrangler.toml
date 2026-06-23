@@ -110,8 +110,9 @@ zone_name = "7evencards.xyz"
 # "0 */6 * * *"  — every 6 hours → /api/cron/rate-check (vendor rate updates)
 # "0 18 * * 4"   — Thursday 18:00 UTC (= 19:00 WAT = 7pm Nigerian Time)
 #                  → /api/cron/weekly-commission (₦500 to qualifying traders)
+# "0 2 * * *"   — daily at 02:00 UTC → /api/cron/reconcile (reconciliation engine)
 [env.production.triggers]
-crons = ["0 */6 * * *", "0 18 * * 4"]
+crons = ["0 */6 * * *", "0 18 * * 4", "0 2 * * *"]
 
 # ─── Workers Rate Limiting (distributed, edge-level) ─────────────────────────
 # The app currently uses per-isolate in-process rate limiting (src/lib/rate-limiter.ts).
