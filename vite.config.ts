@@ -25,6 +25,14 @@ export default defineConfig({
       // stack traces in Sentry will show original TypeScript line numbers.
       sourcemap: "hidden",
     },
+    define: {
+      // Bake the git SHA into the Worker bundle at build time.
+      // Cannot use getEnv("SENTRY_RELEASE") at runtime because SENTRY_RELEASE is a
+      // CI env var injected during `pnpm run build` — it is never a Cloudflare Worker
+      // runtime binding. This define makes it available as import.meta.env.SENTRY_RELEASE
+      // in both the client bundle and the Nitro Worker output.
+      "import.meta.env.SENTRY_RELEASE": JSON.stringify(process.env.SENTRY_RELEASE ?? ""),
+    },
     // pnpm virtual store (.pnpm/) can cause Rollup to lose track of sub-dependencies
     // (e.g. @tanstack/query-core inside @tanstack/react-query) during the Nitro SSR
     // bundling phase. resolve.dedupe forces a single instance and ssr.noExternal ensures

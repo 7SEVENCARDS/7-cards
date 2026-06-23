@@ -26,7 +26,9 @@ export function initSentryServer(): void {
     dsn,
     environment: getEnv("NODE_ENV") === "production" ? "production" : "development",
     // Tag every event with the git SHA so Sentry can correlate issues to deploys.
-    release: getEnv("SENTRY_RELEASE") ?? undefined,
+    // Uses import.meta.env.SENTRY_RELEASE (baked in at build time via vite.define)
+    // rather than getEnv() — SENTRY_RELEASE is a CI build var, not a Worker runtime secret.
+    release: (import.meta.env.SENTRY_RELEASE as string | undefined) || undefined,
     // 1% performance tracing — captures latency for SSR renders and server spans
     // without adding meaningful overhead at 7evencards traffic volumes.
     tracesSampleRate: 0.01,
