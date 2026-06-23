@@ -102,6 +102,35 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      # ── Notify Sentry of successful deploy ────────────────────────────────
+      # Creates a Sentry release tagged with the git SHA, associates commits
+      # (so Sentry can show which files changed and auto-resolve issues fixed
+      # in this deploy), seals the release, and marks it as deployed to
+      # production. Runs only when the CF Workers deploy succeeded.
+      - name: Create Sentry release & mark deployed
+        if: success()
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          # 7even org is EU-hosted — CLI must target de.sentry.io not sentry.io
+          SENTRY_URL: https://de.sentry.io/
+        run: |
+          RELEASE="${{ github.sha }}"
+          # Create the release (idempotent — safe if re-run or retried)
+          npx --yes @sentry/cli releases new "$RELEASE"
+          # Link the commit so Sentry knows which files changed in this release.
+          # Using an explicit ref avoids the need for full git history (fetch-depth: 0).
+          npx @sentry/cli releases set-commits "$RELEASE" \
+            --commit "7SEVENCARDS/7-cards@$RELEASE"
+          # Seal the release — no more source maps or commits can be appended.
+          npx @sentry/cli releases finalize "$RELEASE"
+          # Mark it as deployed to production. This is what appears in the
+          # Sentry Releases tab and triggers auto-resolution of fixed issues.
+          npx @sentry/cli releases deploys "$RELEASE" new \
+            --env production \
+            --name "CF Workers $RELEASE"
+
       # ── Auto-generate APP_SECRET + CRON_SECRET on first deploy ──────────────
       - name: Auto-generate APP_SECRET and CRON_SECRET (if missing)
         env:
