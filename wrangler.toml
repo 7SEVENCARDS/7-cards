@@ -33,6 +33,7 @@
 #   TELEGRAM_BOT_TOKEN        — BotFather (vendor bot)
 #   TELEGRAM_WEBHOOK_SECRET   — Random string for vendor webhook auth
 #   CRON_SECRET               — Random string for cron auth
+#   GEMINI_API_KEY            — Google AI Studio → API Keys (for OCR gift card scanning)
 #   RESEND_API_KEY            — Resend dashboard → API Keys (for admin trade emails)
 #   ADMIN_EMAIL               — Admin email address to receive trade notifications
 #   ONESIGNAL_ANDROID_CHANNEL_ID — OneSignal → Android channel
