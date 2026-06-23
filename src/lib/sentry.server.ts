@@ -1,10 +1,10 @@
-// ─── Server-side Sentry (Cloudflare Workers) ─────────────────────────────────
+// Server-side Sentry (Cloudflare Workers)
 // Lazily initialised on the first Worker request using SENTRY_DSN from the
 // runtime environment via getEnv(). Uses @sentry/cloudflare which is designed
 // for the Workers + nodejs_compat runtime.
 //
 // Design rules:
-//  - NEVER throws — Sentry must never break the application.
+//  - NEVER throws -- Sentry must never break the application.
 //  - No-op when SENTRY_DSN is absent (dev / misconfigured envs).
 //  - Idempotent: init runs once per isolate lifetime.
 
@@ -14,7 +14,7 @@ import { getEnv } from "./worker-env";
 let initialized = false;
 
 /**
- * Call once per request (or on first request). Safe to call repeatedly —
+ * Call once per request (or on first request). Safe to call repeatedly --
  * subsequent calls are no-ops after the first successful init.
  */
 export function initSentryServer(): void {
@@ -25,11 +25,10 @@ export function initSentryServer(): void {
   Sentry.init({
     dsn,
     environment: getEnv("NODE_ENV") === "production" ? "production" : "development",
-    // Tag every event with the git SHA so Sentry can correlate issues to deploys.
-    // Uses import.meta.env.SENTRY_RELEASE (baked in at build time via vite.define)
-    // rather than getEnv() — SENTRY_RELEASE is a CI build var, not a Worker runtime secret.
-    release: (import.meta.env.SENTRY_RELEASE as string | undefined) || undefined,
-    // 1% performance tracing — captures latency for SSR renders and server spans
+    // __SENTRY_RELEASE__ is a Rollup define baked in at build time (see vite.config.ts).
+    // Cannot use getEnv() -- SENTRY_RELEASE is a CI build var, not a Worker runtime secret.
+    release: __SENTRY_RELEASE__ || undefined,
+    // 1% performance tracing -- captures latency for SSR renders and server spans
     // without adding meaningful overhead at 7evencards traffic volumes.
     tracesSampleRate: 0.01,
     // Suppress noisy operational errors that don't need investigation.
@@ -73,7 +72,7 @@ export async function startServerSpan<T>(
   if (!getEnv("SENTRY_DSN")) return fn();
   try {
     return await Sentry.startSpan(spanContext, fn);
-  } catch (err) {
+  } catch (_err) {
     // If span wrapping itself fails, still execute the function.
     return fn();
   }

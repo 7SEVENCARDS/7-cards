@@ -444,6 +444,10 @@ export default {
         new Response(JSON.stringify({
           ok: allOk,
           ts: Date.now(),
+          // Git SHA baked in at build time via vite.config.ts __SENTRY_RELEASE__ define.
+          // Empty string in local dev (no SENTRY_RELEASE set during local builds).
+          release: __SENTRY_RELEASE__ || null,
+          gitSha:  __SENTRY_RELEASE__ || null,
           critical,
           optional,
           db: { ok: dbOk, latencyMs: dbLatencyMs, error: dbError },

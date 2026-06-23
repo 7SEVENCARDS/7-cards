@@ -1,8 +1,8 @@
-// @lovable.dev/vite-tanstack-config already includes the following — do NOT add them manually
+// @lovable.dev/vite-tanstack-config already includes the following -- do NOT add them manually
 // or the app will break with duplicate plugins:
-//   - tanstackStart, viteReact, tailwindcss, tsConfigPaths, nitro (build-only using cloudflare as a default target),
-//     componentTagger (dev-only), VITE_* env injection, @ path alias, React/TanStack dedupe,
-//     error logger plugins, and sandbox detection (port/host/strictPort).
+//   - tanstackStart, viteReact, tailwindcss, tsConfigPaths, nitro (build-only using cloudflare
+//     as a default target), componentTagger (dev-only), VITE_* env injection, @ path alias,
+//     React/TanStack dedupe, error logger plugins, and sandbox detection.
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
@@ -14,24 +14,22 @@ export default defineConfig({
   nitro: true,
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
-    // nitro/vite builds from this
     server: { entry: "server" },
   },
   vite: {
     build: {
       // "hidden" source maps: .map files are generated but the sourceMappingURL comment is
       // omitted from the output bundle, so maps are never served to end-users.
-      // @sentry/vite-plugin uploads them to Sentry and deletes the files afterwards —
-      // stack traces in Sentry will show original TypeScript line numbers.
+      // @sentry/vite-plugin uploads them to Sentry and deletes the files afterwards.
       sourcemap: "hidden",
     },
     define: {
-      // Bake the git SHA into the Worker bundle at build time.
-      // Cannot use getEnv("SENTRY_RELEASE") at runtime because SENTRY_RELEASE is a
-      // CI env var injected during `pnpm run build` — it is never a Cloudflare Worker
-      // runtime binding. This define makes it available as import.meta.env.SENTRY_RELEASE
-      // in both the client bundle and the Nitro Worker output.
-      "import.meta.env.SENTRY_RELEASE": JSON.stringify(process.env.SENTRY_RELEASE ?? ""),
+      // __SENTRY_RELEASE__ is a plain global constant replaced by Rollup at build time.
+      // This is the correct Vite/Rollup pattern -- do NOT use "import.meta.env.FOO" as a
+      // define key; Vite owns that namespace and will throw during the Nitro SSR build.
+      // The value is the git SHA injected by CI as SENTRY_RELEASE=github.sha.
+      // Declaration: src/sentry-env.d.ts   Usage: src/lib/sentry.server.ts
+      __SENTRY_RELEASE__: JSON.stringify(process.env.SENTRY_RELEASE ?? ""),
     },
     // pnpm virtual store (.pnpm/) can cause Rollup to lose track of sub-dependencies
     // (e.g. @tanstack/query-core inside @tanstack/react-query) during the Nitro SSR
@@ -58,10 +56,9 @@ export default defineConfig({
       ],
     },
     plugins: [
-      // ── Sentry source map upload ─────────────────────────────────────────────
-      // Only active when SENTRY_AUTH_TOKEN is present (CI / production builds).
+      // Sentry source map upload -- runs only when SENTRY_AUTH_TOKEN is present (CI builds).
       // Uploads .map files to Sentry (org: 7even, project: node-cloudflare-workers),
-      // tags the release with the git SHA for issue–deploy correlation, then removes
+      // tags the release with the git SHA for issue-deploy correlation, then removes
       // every .map file so no source maps are ever deployed to the public CDN.
       ...(process.env.SENTRY_AUTH_TOKEN
         ? [
@@ -75,7 +72,7 @@ export default defineConfig({
               telemetry: false,
               sourcemaps: {
                 assets: ["dist/**/*.map", ".output/**/*.map"],
-                // Delete .map files after upload — they must not reach the Worker bundle.
+                // Delete .map files after upload -- must not reach the Worker bundle.
                 filesToDeleteAfterUpload: ["dist/**/*.map", ".output/**/*.map"],
               },
             }),
