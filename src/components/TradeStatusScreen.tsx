@@ -92,24 +92,6 @@ function useCountdown(targetMs: number) {
   return remaining > 0 ? `${m}:${s.toString().padStart(2, "0")}` : null;
 }
 
-function DEMO_TRADE(tradeId: string): TradeDetail {
-  return {
-    id: tradeId,
-    type: "gift_card",
-    brand: "Apple",
-    region: "USA",
-    amount_usd: 50,
-    amount_ngn: 82500,
-    exchange_rate: 1650,
-    status: "processing",
-    failure_reason: null,
-    xp_earned: 50,
-    settled_at: null,
-    created_at: new Date(Date.now() - 120_000).toISOString(),
-    squadco_transaction_ref: null,
-    reloadly_transaction_id: "RLD-DEMO",
-  };
-}
 
 export function TradeStatusScreen({ tradeId, userId, onBack, payoutBankCode, payoutAccountNumber, payoutAccountName }: Props) {
   const [trade, setTrade] = useState<TradeDetail | null>(null);
@@ -134,7 +116,6 @@ export function TradeStatusScreen({ tradeId, userId, onBack, payoutBankCode, pay
       }
     } catch {
       setPollError(true);
-      setTrade(DEMO_TRADE(tradeId));
       setLastPoll(new Date());
     } finally {
       setLoading(false);
