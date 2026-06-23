@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { DEFAULT_NGN_RATE } from "./constants";
 
 // ─── ISO Week Key ─────────────────────────────────────────────────────────────
 // Returns 'YYYY-Www' e.g. '2026-W26'. Used to de-duplicate weekly payouts.
@@ -365,7 +366,7 @@ export async function checkVerificationAllowance(
     .gte("settled_at", weekStart.toISOString());
 
   const weeklyNgn = (weeklyTrades ?? []).reduce((s, t) => s + Number(t.amount_ngn ?? 0), 0);
-  const WEEKLY_THRESHOLD_NGN = 25 * 1485;
+  const WEEKLY_THRESHOLD_NGN = 25 * DEFAULT_NGN_RATE;
   if (weeklyNgn >= WEEKLY_THRESHOLD_NGN) {
     return { allowed: true, unlimited: true, reason: "weekly_volume", weeklyNgn };
   }
@@ -382,7 +383,7 @@ export async function checkVerificationAllowance(
     .gte("settled_at", monthStart.toISOString());
 
   const monthlyNgn = (monthlyTrades ?? []).reduce((s, t) => s + Number(t.amount_ngn ?? 0), 0);
-  const MONTHLY_THRESHOLD_NGN = 50 * 1485;
+  const MONTHLY_THRESHOLD_NGN = 50 * DEFAULT_NGN_RATE;
   if (monthlyNgn >= MONTHLY_THRESHOLD_NGN) {
     return { allowed: true, unlimited: true, reason: "monthly_volume", monthlyNgn };
   }
