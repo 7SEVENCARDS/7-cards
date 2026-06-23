@@ -201,32 +201,18 @@ export function TradeHistoryScreen({ userId, onBack, onViewStatus }: Props) {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [showFilterSheet, setShowFilterSheet] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   const load = useCallback(async (pg: number, status: string, type: string, append = false) => {
     try {
+      setLoadError(false);
       const res = await getTradeHistory({
         data: { userId, page: pg, pageSize: PAGE_SIZE, status, type },
       });
       setTotal(res.total);
       setTrades((prev) => append ? [...prev, ...res.trades] : res.trades);
     } catch {
-      // demo data
-      const demo: Trade[] = Array.from({ length: 5 }, (_, i) => ({
-        id: `demo-trade-${i + 1}-abcd`,
-        type: i % 2 === 0 ? "gift_card" : "crypto",
-        brand: ["Apple", "Amazon", "Google Play", "Steam", "iTunes"][i],
-        region: "USA",
-        amount_usd: [25, 50, 100, 200, 10][i],
-        amount_ngn: [40000, 82500, 164000, 325000, 16000][i],
-        exchange_rate: 1600,
-        status: ["paid", "paid", "processing", "failed", "paid"][i],
-        failure_reason: i === 3 ? "Card already redeemed" : null,
-        xp_earned: [50, 100, 0, 0, 20][i],
-        settled_at: i === 3 ? null : new Date(Date.now() - i * 86400000 * 2).toISOString(),
-        created_at: new Date(Date.now() - i * 86400000 * 2).toISOString(),
-      }));
-      setTrades(append ? (prev) => [...prev, ...demo] : demo);
-      setTotal(5);
+      setLoadError(true);
     }
     setLoading(false);
     setLoadingMore(false);
@@ -306,6 +292,24 @@ export function TradeHistoryScreen({ userId, onBack, onViewStatus }: Props) {
           <div className="flex flex-col items-center py-16 gap-3">
             <Loader2 className="size-7 animate-spin text-gold" />
             <p className="text-sm text-muted-foreground">Loading trades…</p>
+          </div>
+        ) : loadError ? (
+          <div className="flex flex-col items-center py-14 gap-4 text-center">
+            <div className="size-20 rounded-3xl bg-secondary grid place-items-center">
+              <AlertCircle className="size-9 text-destructive" />
+            </div>
+            <div>
+              <p className="text-base font-extrabold">Couldn't load trades</p>
+              <p className="text-sm text-muted-foreground mt-1 max-w-[220px] mx-auto">
+                Check your connection and try again
+              </p>
+            </div>
+            <button
+              onClick={() => { setLoading(true); load(0, statusFilter, typeFilter); }}
+              className="flex items-center gap-2 bg-secondary border border-border rounded-2xl px-5 py-3 text-sm font-bold"
+            >
+              <RefreshCw className="size-4" /> Retry
+            </button>
           </div>
         ) : trades.length === 0 ? (
           statusFilter !== "all" || typeFilter !== "all" ? (
