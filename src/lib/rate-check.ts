@@ -330,23 +330,28 @@ async function notifyAdminRateChange(
     }
   }
 
-  // Telegram alert to ADMIN_TELEGRAM_CHAT_ID if configured
+  // Telegram alert via admin bot to ADMIN_TELEGRAM_CHAT_ID if configured
+  // NOTE: must use sendAdminBotMessage (ADMIN_TELEGRAM_BOT_TOKEN), NOT
+  // sendTelegramMessage (TELEGRAM_BOT_TOKEN), because ADMIN_TELEGRAM_CHAT_ID
+  // is an admin-only group/channel that only the admin bot is a member of.
   const adminChatId = getEnv("ADMIN_TELEGRAM_CHAT_ID");
   if (adminChatId) {
-    const { sendTelegramMessage } = await import("./telegram");
-    await sendTelegramMessage(
-      adminChatId,
-      [
-        `🔔 <b>Vendor Rate Change — 7SEVEN CARDS</b>`,
-        ``,
-        `<b>Vendor:</b> ${vendorName}`,
-        `<b>Rate Change:</b> ${changeStr} ${direction}`,
-        `<b>Method:</b> Telegram`,
-        `<b>Ref:</b> <code>${historyId?.slice(0,8) ?? "N/A"}</code>`,
-        ``,
-        `<i>Review and confirm in the admin panel.</i>`,
-      ].join("\n"),
-      "HTML"
-    );
+    const { isAdminBotConfigured, sendAdminBotMessage } = await import("./telegram");
+    if (isAdminBotConfigured()) {
+      await sendAdminBotMessage(
+        adminChatId,
+        [
+          `🔔 <b>Vendor Rate Change — 7SEVEN CARDS</b>`,
+          ``,
+          `<b>Vendor:</b> ${vendorName}`,
+          `<b>Rate Change:</b> ${changeStr} ${direction}`,
+          `<b>Method:</b> Telegram`,
+          `<b>Ref:</b> <code>${historyId?.slice(0,8) ?? "N/A"}</code>`,
+          ``,
+          `<i>Review and confirm in the admin panel.</i>`,
+        ].join("\n"),
+        "HTML"
+      );
+    }
   }
 }
