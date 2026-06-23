@@ -146,6 +146,7 @@ jobs:
           _SUPPORT_WHATSAPP: ${{ secrets.SUPPORT_WHATSAPP }}
           _RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           _ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+          _GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           upload_secret() {
             local name="$1"
@@ -174,6 +175,7 @@ jobs:
           upload_secret SUPPORT_WHATSAPP           "$_SUPPORT_WHATSAPP"
           upload_secret RESEND_API_KEY             "$_RESEND_API_KEY"
           upload_secret ADMIN_EMAIL                "$_ADMIN_EMAIL"
+          upload_secret GEMINI_API_KEY             "$_GEMINI_API_KEY"
 
       # ── Setup Resend email domain for custom branding ─────────────────────
       - name: Setup Resend email domain (7evencards.xyz)
