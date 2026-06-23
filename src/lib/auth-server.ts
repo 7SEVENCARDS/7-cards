@@ -75,25 +75,50 @@ export async function getOptionalUser(): Promise<string | null> {
 }
 
 // ─── requireAdmin ─────────────────────────────────────────────────────────────
-// Validates session AND checks profiles.role === 'admin'.
+// Validates session AND checks that the caller has admin privileges.
+//
+// Admin is confirmed via two sources (checked in order):
+//   1. profiles.role = 'admin'   — set by DB migrations + seed workflow
+//   2. app_metadata.role = 'admin' — set by seed workflow pre-migrations
+//      (fallback so admin works even before DB schema is fully applied)
+//
 // Throws AuthError (401) if not authenticated.
 // Throws ForbiddenError (403) if authenticated but not admin.
 
 export async function requireAdmin(): Promise<string> {
-  const userId = await requireUser();
-  const db = getServerSupabase();
+  const request = getRequest();
+  const cookieHeader = request?.headers.get("cookie") ?? "";
+  const accessToken = extractAccessToken(cookieHeader);
 
-  const { data } = await db
+  if (!accessToken) throw new AuthError();
+
+  const db = getServerSupabase();
+  const {
+    data: { user },
+    error,
+  } = await db.auth.getUser(accessToken);
+
+  if (error || !user) throw new AuthError();
+
+  const userId = user.id;
+
+  // Primary: profiles.role (requires DB migrations to be applied)
+  const { data: profile } = await db
     .from("profiles")
     .select("role")
     .eq("id", userId)
     .single();
 
-  if (data?.role !== "admin") {
-    throw new ForbiddenError("Admin access required");
+  if (profile?.role === "admin") {
+    return userId;
   }
 
-  return userId;
+  // Fallback: app_metadata.role (set by seed script; works pre-migrations)
+  if ((user.app_metadata as Record<string, unknown>)?.role === "admin") {
+    return userId;
+  }
+
+  throw new ForbiddenError("Admin access required");
 }
 
 // ─── logAdminAction ───────────────────────────────────────────────────────────
