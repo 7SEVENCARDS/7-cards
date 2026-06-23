@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireAdmin } from "../lib/auth-server";
 import { getCryptoRates, COMPANY_SPREAD } from "../lib/busha";
+import { DEFAULT_NGN_RATE } from "../lib/constants";
 
 // ─── Region config — forex multipliers relative to USD ───────────────────────
 // US cards are always in USD (multiplier 1.0). UK/EU/CA cards are converted
@@ -100,7 +101,7 @@ export const refreshExchangeRates = createServerFn({ method: "POST" }).handler(a
       const ratePerDollar =
         product.recipientCurrencyCode === "NGN" && product.minRecipientDenomination > 0
           ? Math.round(product.minRecipientDenomination / product.senderUnitPrice)
-          : 1485;
+          : DEFAULT_NGN_RATE;
 
       const { error } = await db.from("exchange_rates").upsert(
         { brand, region: "US", rate_per_dollar: ratePerDollar, source: "reloadly", updated_at: new Date().toISOString() },
