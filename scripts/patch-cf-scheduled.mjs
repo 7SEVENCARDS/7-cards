@@ -89,8 +89,17 @@ export default {
     // Self-fetch: Workers can call their own routes via the public URL.
     // The CRON_SECRET header satisfies the same guard as the external-curl path,
     // so the logic truly stays in one place.
+    // Route to the correct endpoint based on which cron expression fired.
+    // "0 18 * * 4" = Thursday 19:00 WAT (7pm Nigerian Time) — weekly commission
+    // everything else = vendor rate-check (every 6 hours)
+    const endpoint = event.cron === "0 18 * * 4"
+      ? "/api/cron/weekly-commission"
+      : "/api/cron/rate-check";
+
+    console.info("[Scheduled] cron=" + event.cron + " → " + endpoint);
+
     ctx.waitUntil(
-      fetch(appUrl + "/api/cron/rate-check", {
+      fetch(appUrl + endpoint, {
         method:  "POST",
         headers: {
           "x-cron-secret":     cronSecret,
@@ -98,8 +107,8 @@ export default {
           "Content-Type":      "application/json",
         },
       })
-        .then(r => console.info("[Scheduled] Rate-check HTTP", r.status))
-        .catch(e => console.error("[Scheduled] Rate-check error:", e instanceof Error ? e.message : String(e)))
+        .then(r => console.info("[Scheduled] " + endpoint + " HTTP", r.status))
+        .catch(e => console.error("[Scheduled] " + endpoint + " error:", e instanceof Error ? e.message : String(e)))
     );
   },
 };
