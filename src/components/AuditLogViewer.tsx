@@ -27,8 +27,13 @@ import {
   Loader2,
   Link2,
   Eye,
+  History,
+  UserCog,
+  ArrowRight,
+  Crown,
+  ChevronLeft,
 } from "lucide-react";
-import { queryAuditLog, queryDisputes } from "../server-functions/admin";
+import { queryAuditLog, queryDisputes, queryAdminAuditLog } from "../server-functions/admin";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type AuditEntry = {
@@ -583,8 +588,312 @@ function DisputesTab() {
   );
 }
 
+// ─── Admin Actions Tab ────────────────────────────────────────────────────────
+type AdminLogEntry = {
+  id: string;
+  admin_id: string;
+  action: string;
+  target_id: string | null;
+  meta: Record<string, unknown> | null;
+  created_at: string;
+};
+
+const ADMIN_ACTION_COLORS: Record<string, string> = {
+  set_role:             "text-purple-400 bg-purple-500/10",
+  kyc_approve:          "text-green-400 bg-green-500/10",
+  kyc_reject:           "text-red-400 bg-red-500/10",
+  manual_trade_approve: "text-emerald-400 bg-emerald-500/10",
+  manual_trade_reject:  "text-rose-400 bg-rose-500/10",
+  credit_wallet:        "text-blue-400 bg-blue-500/10",
+  rate_update:          "text-yellow-400 bg-yellow-500/10",
+  bulk_rate_update:     "text-amber-400 bg-amber-500/10",
+  escrow_process:       "text-cyan-400 bg-cyan-500/10",
+};
+
+const ROLE_COLORS: Record<string, string> = {
+  user:        "text-zinc-400",
+  support:     "text-blue-400",
+  vendor:      "text-green-400",
+  admin:       "text-yellow-400",
+  super_admin: "text-purple-400",
+};
+
+const ALL_ACTIONS = [
+  "set_role", "kyc_approve", "kyc_reject",
+  "manual_trade_approve", "manual_trade_reject",
+  "credit_wallet", "rate_update", "bulk_rate_update", "escrow_process",
+];
+
+const DATE_RANGES: { label: string; days: number | null }[] = [
+  { label: "Last 7 days",  days: 7  },
+  { label: "Last 30 days", days: 30 },
+  { label: "Last 90 days", days: 90 },
+  { label: "All time",     days: null },
+];
+
+function AdminLogRow({ entry }: { entry: AdminLogEntry }) {
+  const [expanded, setExpanded] = useState(false);
+  const color = ADMIN_ACTION_COLORS[entry.action] ?? "text-muted-foreground bg-secondary";
+  const meta  = entry.meta ?? {};
+
+  return (
+    <div className="border border-border/50 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setExpanded(e => !e)}
+        className="w-full flex items-start gap-3 px-3 py-2.5 hover:bg-secondary/40 transition text-left"
+      >
+        {/* Timestamp */}
+        <div className="shrink-0 w-[140px]">
+          <p className="text-[10px] font-mono text-muted-foreground leading-tight">
+            {new Date(entry.created_at).toLocaleString("en-NG", { hour12: false })}
+          </p>
+        </div>
+
+        {/* Action badge */}
+        <div className="flex-1 min-w-0 space-y-0.5">
+          <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full ${color}`}>
+            {entry.action}
+          </span>
+
+          {/* set_role inline preview */}
+          {entry.action === "set_role" && meta.prev_role && meta.new_role && (
+            <div className="flex items-center gap-1 text-[10px]">
+              {meta.full_name && (
+                <span className="text-muted-foreground truncate max-w-[80px]">{String(meta.full_name)}</span>
+              )}
+              <span className={ROLE_COLORS[String(meta.prev_role)] ?? "text-zinc-400"}>
+                {String(meta.prev_role)}
+              </span>
+              <ArrowRight className="size-2.5 text-muted-foreground" />
+              <span className={`font-bold ${ROLE_COLORS[String(meta.new_role)] ?? "text-zinc-400"}`}>
+                {String(meta.new_role)}
+                {meta.new_role === "super_admin" && <Crown className="inline size-2.5 ml-0.5" />}
+              </span>
+            </div>
+          )}
+
+          {/* Other meta preview */}
+          {entry.action !== "set_role" && Object.keys(meta).length > 0 && (
+            <p className="text-[10px] text-muted-foreground truncate">
+              {Object.entries(meta).slice(0, 2).map(([k, v]) => `${k}: ${v}`).join(" · ")}
+            </p>
+          )}
+        </div>
+
+        {/* Target ID short */}
+        {entry.target_id && (
+          <div className="shrink-0 hidden sm:block">
+            <p className="text-[10px] font-mono text-muted-foreground">
+              {entry.target_id.length > 12
+                ? `${entry.target_id.slice(0, 8)}…${entry.target_id.slice(-4)}`
+                : entry.target_id}
+            </p>
+          </div>
+        )}
+
+        <div className="shrink-0">
+          {expanded ? <ChevronUp className="size-4 text-muted-foreground" /> : <ChevronDown className="size-4 text-muted-foreground" />}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-border/50 px-3 py-3 bg-secondary/20 space-y-2">
+          <div className="grid grid-cols-2 gap-2 text-[10px]">
+            <div>
+              <p className="font-bold text-muted-foreground">Admin ID</p>
+              <p className="font-mono text-foreground break-all">{entry.admin_id}</p>
+            </div>
+            {entry.target_id && (
+              <div>
+                <p className="font-bold text-muted-foreground">Target ID</p>
+                <p className="font-mono text-foreground break-all">{entry.target_id}</p>
+              </div>
+            )}
+          </div>
+          {Object.keys(meta).length > 0 && (
+            <div>
+              <p className="text-[10px] font-bold text-muted-foreground mb-1">META</p>
+              <pre className="text-[9px] font-mono text-muted-foreground bg-secondary rounded-lg px-2 py-1.5 overflow-x-auto whitespace-pre-wrap break-all">
+                {JSON.stringify(meta, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminActionsTab() {
+  const [action,   setAction]   = useState("all");
+  const [adminId,  setAdminId]  = useState("");
+  const [targetId, setTargetId] = useState("");
+  const [range,    setRange]    = useState<number | null>(7);
+  const [entries,  setEntries]  = useState<AdminLogEntry[] | null>(null);
+  const [total,    setTotal]    = useState(0);
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+  const [page,     setPage]     = useState(1);
+  const LIMIT = 50;
+
+  const search = useCallback(async (p = 1) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const since = range != null
+        ? new Date(Date.now() - range * 86_400_000).toISOString()
+        : undefined;
+      const res = await queryAdminAuditLog({
+        data: {
+          action:   action   !== "all" ? action   : undefined,
+          adminId:  adminId.trim()  || undefined,
+          targetId: targetId.trim() || undefined,
+          since,
+          limit:  LIMIT,
+          offset: (p - 1) * LIMIT,
+        },
+      });
+      setEntries(res.entries as AdminLogEntry[]);
+      setTotal(res.total);
+      setPage(p);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Query failed");
+    } finally {
+      setLoading(false);
+    }
+  }, [action, adminId, targetId, range]);
+
+  const totalPages = Math.ceil(total / LIMIT);
+
+  return (
+    <div className="space-y-4">
+      {/* Filter controls */}
+      <div className="space-y-2">
+        {/* Action + date range row */}
+        <div className="flex gap-2">
+          <select
+            value={action}
+            onChange={e => setAction(e.target.value)}
+            className="flex-1 px-3 py-2 rounded-xl bg-card border border-white/5 text-xs text-foreground focus:outline-none focus:border-cyan/40"
+          >
+            <option value="all">All actions</option>
+            {ALL_ACTIONS.map(a => (
+              <option key={a} value={a}>{a}</option>
+            ))}
+          </select>
+          <select
+            value={range ?? ""}
+            onChange={e => setRange(e.target.value ? Number(e.target.value) : null)}
+            className="px-3 py-2 rounded-xl bg-card border border-white/5 text-xs text-foreground focus:outline-none focus:border-cyan/40"
+          >
+            {DATE_RANGES.map(r => (
+              <option key={r.label} value={r.days ?? ""}>{r.label}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Admin ID + target ID row */}
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Admin ID (UUID)…"
+              value={adminId}
+              onChange={e => setAdminId(e.target.value)}
+              className="w-full pl-7 pr-3 py-2 rounded-xl bg-card border border-white/5 text-xs placeholder:text-muted-foreground focus:outline-none focus:border-cyan/40"
+            />
+          </div>
+          <div className="relative flex-1">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Target ID (UUID)…"
+              value={targetId}
+              onChange={e => setTargetId(e.target.value)}
+              className="w-full pl-7 pr-3 py-2 rounded-xl bg-card border border-white/5 text-xs placeholder:text-muted-foreground focus:outline-none focus:border-cyan/40"
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={() => search(1)}
+          disabled={loading}
+          className="w-full flex items-center justify-center gap-2 py-2 rounded-xl bg-cyan text-black text-xs font-bold disabled:opacity-50"
+        >
+          {loading ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
+          Search Admin Log
+        </button>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="flex items-center gap-2 rounded-xl bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-300">
+          <AlertTriangle className="size-3.5 shrink-0" /> {error}
+        </div>
+      )}
+
+      {/* Results */}
+      {entries === null && !loading && (
+        <div className="flex flex-col items-center justify-center py-12 gap-2 text-muted-foreground">
+          <History className="size-8 opacity-30" />
+          <p className="text-xs">Select filters and click <b>Search Admin Log</b></p>
+        </div>
+      )}
+
+      {loading && (
+        <div className="flex justify-center py-10">
+          <Loader2 className="size-6 animate-spin text-cyan" />
+        </div>
+      )}
+
+      {entries !== null && !loading && (
+        <>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-muted-foreground">{total} entries found</p>
+            <button onClick={() => search(page)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+              <RefreshCw className="size-3" /> Refresh
+            </button>
+          </div>
+
+          {entries.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-2 text-muted-foreground">
+              <CheckCircle2 className="size-8 opacity-30" />
+              <p className="text-xs">No entries match this filter</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {entries.map(e => <AdminLogRow key={e.id} entry={e} />)}
+            </div>
+          )}
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between pt-1">
+              <button
+                onClick={() => search(page - 1)}
+                disabled={page <= 1}
+                className="flex items-center gap-1 text-xs text-muted-foreground disabled:opacity-30"
+              >
+                <ChevronLeft className="size-3.5" /> Prev
+              </button>
+              <span className="text-xs text-muted-foreground">Page {page} of {totalPages}</span>
+              <button
+                onClick={() => search(page + 1)}
+                disabled={page >= totalPages}
+                className="flex items-center gap-1 text-xs text-muted-foreground disabled:opacity-30"
+              >
+                Next <ChevronDown className="size-3.5 rotate-[-90deg]" />
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Main AuditLogViewer Component ───────────────────────────────────────────
-type ViewerTab = "log" | "disputes";
+type ViewerTab = "log" | "disputes" | "admin_actions";
 
 export function AuditLogViewer() {
   const [viewTab, setViewTab] = useState<ViewerTab>("log");
@@ -610,7 +919,15 @@ export function AuditLogViewer() {
             viewTab === "log" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
           }`}
         >
-          <Link2 className="size-3.5" /> Audit Log
+          <Link2 className="size-3.5" /> Trade Log
+        </button>
+        <button
+          onClick={() => setViewTab("admin_actions")}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-bold transition ${
+            viewTab === "admin_actions" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
+          }`}
+        >
+          <UserCog className="size-3.5" /> Admin Actions
         </button>
         <button
           onClick={() => setViewTab("disputes")}
@@ -622,8 +939,9 @@ export function AuditLogViewer() {
         </button>
       </div>
 
-      {viewTab === "log"      && <AuditLogTab />}
-      {viewTab === "disputes" && <DisputesTab />}
+      {viewTab === "log"           && <AuditLogTab />}
+      {viewTab === "admin_actions" && <AdminActionsTab />}
+      {viewTab === "disputes"      && <DisputesTab />}
     </div>
   );
 }

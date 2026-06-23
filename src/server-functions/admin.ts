@@ -838,3 +838,41 @@ export const adminSetRole = createServerFn({ method: "POST" })
 
     return { success: true, prevRole: existing.role, newRole: data.newRole };
   });
+
+// ─── Admin Audit Log Query ────────────────────────────────────────────────────
+// Queries admin_audit_log (admin write actions). Distinct from trade_audit_log
+// (vendor/trade events). Supports filter by action type, admin, target, date.
+
+export const queryAdminAuditLog = createServerFn({ method: "GET" })
+  .validator((d: {
+    action?:   string;
+    adminId?:  string;
+    targetId?: string;
+    since?:    string;
+    limit?:    number;
+    offset?:   number;
+  }) => d)
+  .handler(async ({ data }) => {
+    const { requireAdmin } = await import("../lib/auth-server");
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    let q = db
+      .from("admin_audit_log")
+      .select("id, admin_id, action, target_id, meta, created_at", { count: "exact" });
+
+    if (data.action  && data.action  !== "all") q = (q as ReturnType<typeof q.eq>).eq("action",   data.action);
+    if (data.adminId && data.adminId !== "")    q = (q as ReturnType<typeof q.eq>).eq("admin_id", data.adminId);
+    if (data.targetId && data.targetId !== "")  q = (q as ReturnType<typeof q.eq>).eq("target_id", data.targetId);
+    if (data.since)                              q = (q as ReturnType<typeof q.gte>).gte("created_at", data.since);
+
+    const limit  = Math.min(data.limit ?? 50, 200);
+    const offset = data.offset ?? 0;
+
+    const { data: rows, error, count } = await (q as ReturnType<typeof q.order>)
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (error) throw new Error(error.message);
+    return { entries: rows ?? [], total: count ?? 0 };
+  });
