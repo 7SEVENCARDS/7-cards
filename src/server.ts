@@ -274,35 +274,51 @@ export default {
         return addSecurityHeaders(await handleAdminTelegramWebhook(request), requestId);
       }
 
-      // ── Cron: vendor rate-check (every 6 hours via external scheduler) ──────
+      // ── Cron: vendor rate-check (every 6 hours via CF Cron Trigger) ─────────
       // Trigger: curl -X POST https://7evencards.xyz/api/cron/rate-check \
       //            -H "x-cron-secret: $CRON_SECRET"
-      // Cloudflare Workers scheduled handler can hit this instead of its own
-      // scheduled() export so the logic stays in one place.
       if (url.pathname === "/api/cron/rate-check") {
-        const secret = request.headers.get("x-cron-secret");
+        const secret   = request.headers.get("x-cron-secret");
         const expected = getEnv("CRON_SECRET");
         if (!expected || secret !== expected) {
           return addSecurityHeaders(
-            new Response(JSON.stringify({ error: "Unauthorized" }), {
-              status: 401,
-              headers: { "Content-Type": "application/json" },
-            }),
+            new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } }),
             requestId,
           );
         }
-        // waitUntil keeps the Worker alive until cronWork settles even after we respond.
-        // Without it, Cloudflare may terminate the isolate as soon as the Response is
-        // returned, cutting off the async Telegram sends mid-flight.
         const { sendRateCheckToAllVendors } = await import("./lib/rate-check");
         const cronWork = sendRateCheckToAllVendors()
           .then(r => console.info("[Cron] Rate-check complete:", r))
           .catch(e => console.error("[Cron] Rate-check failed:", e instanceof Error ? e.message : e));
         (ctx as { waitUntil?: (p: Promise<unknown>) => void }).waitUntil?.(cronWork);
         return addSecurityHeaders(
-          new Response(JSON.stringify({ ok: true, started: true }), {
-            headers: { "Content-Type": "application/json" },
-          }),
+          new Response(JSON.stringify({ ok: true, started: true }), { headers: { "Content-Type": "application/json" } }),
+          requestId,
+        );
+      }
+
+      // ── Cron: weekly trade commission (every Thursday 18:00 UTC = 7pm WAT) ──
+      // Business rule: ₦500 credited to every user who traded ≥$25 (≥₦7,000)
+      // in the previous 7 days. Paid once per ISO week; duplicate-safe via DB.
+      // Trigger: CF Cron "0 18 * * 4"  (Thursday 18:00 UTC)
+      if (url.pathname === "/api/cron/weekly-commission") {
+        const secret   = request.headers.get("x-cron-secret");
+        const expected = getEnv("CRON_SECRET");
+        if (!expected || secret !== expected) {
+          return addSecurityHeaders(
+            new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } }),
+            requestId,
+          );
+        }
+        const { getServerSupabase } = await import("./lib/supabase.server");
+        const { payWeeklyTradeCommissions } = await import("./lib/db-helpers");
+        const db = getServerSupabase();
+        const cronWork = payWeeklyTradeCommissions(db)
+          .then(r => console.info("[Cron] Weekly commission complete:", r))
+          .catch(e => console.error("[Cron] Weekly commission failed:", e instanceof Error ? e.message : e));
+        (ctx as { waitUntil?: (p: Promise<unknown>) => void }).waitUntil?.(cronWork);
+        return addSecurityHeaders(
+          new Response(JSON.stringify({ ok: true, started: true }), { headers: { "Content-Type": "application/json" } }),
           requestId,
         );
       }
