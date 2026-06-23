@@ -279,3 +279,112 @@ export const requestUserWithdrawal = createServerFn({ method: "POST" })
 
     return { success: true, ref: payoutRef, newBalance };
   });
+
+// ─── Earnings history ─────────────────────────────────────────────────────────
+// Combines weekly trade commissions + referral commissions into one timeline.
+// Also returns eligibility for the next Thursday payout and countdown info.
+export type EarningEntry = {
+  id:         string;
+  type:       "weekly_commission" | "referral_commission";
+  amount_ngn: number;
+  label:      string;
+  sub:        string;
+  created_at: string;
+};
+export type EarningsData = {
+  entries:         EarningEntry[];
+  totalEarnedNgn:  number;
+  eligibleThisWeek: boolean;
+  weeklyVolumeNgn: number;
+  nextThursdayIso: string;   // ISO of next Thursday 18:00 UTC (= 7pm WAT)
+};
+
+export const getEarningsHistory = createServerFn({ method: "GET" })
+  .validator((d: { userId?: string }) => d)
+  .handler(async (): Promise<EarningsData> => {
+    try {
+      const userId = await requireUser();
+      const db     = getServerSupabase();
+
+      // ── Weekly commissions ────────────────────────────────────────────────
+      const { data: weeklyRows } = await db
+        .from("weekly_trade_commissions")
+        .select("id, week_key, amount_ngn, paid_at")
+        .eq("user_id", userId)
+        .order("paid_at", { ascending: false })
+        .limit(30);
+
+      // ── Referral commissions ──────────────────────────────────────────────
+      const { data: refRows } = await db
+        .from("referral_commissions")
+        .select("id, amount_ngn, commission_rate, created_at, referee_id")
+        .eq("referrer_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(30);
+
+      // Fetch referee display names (batch)
+      const refereeIds = [...new Set((refRows ?? []).map((r) => r.referee_id))];
+      const refNames: Record<string, string> = {};
+      if (refereeIds.length > 0) {
+        const { data: profiles } = await db
+          .from("profiles")
+          .select("id, display_name")
+          .in("id", refereeIds);
+        for (const p of profiles ?? []) {
+          refNames[p.id] = p.display_name ?? "a referral";
+        }
+      }
+
+      // ── Build combined timeline ───────────────────────────────────────────
+      const entries: EarningEntry[] = [
+        ...(weeklyRows ?? []).map((w) => ({
+          id:         w.id,
+          type:       "weekly_commission" as const,
+          amount_ngn: Number(w.amount_ngn),
+          label:      `Weekly Commission — ${w.week_key}`,
+          sub:        new Date(w.paid_at).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" }),
+          created_at: w.paid_at,
+        })),
+        ...(refRows ?? []).map((r) => ({
+          id:         r.id,
+          type:       "referral_commission" as const,
+          amount_ngn: Number(r.amount_ngn),
+          label:      `5% Commission from ${refNames[r.referee_id] ?? "a referral"}`,
+          sub:        new Date(r.created_at).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" }),
+          created_at: r.created_at,
+        })),
+      ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+      const totalEarnedNgn =
+        entries.reduce((s, e) => s + e.amount_ngn, 0);
+
+      // ── Eligibility: ≥$25 (≥₦7,000) trades in past 7 days ───────────────
+      const since7d = new Date();
+      since7d.setDate(since7d.getDate() - 7);
+
+      const { data: weekTrades } = await db
+        .from("trades")
+        .select("amount_usd, amount_ngn")
+        .eq("user_id", userId)
+        .in("status", ["paid", "completed"])
+        .gte("created_at", since7d.toISOString())
+        .gte("amount_ngn", 7000);
+
+      const weeklyVolumeUsd = (weekTrades ?? []).reduce((s, t) => s + Number(t.amount_usd ?? 0), 0);
+      const weeklyVolumeNgn = (weekTrades ?? []).reduce((s, t) => s + Number(t.amount_ngn ?? 0), 0);
+      const eligibleThisWeek = weeklyVolumeUsd >= 25;
+
+      // ── Next Thursday 18:00 UTC ───────────────────────────────────────────
+      const now = new Date();
+      const dayOfWeek = now.getUTCDay(); // 0=Sun … 4=Thu … 6=Sat
+      const daysUntilThursday = (4 - dayOfWeek + 7) % 7 || 7; // always ≥1
+      const nextThursday = new Date(now);
+      nextThursday.setUTCDate(nextThursday.getUTCDate() + daysUntilThursday);
+      nextThursday.setUTCHours(18, 0, 0, 0);
+      const nextThursdayIso = nextThursday.toISOString();
+
+      return { entries, totalEarnedNgn, eligibleThisWeek, weeklyVolumeNgn, nextThursdayIso };
+    } catch {
+      return { entries: [], totalEarnedNgn: 0, eligibleThisWeek: false, weeklyVolumeNgn: 0, nextThursdayIso: "" };
+    }
+  });
