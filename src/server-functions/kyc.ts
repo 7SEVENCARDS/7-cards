@@ -3,6 +3,7 @@ import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
 import { assertNotRateLimited, rlKey } from "../lib/rate-limiter";
 import { assertBvn, assertNin } from "../lib/validate";
+import { getEnv } from "../lib/worker-env";
 
 // ─── Name-match helper ────────────────────────────────────────────────────────
 function namesMatch(registered: string | null, dojahFirst: string, dojahLast: string): boolean {
@@ -98,7 +99,7 @@ export const verifyBVN = createServerFn({ method: "POST" })
       const isConfig = msg.includes("not configured");
 
       if (isConfig) {
-        if (process.env.NODE_ENV === "production") {
+        if (getEnv("IS_DEMO_MODE") !== "true") {
           return { success: false, error: "Verification service not available." };
         }
 
@@ -220,7 +221,7 @@ export const verifyNIN = createServerFn({ method: "POST" })
       const isConfig = msg.includes("not configured");
 
       if (isConfig) {
-        if (process.env.NODE_ENV === "production") {
+        if (getEnv("IS_DEMO_MODE") !== "true") {
           return { success: false, error: "Verification service not available." };
         }
 
