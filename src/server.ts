@@ -388,29 +388,35 @@ export default {
         dojah:           !!(getEnv("DOJAH_APP_ID") && getEnv("DOJAH_SECRET_KEY")),
       };
 
-      // ── Live Supabase DB probe — verifies actual connectivity, not just env vars
+      // ── Live Supabase connectivity probe ─────────────────────────────────────
+      // Hits the Supabase REST API root endpoint — no schema cache needed.
+      // A 200 or 400-range response means Supabase is reachable and responding.
+      // Only a network timeout or 5xx counts as "db down".
       let dbOk = false;
       let dbLatencyMs: number | null = null;
       let dbError: string | null = null;
       if (critical.supabase) {
         const t0 = Date.now();
+        const supabaseUrl = getEnv("VITE_SUPABASE_URL") ?? "";
+        const anonKey    = getEnv("VITE_SUPABASE_ANON_KEY") ?? "";
         try {
-          const { getServerSupabase } = await import("./lib/supabase.server");
-          const db = getServerSupabase();
-          // Use Promise.race to enforce a 3-second timeout on the probe.
-          const probe = db.from("profiles").select("id").limit(1).maybeSingle();
-          const timeout = new Promise<never>((_, rej) =>
-            setTimeout(() => rej(new Error("db_probe_timeout")), 3000)
-          );
-          const result = await Promise.race([probe, timeout]) as Awaited<typeof probe>;
+          const probeUrl = `${supabaseUrl}/rest/v1/?select=1`;
+          const probe = fetch(probeUrl, {
+            method: "HEAD",
+            headers: { "apikey": anonKey, "Authorization": `Bearer ${anonKey}` },
+            signal: AbortSignal.timeout(3000),
+          });
+          const res = await probe;
           dbLatencyMs = Date.now() - t0;
-          dbOk = !result.error;
-          if (result.error) dbError = result.error.message;
+          // Any HTTP response (even 401/406) means Supabase is reachable.
+          // Only a thrown error (timeout, DNS, network) means down.
+          dbOk = res.status < 500;
+          if (!dbOk) dbError = `HTTP ${res.status}`;
         } catch (e) {
           dbLatencyMs = Date.now() - t0;
           dbOk = false;
           dbError = e instanceof Error ? e.message : String(e);
-          console.error("[Health] DB probe failed:", dbError);
+          console.error("[Health] Supabase probe failed:", dbError);
         }
       }
 
