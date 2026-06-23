@@ -16,4 +16,30 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  vite: {
+    // pnpm virtual store (.pnpm/) can cause Rollup to lose track of sub-dependencies
+    // (e.g. @tanstack/query-core inside @tanstack/react-query) during the Nitro SSR
+    // bundling phase. resolve.dedupe forces a single instance and ssr.noExternal ensures
+    // all TanStack packages are bundled (not external) in the Cloudflare Worker output.
+    resolve: {
+      dedupe: [
+        "@tanstack/query-core",
+        "@tanstack/react-query",
+        "@tanstack/react-router",
+        "@tanstack/react-start",
+        "@tanstack/router-core",
+        "@tanstack/history",
+      ],
+    },
+    ssr: {
+      noExternal: [
+        "@tanstack/query-core",
+        "@tanstack/react-query",
+        "@tanstack/react-router",
+        "@tanstack/react-start",
+        "@tanstack/router-core",
+        "@tanstack/history",
+      ],
+    },
+  },
 });
