@@ -7,6 +7,8 @@ import {
 import { supabase } from "../lib/supabase";
 import { scanGiftCardImage } from "../server-functions/ocr";
 import type { OCRScanResult } from "../server-functions/ocr";
+import { validateUploadFile, buildStoragePath } from "../lib/upload-security";
+import { validateUploadedCard } from "../server-functions/upload-security";
 
 type CardEntry = {
   code:           string;
@@ -125,6 +127,13 @@ export function CodeEntryScreen({
   const handleImageSelect = async (i: number, file: File) => {
     if (!file) return;
 
+    // 0. Client-side security: size, type, magic bytes — before any network call
+    const validation = await validateUploadFile(file);
+    if (!validation.ok) {
+      setError(validation.error);
+      return;
+    }
+
     const preview = URL.createObjectURL(file);
     setCards(cs => cs.map((c, idx) =>
       idx === i ? { ...c, imagePreview: preview, imageUploading: true, imagePath: undefined, ocrResult: null, ocrScanning: false } : c
@@ -138,8 +147,7 @@ export function CodeEntryScreen({
     // 1. Upload to Supabase Storage
     let uploadedPath: string | undefined;
     try {
-      const ext  = file.name.split(".").pop()?.toLowerCase() || "jpg";
-      const path = `${userId}/${Date.now()}_${i}.${ext}`;
+      const path = buildStoragePath(userId, i, file);
       const { data, error: uploadErr } = await supabase.storage
         .from("card-images")
         .upload(path, file, { cacheControl: "3600", upsert: false });
@@ -150,6 +158,18 @@ export function CodeEntryScreen({
         return;
       }
       uploadedPath = data.path;
+
+      // 1b. Server-side validation: ownership, rate limit, size re-check
+      try {
+        await validateUploadedCard({ data: { storagePath: uploadedPath } });
+      } catch (secErr) {
+        const msg = secErr instanceof Error ? secErr.message : "Upload rejected by server.";
+        console.warn("[CardImage] Server validation failed:", msg);
+        setError(msg);
+        setCards(cs => cs.map((c, idx) => idx === i ? { ...c, imageUploading: false, imagePreview: undefined } : c));
+        return;
+      }
+
       setCards(cs => cs.map((c, idx) =>
         idx === i ? { ...c, imagePath: data.path, imageUploading: false, ocrScanning: true } : c
       ));
