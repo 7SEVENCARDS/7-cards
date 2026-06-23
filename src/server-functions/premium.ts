@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
 import { getAppUrl } from "../lib/constants";
+import { getEnv } from "../lib/worker-env";
 
 const PREMIUM_PRICE_NGN  = 2000;
 const PREMIUM_PRICE_KOBO = PREMIUM_PRICE_NGN * 100;
@@ -85,7 +86,7 @@ export const createPremiumCheckout = createServerFn({ method: "POST" })
       const isConfig = msg.includes("not configured");
 
       if (isConfig) {
-        if (process.env.NODE_ENV === "production") {
+        if (getEnv("IS_DEMO_MODE") !== "true") {
           return { success: false, error: "Payment service not configured." };
         }
         return { success: true, demo: true, checkoutUrl: null, transactionRef };
@@ -101,7 +102,7 @@ export const createPremiumCheckout = createServerFn({ method: "POST" })
 export const activatePremium = createServerFn({ method: "POST" })
   .validator((d: { transactionRef?: string; paymentRef?: string }) => d)
   .handler(async ({ data }) => {
-    if (process.env.NODE_ENV === "production") {
+    if (getEnv("IS_DEMO_MODE") !== "true") {
       return { success: false, error: "Premium activation must be triggered by the payment webhook." };
     }
 
