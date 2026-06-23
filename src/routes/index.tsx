@@ -91,6 +91,9 @@ function App() {
   const [activeStatusTradeId, setActiveStatusTradeId] = useState<string | null>(null);
   const [creatingTrade, setCreatingTrade] = useState(false);
 
+  // ── Query client (needed for manual cache invalidation in batch handler) ─
+  const queryClient = useQueryClient();
+
   // ── Real data hooks ──────────────────────────────────────────────────────
   const { data: rates = [] } = useExchangeRates();
   const { data: wallets = [] } = useWallets(user?.id);

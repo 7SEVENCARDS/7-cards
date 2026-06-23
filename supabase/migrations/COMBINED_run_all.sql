@@ -1,5 +1,5 @@
 -- ============================================================
--- 7SEVEN CARDS — All Supabase Migrations (001 → 014)
+-- 7SEVEN CARDS — All Supabase Migrations (001 → 027)
 -- Paste this entire file into the Supabase SQL Editor and run.
 -- ============================================================
 
@@ -3737,6 +3737,329 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS region TEXT DEFAULT 'US';
 
 -- ============================================================
 -- 021_card_images.sql
+-- ============================================================
+-- ============================================================
+-- 021_card_images.sql
+-- Card image upload support for gift card trades
+-- Run in Supabase SQL Editor
+-- ============================================================
+
+-- ── 1. Add image path column to trades ──────────────────────────────────────
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS card_image_path TEXT;
+
+-- ── 2. Create private Supabase Storage bucket ────────────────────────────────
+-- Images stored under {userId}/{timestamp}.{ext}
+-- Private bucket — only signed URLs can be shared with vendors
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'card-images',
+  'card-images',
+  false,
+  5242880,  -- 5 MB max per image
+  ARRAY[
+    'image/jpeg', 'image/jpg', 'image/png',
+    'image/webp', 'image/heic', 'image/heif'
+  ]
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- ── 3. Storage RLS policies ───────────────────────────────────────────────────
+
+-- Users can upload their own images (path must start with their user ID)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'objects' AND schemaname = 'storage'
+    AND policyname = 'card_images_upload'
+  ) THEN
+    CREATE POLICY "card_images_upload"
+      ON storage.objects FOR INSERT
+      WITH CHECK (
+        bucket_id = 'card-images'
+        AND auth.role() = 'authenticated'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+      );
+  END IF;
+END $$;
+
+-- Users can view their own uploaded images
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'objects' AND schemaname = 'storage'
+    AND policyname = 'card_images_read_own'
+  ) THEN
+    CREATE POLICY "card_images_read_own"
+      ON storage.objects FOR SELECT
+      USING (
+        bucket_id = 'card-images'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+      );
+  END IF;
+END $$;
+
+-- Admins can view all card images
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'objects' AND schemaname = 'storage'
+    AND policyname = 'card_images_read_admin'
+  ) THEN
+    CREATE POLICY "card_images_read_admin"
+      ON storage.objects FOR SELECT
+      USING (
+        bucket_id = 'card-images'
+        AND EXISTS (
+          SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'
+        )
+      );
+  END IF;
+END $$;
+
+-- Users can delete their own images (e.g. resubmit)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'objects' AND schemaname = 'storage'
+    AND policyname = 'card_images_delete_own'
+  ) THEN
+    CREATE POLICY "card_images_delete_own"
+      ON storage.objects FOR DELETE
+      USING (
+        bucket_id = 'card-images'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+      );
+  END IF;
+END $$;
+
+-- ============================================================
+-- 024_cybermonikers_avatars.sql
+-- ============================================================
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 024: Cybermonikers + DiceBear Avatars
+-- Adds display_name (auto-generated cybermoniker starting with "7") to profiles.
+-- Updates leaderboard view to use display_name (no real names exposed publicly).
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- Add display_name column
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS display_name TEXT UNIQUE;
+
+-- ─── Cybermoniker generator ───────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION generate_cybermoniker()
+RETURNS TEXT LANGUAGE plpgsql AS $$
+DECLARE
+  prefixes TEXT[] := ARRAY[
+    'Swift','Ghost','Iron','Storm','Nova','Cyber','Neon','Apex','Elite','Ultra',
+    'Rapid','Sharp','Bold','Prime','Royal','Stealth','Blaze','Flash','Dark','Frost',
+    'Quantum','Shadow','Lunar','Solar','Hyper','Venom','Rogue','Phantom','Titan','Volt'
+  ];
+  nouns TEXT[] := ARRAY[
+    'Card','Deal','Vault','Ace','Fox','Wolf','Hawk','Bear','Lion','Tiger',
+    'Eagle','Shark','Viper','Ninja','Blade','Trader','Hustle','Stack','Cash','Coin',
+    'Grip','Strike','Surge','Force','Pulse','Drift','Edge','Flair','Gem','Link'
+  ];
+  attempts INT := 0;
+  candidate TEXT;
+BEGIN
+  LOOP
+    attempts := attempts + 1;
+    IF attempts > 200 THEN
+      candidate := '7' || upper(substr(md5(random()::text || clock_timestamp()::text), 1, 7));
+      IF NOT EXISTS (SELECT 1 FROM profiles WHERE display_name = candidate) THEN
+        RETURN candidate;
+      END IF;
+      CONTINUE;
+    END IF;
+    candidate := '7' ||
+      prefixes[1 + floor(random() * array_length(prefixes, 1))::int] ||
+      nouns[1 + floor(random() * array_length(nouns, 1))::int] ||
+      floor(random() * 89 + 10)::text;
+    IF NOT EXISTS (SELECT 1 FROM profiles WHERE display_name = candidate) THEN
+      RETURN candidate;
+    END IF;
+  END LOOP;
+END;
+$$;
+
+-- Backfill existing users who don't have a cybermoniker yet
+DO $$
+DECLARE
+  rec RECORD;
+BEGIN
+  FOR rec IN SELECT id FROM profiles WHERE display_name IS NULL LOOP
+    UPDATE profiles SET display_name = generate_cybermoniker() WHERE id = rec.id;
+  END LOOP;
+END;
+$$;
+
+-- ─── Update on_auth_user_created to include cybermoniker ─────────────────────
+CREATE OR REPLACE FUNCTION handle_new_user()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  INSERT INTO profiles (id, full_name, phone, display_name)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data->>'full_name', ''),
+    NEW.phone,
+    generate_cybermoniker()
+  )
+  ON CONFLICT (id) DO NOTHING;
+  INSERT INTO wallets (user_id, currency) VALUES (NEW.id, 'NGN') ON CONFLICT DO NOTHING;
+  INSERT INTO user_xp (user_id) VALUES (NEW.id) ON CONFLICT DO NOTHING;
+  RETURN NEW;
+END;
+$$;
+
+-- ─── Update leaderboard view to expose display_name (never full_name) ────────
+CREATE OR REPLACE VIEW leaderboard AS
+SELECT
+  p.id,
+  COALESCE(p.display_name, '7Trader') AS display_name,
+  p.avatar_url,
+  x.total_xp,
+  x.weekly_xp,
+  x.level,
+  x.streak_days,
+  x.trade_count,
+  RANK() OVER (ORDER BY x.weekly_xp DESC)   AS weekly_rank,
+  RANK() OVER (ORDER BY x.total_xp  DESC)   AS all_time_rank
+FROM user_xp x
+JOIN profiles p ON p.id = x.user_id
+ORDER BY x.weekly_xp DESC;
+
+-- ============================================================
+-- 025_ocr_scan_data.sql
+-- ============================================================
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 025: OCR Scan Data + Fraud Screening
+-- Adds OCR extraction and fraud-risk columns to trades and vendor assignments.
+-- Run manually in Supabase SQL Editor.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ── 1. OCR columns on trades ─────────────────────────────────────────────────
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS ocr_brand         TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS ocr_code          TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS ocr_pin           TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS ocr_denomination  NUMERIC(12,2);
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS ocr_currency      TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS ocr_country       TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS ocr_confidence    INTEGER;   -- 0–100
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS ocr_risk_score    TEXT;      -- low | medium | high
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS ocr_flags         TEXT[] DEFAULT '{}';
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS ocr_scanned_at    TIMESTAMPTZ;
+
+-- ── 2. Denormalised OCR columns on vendor_card_assignments ───────────────────
+-- These are populated when a trade with OCR data creates a vendor assignment,
+-- so vendors see fraud signals without needing a JOIN back to trades.
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS ocr_confidence INTEGER;
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS ocr_risk_score TEXT;
+ALTER TABLE vendor_card_assignments ADD COLUMN IF NOT EXISTS ocr_flags      TEXT[] DEFAULT '{}';
+
+-- ── 3. Index on risk score for admin fraud review queue ──────────────────────
+CREATE INDEX IF NOT EXISTS idx_trades_ocr_risk
+  ON trades (ocr_risk_score)
+  WHERE ocr_risk_score IS NOT NULL;
+
+-- ── 4. Duplicate image detection view ───────────────────────────────────────
+-- Finds card_image_path values submitted more than once (possible duplicate fraud).
+CREATE OR REPLACE VIEW duplicate_card_images AS
+SELECT
+  card_image_path,
+  COUNT(*)                                            AS submission_count,
+  ARRAY_AGG(id ORDER BY created_at)                  AS trade_ids,
+  ARRAY_AGG(user_id ORDER BY created_at)             AS user_ids,
+  MIN(created_at)                                     AS first_seen,
+  MAX(created_at)                                     AS last_seen
+FROM trades
+WHERE card_image_path IS NOT NULL
+GROUP BY card_image_path
+HAVING COUNT(*) > 1;
+
+-- ── 5. OCR fraud log function (called by server on high-risk detections) ─────
+CREATE OR REPLACE FUNCTION flag_high_risk_trade(
+  p_trade_id   UUID,
+  p_risk_score TEXT,
+  p_flags      TEXT[]
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  UPDATE trades
+  SET
+    ocr_risk_score = p_risk_score,
+    ocr_flags      = p_flags,
+    status         = CASE
+                       WHEN p_risk_score = 'high' THEN 'under_review'
+                       ELSE status
+                     END
+  WHERE id = p_trade_id;
+END;
+$$;
+
+-- ── 6. Grant select on new view to authenticated users (their own trades) ────
+ALTER VIEW duplicate_card_images OWNER TO postgres;
+
+COMMENT ON COLUMN trades.ocr_confidence IS '0–100 OCR extraction confidence from Gemini Vision';
+COMMENT ON COLUMN trades.ocr_risk_score IS 'Fraud risk: low | medium | high';
+COMMENT ON COLUMN trades.ocr_flags      IS 'Array of detected fraud signals: blurry, screenshot, edited, partial, voided';
+
+-- ============================================================
+-- 026_weekly_trade_commission.sql
+-- ============================================================
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 026: Weekly Trade Commission
+-- ₦500 paid every Thursday at 7pm WAT to users who traded ≥$25 (≥₦7,000)
+-- in the previous 7-day window. Tracked per ISO-week to prevent double-payment.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS weekly_trade_commissions (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  week_key    TEXT        NOT NULL,  -- ISO week: 'YYYY-Www'  e.g. '2026-W26'
+  amount_ngn  NUMERIC(12,2) NOT NULL DEFAULT 500,
+  paid_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, week_key)         -- one payment per user per week
+);
+
+-- Fast lookups by week (cron needs to check which users were already paid)
+CREATE INDEX IF NOT EXISTS idx_weekly_commissions_week
+  ON weekly_trade_commissions (week_key);
+
+-- Users can read their own commission history
+ALTER TABLE weekly_trade_commissions ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users read own commissions"
+  ON weekly_trade_commissions FOR SELECT
+  USING (auth.uid() = user_id);
+
+-- Only service role can insert (cron runs with service role key)
+CREATE POLICY "Service role inserts commissions"
+  ON weekly_trade_commissions FOR INSERT
+  WITH CHECK (true);  -- enforced at service role level
+
+-- ── Helper view: commission history per user ──────────────────────────────────
+CREATE OR REPLACE VIEW my_weekly_commissions AS
+SELECT
+  week_key,
+  amount_ngn,
+  paid_at
+FROM weekly_trade_commissions
+WHERE user_id = auth.uid()
+ORDER BY paid_at DESC;
+
+COMMENT ON TABLE weekly_trade_commissions IS
+  '₦500 weekly trade commission paid every Thursday to users with ≥$25 weekly volume';
+COMMENT ON COLUMN weekly_trade_commissions.week_key IS
+  'ISO week identifier YYYY-Www — unique constraint prevents double-payment';
+
+-- ============================================================
+-- 027_card_images.sql
 -- ============================================================
 -- ============================================================
 -- 021_card_images.sql
