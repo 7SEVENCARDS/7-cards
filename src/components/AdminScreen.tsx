@@ -66,6 +66,7 @@ import {
 } from "../server-functions/admin-telegram";
 import { AuditLogViewer } from "./AuditLogViewer";
 import { VendorRatePanel } from "./VendorRatePanel";
+import { MissionControlTab } from "./MissionControlTab";
 import {
   adminGetVendors,
   adminUpdateVendorStatus,
@@ -79,7 +80,7 @@ import {
   adminRegisterVendor,
 } from "../server-functions/vendors";
 
-type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors" | "audit" | "system" | "roles";
+type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors" | "audit" | "system" | "roles" | "mission";
 
 type Props = {
   adminId: string;
@@ -2563,8 +2564,9 @@ export function AdminScreen({ adminId, onBack }: Props) {
     { key: "credit",  label: "Credit",  icon: Wallet },
     { key: "vendors", label: "Vendors", icon: Building2 },
     { key: "audit",   label: "Audit",   icon: Zap },
-    { key: "system",  label: "System",  icon: Activity },
-    { key: "roles",   label: "Roles",   icon: UserCog },
+    { key: "system",   label: "System",  icon: Activity },
+    { key: "roles",    label: "Roles",   icon: UserCog },
+    { key: "mission",  label: "Mission", icon: BarChart3 },
   ];
 
   return (
@@ -2616,8 +2618,9 @@ export function AdminScreen({ adminId, onBack }: Props) {
             <AuditLogViewer />
           </div>
         )}
-        {tab === "system"  && <SystemHealthTab />}
-        {tab === "roles"   && <RolesTab adminId={adminId} />}
+        {tab === "system"   && <SystemHealthTab />}
+        {tab === "roles"    && <RolesTab adminId={adminId} />}
+        {tab === "mission"  && <MissionControlTab />}
       </div>
     </div>
   );
