@@ -721,7 +721,7 @@ export const adminOverrideVendorRate = createServerFn({ method: "POST" })
 
 // ─── Spread Revenue ───────────────────────────────────────────────────────────
 export const getSpreadRevenue = createServerFn({ method: "GET" })
-  .inputValidator((d: { days?: number }) => d)
+  .validator((d: { days?: number }) => d)
   .handler(async ({ data }) => {
     const { requireAdmin } = await import("../lib/auth-server");
     await requireAdmin();
@@ -886,19 +886,20 @@ export const queryAdminAuditLog = createServerFn({ method: "GET" })
     await requireAdmin();
     const db = getServerSupabase();
 
-    let q = db
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let q: any = db
       .from("admin_audit_log")
       .select("id, admin_id, action, target_id, meta, created_at", { count: "exact" });
 
-    if (data.action  && data.action  !== "all") q = (q as ReturnType<typeof q.eq>).eq("action",   data.action);
-    if (data.adminId && data.adminId !== "")    q = (q as ReturnType<typeof q.eq>).eq("admin_id", data.adminId);
-    if (data.targetId && data.targetId !== "")  q = (q as ReturnType<typeof q.eq>).eq("target_id", data.targetId);
-    if (data.since)                              q = (q as ReturnType<typeof q.gte>).gte("created_at", data.since);
+    if (data.action   && data.action   !== "all") q = q.eq("action",    data.action);
+    if (data.adminId  && data.adminId  !== "")    q = q.eq("admin_id",  data.adminId);
+    if (data.targetId && data.targetId !== "")    q = q.eq("target_id", data.targetId);
+    if (data.since)                               q = q.gte("created_at", data.since);
 
     const limit  = Math.min(data.limit ?? 50, 200);
     const offset = data.offset ?? 0;
 
-    const { data: rows, error, count } = await (q as ReturnType<typeof q.order>)
+    const { data: rows, error, count } = await q
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 

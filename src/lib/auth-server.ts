@@ -25,16 +25,57 @@ export class ForbiddenError extends Error {
 }
 
 // ─── Token extraction ─────────────────────────────────────────────────────────
+//
+// Supabase v2 stores the auth session in a cookie named:
+//   sb-<projectRef>-auth-token
+// When the JWT exceeds ~4 KB (common for admin users with app_metadata claims),
+// Supabase splits the value across numbered chunk cookies:
+//   sb-<projectRef>-auth-token.0=<chunk0>
+//   sb-<projectRef>-auth-token.1=<chunk1>
+//   …
+// The unchunked form is tried first; if no access_token is found we reassemble
+// the chunks in order and parse the combined value.
 
-function extractAccessToken(cookieHeader: string): string | null {
-  const tokenMatch = cookieHeader.match(/sb-[^-]+-auth-token=([^;]+)/);
-  if (!tokenMatch) return null;
+function parseTokenJson(raw: string): string | null {
   try {
-    const raw = decodeURIComponent(tokenMatch[1]);
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed)
       ? (parsed[0]?.access_token ?? null)
       : (parsed?.access_token ?? null);
+  } catch {
+    return null;
+  }
+}
+
+function extractAccessToken(cookieHeader: string): string | null {
+  // ── 1. Try the unchunked cookie: sb-<ref>-auth-token=<value> ────────────
+  const unchunkedMatch = cookieHeader.match(/sb-[A-Za-z0-9]+-auth-token=([^;]+)/);
+  if (unchunkedMatch) {
+    const token = parseTokenJson(decodeURIComponent(unchunkedMatch[1]));
+    if (token) return token;
+  }
+
+  // ── 2. Detect chunks: sb-<ref>-auth-token.N=<value> ─────────────────────
+  const chunkNameMatch = cookieHeader.match(/sb-([A-Za-z0-9]+)-auth-token\.\d+=/);
+  if (!chunkNameMatch) return null;
+
+  const projectRef = chunkNameMatch[1];
+  const chunkMap   = new Map<number, string>();
+
+  for (const segment of cookieHeader.split(";")) {
+    const eqIdx = segment.indexOf("=");
+    if (eqIdx === -1) continue;
+    const name  = segment.slice(0, eqIdx).trim();
+    const value = segment.slice(eqIdx + 1).trim();
+    const m = name.match(new RegExp(`^sb-${projectRef}-auth-token\\.(\\d+)$`));
+    if (m) chunkMap.set(parseInt(m[1], 10), value);
+  }
+
+  if (chunkMap.size === 0) return null;
+
+  try {
+    const joined = Array.from({ length: chunkMap.size }, (_, i) => chunkMap.get(i) ?? "").join("");
+    return parseTokenJson(decodeURIComponent(joined));
   } catch {
     return null;
   }
