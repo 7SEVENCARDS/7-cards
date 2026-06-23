@@ -31,20 +31,11 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Type-check
-        run: pnpm run build:dev
+        run: pnpm run typecheck
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          BUSHA_API_KEY: ${{ secrets.BUSHA_API_KEY }}
-          ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
-          VITE_ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
-          RELOADLY_CLIENT_ID: ${{ secrets.RELOADLY_CLIENT_ID }}
-          RELOADLY_CLIENT_SECRET: ${{ secrets.RELOADLY_CLIENT_SECRET }}
-          SQUADCO_SECRET_KEY: ${{ secrets.SQUADCO_SECRET_KEY }}
-          DOJAH_APP_ID: ${{ secrets.DOJAH_APP_ID }}
-          DOJAH_SECRET_KEY: ${{ secrets.DOJAH_SECRET_KEY }}
-          APP_SECRET: ${{ secrets.APP_SECRET }}
           VITE_APP_URL: https://7evencards.xyz
           APP_URL: https://7evencards.xyz
 
@@ -181,8 +172,6 @@ jobs:
           upload_secret ADMIN_EMAIL                "$_ADMIN_EMAIL"
 
       # ── Setup Resend email domain for custom branding ─────────────────────
-      # Creates 7evencards.xyz domain in Resend (if not present), retrieves
-      # DKIM/SPF DNS records, and automatically adds them to Cloudflare DNS.
       - name: Setup Resend email domain (7evencards.xyz)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -193,13 +182,11 @@ jobs:
             exit 0
           fi
 
-          # Get Cloudflare zone ID for 7evencards.xyz
           ZONE_ID=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/zones?name=7evencards.xyz" \
             | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const z=JSON.parse(d.join(''));console.log(z.result[0]?.id||'')}catch{console.log('')} })")
           echo "CF Zone ID: $ZONE_ID"
 
-          # Check if domain already registered in Resend
           DOMAINS_RESP=$(curl -s -H "Authorization: Bearer $RESEND_API_KEY" "https://api.resend.com/domains")
           DOMAIN_ID=$(echo "$DOMAINS_RESP" | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));const dom=(r.data||[]).find(d=>d.name==='7evencards.xyz');console.log(dom?.id||'')}catch{console.log('')} })")
           DOMAIN_STATUS=$(echo "$DOMAINS_RESP" | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));const dom=(r.data||[]).find(d=>d.name==='7evencards.xyz');console.log(dom?.status||'')}catch{console.log('')} })")
@@ -220,7 +207,6 @@ jobs:
             RECORDS_JSON=$(echo "$DOMAIN_DETAIL" | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{ try{const r=JSON.parse(d.join(''));console.log(JSON.stringify(r.records||[]))}catch{console.log('[]')} })")
           fi
 
-          # Add DNS records to Cloudflare (jq-based loop — no heredoc needed)
           if [ -n "$ZONE_ID" ] && [ -n "$RECORDS_JSON" ] && [ "$RECORDS_JSON" != "[]" ]; then
             echo "Adding Resend DNS records to Cloudflare..."
             RECORD_COUNT=$(echo "$RECORDS_JSON" | jq 'length')
@@ -258,7 +244,6 @@ jobs:
             echo "– Skipping DNS record creation (no zone ID or no records)"
           fi
 
-          # Trigger domain verification in Resend
           if [ -n "$DOMAIN_ID" ]; then
             VERIFY=$(curl -s -X POST \
               -H "Authorization: Bearer $RESEND_API_KEY" \
