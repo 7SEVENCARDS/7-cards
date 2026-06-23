@@ -1,7 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getRequest } from "@tanstack/react-start/server";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
 import { getEnv } from "../lib/worker-env";
+import { assertNotRateLimited, clientIp, rlKey } from "../lib/rate-limiter";
 
 // ─── Input whitelists (server-side) ──────────────────────────────────────────
 const ALLOWED_BRANDS = new Set([
@@ -329,6 +331,13 @@ export const createTrade = createServerFn({ method: "POST" })
   }) => d)
   .handler(async ({ data }) => {
     const userId = await requireUser();
+
+    // Rate limit: 5 trade creations per user per 2 minutes
+    assertNotRateLimited(rlKey("create_trade:user", userId), 5, 2 * 60 * 1_000);
+    // Rate limit: 20 trade creations per IP per 2 minutes (secondary abuse guard)
+    const ip = clientIp(getRequest());
+    assertNotRateLimited(rlKey("create_trade:ip", ip), 20, 2 * 60 * 1_000);
+
     const db = getServerSupabase();
 
     // Enforce per-trade USD limit based on user's verification tier
@@ -390,6 +399,14 @@ export const verifyGiftCard = createServerFn({ method: "POST" })
   }) => d)
   .handler(async ({ data }) => {
     const userId = await requireUser();
+
+    // Rate limit: 10 verifications per user per 5 minutes — stops credential stuffing
+    assertNotRateLimited(rlKey("verify_card:user", userId), 10, 5 * 60 * 1_000);
+    // Rate limit: 30 verifications per IP per 5 minutes — secondary guard against
+    // shared-account or proxy-based brute-force of card codes via Reloadly
+    const ip = clientIp(getRequest());
+    assertNotRateLimited(rlKey("verify_card:ip", ip), 30, 5 * 60 * 1_000);
+
     const db = getServerSupabase();
 
     // Verify the trade belongs to this user
