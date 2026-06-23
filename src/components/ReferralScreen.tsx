@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
   ChevronLeft, Copy, Share2, CheckCircle2, Clock,
-  Gift, Users, Loader2, Wallet, ChevronRight, Zap, Sparkles,
+  Gift, Users, Loader2, Wallet, ChevronRight, Zap, Sparkles, Lock,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getReferralStats, applyReferralCode } from "../server-functions/referrals";
@@ -23,11 +23,11 @@ function timeAgo(iso: string): string {
 
 export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
   const qc = useQueryClient();
-  const [copied, setCopied]       = useState(false);
+  const [copied, setCopied]         = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
-  const [codeInput, setCodeInput] = useState("");
-  const [applying, setApplying]   = useState(false);
-  const [applyMsg, setApplyMsg]   = useState<{ ok: boolean; text: string } | null>(null);
+  const [codeInput, setCodeInput]   = useState("");
+  const [applying, setApplying]     = useState(false);
+  const [applyMsg, setApplyMsg]     = useState<{ ok: boolean; text: string } | null>(null);
 
   const { data: stats, isLoading } = useQuery<ReferralStats>({
     queryKey: ["referral-stats", userId],
@@ -39,7 +39,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
     ? `https://7evencards.xyz/join?ref=${stats.referralCode}`
     : "";
 
-  const shareText = `Trade gift cards for instant Naira on 7SEVEN CARDS! 🚀\n\nUse my invite link and we BOTH earn ₦500 bonus + 100 XP when you complete your first trade.\n\n${referralLink}`;
+  const shareText = `Trade gift cards for instant cash on 7SEVEN CARDS! 🚀\n\nUse my invite link — we both get +100 XP on your first trade. Once you complete 7 trades in a month, I start earning 5% commission on every trade you make.\n\n${referralLink}`;
 
   const handleCopyCode = async () => {
     await navigator.clipboard.writeText(stats?.referralCode ?? "");
@@ -56,7 +56,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
   const handleShare = async () => {
     if (navigator.share) {
       await navigator.share({
-        title: "Join 7SEVEN CARDS — We both earn ₦500!",
+        title: "Join 7SEVEN CARDS — Trade Gift Cards for Instant Naira",
         text: shareText,
         url: referralLink,
       }).catch(() => {});
@@ -72,7 +72,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
     try {
       const res = await applyReferralCode({ data: { code: codeInput.trim() } });
       if ((res as { success: boolean }).success) {
-        setApplyMsg({ ok: true, text: "Code applied! Complete your first trade and you both earn ₦500 + 100 XP." });
+        setApplyMsg({ ok: true, text: "Code applied! Complete your first trade and you both earn +100 XP. Hit 7 trades this month to unlock your referrer's commission." });
         qc.invalidateQueries({ queryKey: ["profile", userId] });
         setCodeInput("");
       } else {
@@ -95,14 +95,14 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
             <ChevronLeft className="size-5" />
           </button>
           <div className="flex-1">
-            <h1 className="text-xl font-extrabold">Invite Friends</h1>
-            <p className="text-xs text-muted-foreground">You both earn ₦500 + 100 XP on first trade</p>
+            <h1 className="text-xl font-extrabold">Referral Network</h1>
+            <p className="text-xs text-muted-foreground">5% commission unlocks after 7 monthly trades</p>
           </div>
         </header>
 
         <div className="px-5 flex flex-col gap-5">
 
-          {/* Bonus Reward Banner */}
+          {/* Reward Banner */}
           <div className="relative rounded-3xl overflow-hidden border border-gold/30"
             style={{ background: "radial-gradient(circle at 30% 50%, oklch(0.35 0.09 158 / 0.5), oklch(0.18 0.02 260) 70%)" }}>
             <div className="absolute -right-8 -top-8 size-40 rounded-full bg-gold/15 blur-2xl pointer-events-none" />
@@ -112,35 +112,38 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
                 <div className="size-8 rounded-xl bg-gold/20 grid place-items-center">
                   <Sparkles className="size-4 text-gold" />
                 </div>
-                <p className="text-xs font-extrabold text-gold uppercase tracking-wider">Dual Bonus Reward</p>
+                <p className="text-xs font-extrabold text-gold uppercase tracking-wider">How You Earn</p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-white/5 rounded-2xl p-4 border border-white/10">
-                  <p className="text-[10px] text-white/50 font-semibold uppercase mb-1">You Earn</p>
-                  <p className="text-2xl font-extrabold text-gold">₦500</p>
-                  <p className="text-[11px] text-gold/70 font-semibold">+ 100 XP</p>
-                  <p className="text-[10px] text-white/40 mt-1">per friend's first trade</p>
+                  <p className="text-[10px] text-white/50 font-semibold uppercase mb-1">First Trade</p>
+                  <p className="text-2xl font-extrabold text-gold">+100 XP</p>
+                  <p className="text-[11px] text-gold/70 font-semibold">for both of you</p>
+                  <p className="text-[10px] text-white/40 mt-1">when they complete trade #1</p>
                 </div>
                 <div className="bg-white/5 rounded-2xl p-4 border border-white/10">
-                  <p className="text-[10px] text-white/50 font-semibold uppercase mb-1">Friend Earns</p>
-                  <p className="text-2xl font-extrabold text-cyan">₦500</p>
-                  <p className="text-[11px] text-cyan/70 font-semibold">+ 100 XP</p>
-                  <p className="text-[10px] text-white/40 mt-1">on their first trade</p>
+                  <p className="text-[10px] text-white/50 font-semibold uppercase mb-1">After 7 Trades/Month</p>
+                  <p className="text-2xl font-extrabold text-cyan">5%</p>
+                  <p className="text-[11px] text-cyan/70 font-semibold">commission unlocks</p>
+                  <p className="text-[10px] text-white/40 mt-1">on every trade they make</p>
                 </div>
               </div>
-              <p className="text-[11px] text-white/40 mt-3 text-center">
-                Plus you earn 5% of every trade they complete — forever.
-              </p>
+              <div className="mt-3 bg-white/5 rounded-xl p-3 border border-white/10 flex items-start gap-2">
+                <Lock className="size-3.5 text-gold shrink-0 mt-0.5" />
+                <p className="text-[10px] text-white/50 leading-relaxed">
+                  Commission resets monthly. Your referral needs to complete 7 trades each month for your 5% to stay active.
+                </p>
+              </div>
             </div>
           </div>
 
-          {/* Total Earned stats */}
+          {/* Stats */}
           <div className="bg-card rounded-3xl border border-border p-5">
-            <p className="text-xs text-muted-foreground font-bold uppercase tracking-wider mb-4">Your Referral Stats</p>
+            <p className="text-xs text-muted-foreground font-bold uppercase tracking-wider mb-4">Your Network Stats</p>
             <div className="grid grid-cols-3 gap-3 text-center">
               {[
                 { label: "Invited",  value: isLoading ? "—" : String(stats?.totalReferred ?? 0), color: "text-foreground" },
-                { label: "Traded",   value: isLoading ? "—" : String(stats?.earnedCount   ?? 0), color: "text-cyan"      },
+                { label: "Active",   value: isLoading ? "—" : String(stats?.earnedCount   ?? 0), color: "text-cyan" },
                 { label: "Earned",   value: isLoading ? "—" : `₦${(stats?.totalEarnedNgn ?? 0).toLocaleString()}`, color: "text-gold" },
               ].map(({ label, value, color }) => (
                 <div key={label} className="bg-secondary rounded-2xl py-3">
@@ -199,18 +202,18 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
             <p className="text-xs text-muted-foreground font-bold uppercase tracking-wider mb-3">How It Works</p>
             <div className="space-y-2">
               {[
-                { step: "1", icon: Share2,        text: "Share your invite link with a friend" },
-                { step: "2", icon: Users,         text: "Friend signs up using your code" },
-                { step: "3", icon: Gift,          text: "They sell their first gift card" },
-                { step: "4", icon: Sparkles,      text: "You BOTH instantly earn ₦500 credit + 100 XP" },
-                { step: "5", icon: Zap,           text: "You keep earning 5% of every trade they complete — forever" },
-              ].map(({ step, icon: Icon, text }) => (
+                { step: "1", icon: Share2,    text: "Share your invite link with a friend",                          highlight: false },
+                { step: "2", icon: Users,     text: "Friend signs up using your code",                               highlight: false },
+                { step: "3", icon: Gift,      text: "They complete their first trade — you both earn +100 XP",        highlight: true  },
+                { step: "4", icon: Zap,       text: "They hit 7 trades this month — your 5% commission unlocks",      highlight: true  },
+                { step: "5", icon: Sparkles,  text: "Earn 5% of every trade they make from trade #7 each month",     highlight: false },
+              ].map(({ step, icon: Icon, text, highlight }) => (
                 <div key={step} className="flex items-center gap-3 bg-card rounded-2xl border border-border/60 p-4">
-                  <div className={`size-8 rounded-xl text-xs font-extrabold grid place-items-center flex-shrink-0 ${step === "4" ? "bg-gold/20 text-gold ring-1 ring-gold/30" : "bg-secondary text-muted-foreground"}`}>
+                  <div className={`size-8 rounded-xl text-xs font-extrabold grid place-items-center flex-shrink-0 ${highlight ? "bg-gold/20 text-gold ring-1 ring-gold/30" : "bg-secondary text-muted-foreground"}`}>
                     {step}
                   </div>
-                  <Icon className={`size-4 flex-shrink-0 ${step === "4" ? "text-gold" : "text-muted-foreground"}`} />
-                  <p className={`text-sm flex-1 ${step === "4" ? "text-gold font-bold" : "text-muted-foreground"}`}>{text}</p>
+                  <Icon className={`size-4 flex-shrink-0 ${highlight ? "text-gold" : "text-muted-foreground"}`} />
+                  <p className={`text-sm flex-1 ${highlight ? "text-gold font-bold" : "text-muted-foreground"}`}>{text}</p>
                 </div>
               ))}
             </div>
@@ -222,7 +225,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
               Have a friend's code?
             </p>
             <p className="text-[11px] text-muted-foreground mb-3">
-              Enter it to link your account — you'll both earn ₦500 + 100 XP on your first trade.
+              Enter it to link your account — you both earn +100 XP on your first trade.
             </p>
             <div className="flex gap-2">
               <input
@@ -271,12 +274,14 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
                     {f.has_traded ? (
                       <div className="flex flex-col items-end gap-1">
                         <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-cyan/15 text-cyan text-[10px] font-bold">
-                          <CheckCircle2 className="size-3" /> Traded
+                          <CheckCircle2 className="size-3" /> Trading
                         </div>
-                        {f.total_commission_ngn > 0 && (
+                        {f.total_commission_ngn > 0 ? (
                           <span className="text-[10px] text-gold font-bold">
                             +₦{f.total_commission_ngn.toLocaleString()} earned
                           </span>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">needs 7 trades/mo</span>
                         )}
                       </div>
                     ) : (
@@ -284,7 +289,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
                         <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-gold/15 text-gold text-[10px] font-bold">
                           <Clock className="size-3" /> Pending
                         </div>
-                        <span className="text-[10px] text-muted-foreground">₦500 bonus waiting</span>
+                        <span className="text-[10px] text-muted-foreground">hasn't traded yet</span>
                       </div>
                     )}
                   </div>
@@ -302,7 +307,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
               <div>
                 <p className="text-sm font-bold">No referrals yet</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Invite a friend — you both earn ₦500 + 100 XP on their first trade
+                  Invite a friend — you both earn +100 XP on their first trade
                 </p>
               </div>
               <button
