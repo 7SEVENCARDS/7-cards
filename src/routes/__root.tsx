@@ -39,11 +39,6 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   console.error(error);
   useEffect(() => {
     reportLovableError(error, { boundary: "tanstack_root_error_component" });
-    import("../lib/sentry.client")
-      .then(({ captureClientException }) =>
-        captureClientException(error, { boundary: "tanstack_root_error_component" }),
-      )
-      .catch(() => {});
   }, [error]);
 
   return (
@@ -177,9 +172,6 @@ function RootComponent() {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
     }
-    import("../lib/sentry.client")
-      .then(({ initSentryClient }) => initSentryClient())
-      .catch(() => {});
   }, []);
 
   useEffect(() => {
