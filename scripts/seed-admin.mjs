@@ -111,19 +111,14 @@ if (DB_URL) {
   const sql = `INSERT INTO profiles (id, role, full_name) VALUES ('${userId}', 'admin', 'Admin') ON CONFLICT (id) DO UPDATE SET role = 'admin';`;
   try {
     const out = execSync(`psql "$SUPABASE_DB_URL" -c "${sql}"`, {
-      env: process.env,
+      env: { ...process.env, PGSSLMODE: "require" },
       stdio: "pipe",
     }).toString();
     console.log("✓ profiles.role = 'admin' set via SQL:", out.trim());
   } catch (e) {
-    const msg = e.stderr?.toString() || e.message;
-    if (msg.includes("does not exist") || msg.includes("PGRST")) {
-      console.warn("⚠ profiles table not found — migrations not yet applied.");
-      console.warn("  app_metadata.role = 'admin' is set as fallback.");
-    } else {
-      console.error("✗ Direct SQL failed:", msg);
-      process.exit(1);
-    }
+    const msg = (e.stderr?.toString() || e.message || "").split("\n")[0];
+    console.warn("⚠ profiles SQL skipped (non-fatal):", msg);
+    console.warn("  Admin access via app_metadata.role = 'admin' is already active.");
   }
 } else {
   console.log("\n[3/4] Skipping profiles SQL upsert (SUPABASE_DB_URL not set)");
