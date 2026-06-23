@@ -19,7 +19,17 @@ const ALLOWED_REGIONS = new Set(["US","UK","EU","CA"]);
 // dispatched one at a time as each preceding card is processed.
 export const submitCardBatch = createServerFn({ method: "POST" })
   .validator((d: {
-    cards:         Array<{ cardCode: string; cardPin?: string; imagePath?: string }>;
+    cards: Array<{
+      cardCode:  string;
+      cardPin?:  string;
+      imagePath?: string;
+      ocrResult?: {
+        brand: string | null; code: string | null; pin: string | null;
+        denomination: number | null; currency: string | null; country: string | null;
+        confidence: number; riskScore: "low" | "medium" | "high";
+        flags: string[]; rawText: string | null;
+      };
+    }>;
     brand:         string;
     amountUsd:     number;
     exchangeRate:  number;
@@ -133,6 +143,17 @@ export const submitCardBatch = createServerFn({ method: "POST" })
           batch_queued:      queued,
           direct_vendor_id:  vendor.id,
           card_image_path:   card.imagePath ?? null,
+        // ── OCR scan data (populated client-side before submission) ──
+        ocr_brand:        card.ocrResult?.brand        ?? null,
+        ocr_code:         card.ocrResult?.code         ?? null,
+        ocr_pin:          card.ocrResult?.pin          ?? null,
+        ocr_denomination: card.ocrResult?.denomination ?? null,
+        ocr_currency:     card.ocrResult?.currency     ?? null,
+        ocr_country:      card.ocrResult?.country      ?? null,
+        ocr_confidence:   card.ocrResult?.confidence   ?? null,
+        ocr_risk_score:   card.ocrResult?.riskScore    ?? null,
+        ocr_flags:        card.ocrResult?.flags        ?? [],
+        ocr_scanned_at:   card.ocrResult              ? new Date().toISOString() : null,
         })
         .select("id")
         .single() as { data: { id: string } | null };

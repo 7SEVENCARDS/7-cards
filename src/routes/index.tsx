@@ -191,7 +191,7 @@ function App() {
   // to a DIFFERENT vendor (round-robin). Only 1 active vendor → sequential
   // queue (one card dispatched at a time to minimise exposure risk).
   const handleCodeContinueBatch = async (
-    cards: Array<{ cardCode: string; cardPin?: string; imagePath?: string }>
+    cards: Array<{ cardCode: string; cardPin?: string; imagePath?: string; ocrResult?: { brand: string | null; code: string | null; pin: string | null; denomination: number | null; currency: string | null; country: string | null; confidence: number; riskScore: "low" | "medium" | "high"; flags: string[]; rawText: string | null } }>
   ) => {
     if (!activeSell || !user) return;
     setCreatingTrade(true);

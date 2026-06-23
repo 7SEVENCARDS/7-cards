@@ -81,10 +81,50 @@ function timeAgo(iso: string) {
 }
 function copyToClipboard(text: string) { navigator.clipboard.writeText(text).catch(() => {}); }
 
+const BRAND_LOGO_URLS: Record<string, string> = {
+  "Apple":        "https://cdn.simpleicons.org/apple/ffffff",
+  "Steam":        "https://cdn.simpleicons.org/steam/ffffff",
+  "Amazon":       "https://cdn.simpleicons.org/amazon/FF9900",
+  "Google Play":  "https://cdn.simpleicons.org/googleplay/ffffff",
+  "Xbox":         "https://cdn.simpleicons.org/xbox/52B043",
+  "PlayStation":  "https://cdn.simpleicons.org/playstation/ffffff",
+  "Netflix":      "https://cdn.simpleicons.org/netflix/E50914",
+  "Spotify":      "https://cdn.simpleicons.org/spotify/1DB954",
+  "Razer Gold":   "https://cdn.simpleicons.org/razer/44D62C",
+  "Sephora":      "https://cdn.simpleicons.org/sephora/ffffff",
+  "Nordstrom":    "https://cdn.simpleicons.org/nordstrom/ffffff",
+  "eBay":         "https://cdn.simpleicons.org/ebay/ffffff",
+  "Walmart":      "https://cdn.simpleicons.org/walmart/0071CE",
+  "iTunes":       "https://cdn.simpleicons.org/itunes/FC3C44",
+  "Nike":         "https://cdn.simpleicons.org/nike/ffffff",
+  "Visa":         "https://cdn.simpleicons.org/visa/1A1F71",
+  "Mastercard":   "https://cdn.simpleicons.org/mastercard/EB001B",
+};
 const BRAND_EMOJI: Record<string, string> = {
   Apple: "🍎", Amazon: "📦", Steam: "🎮", "Google Play": "▶️",
   Xbox: "🟢", PlayStation: "🎯", Netflix: "🎬", Spotify: "🎵",
+  "Razer Gold": "💎", Sephora: "💄", eBay: "🛒", Walmart: "🏪",
+  iTunes: "🎵", Nike: "👟",
 };
+
+function BrandLogo({ brand, className = "size-10" }: { brand: string; className?: string }) {
+  const logo  = BRAND_LOGO_URLS[brand];
+  const emoji = BRAND_EMOJI[brand] ?? "🎁";
+  return (
+    <div className={`${className} rounded-xl bg-secondary/80 border border-border/40 grid place-items-center shrink-0 overflow-hidden`}>
+      {logo ? (
+        <img
+          src={logo}
+          alt={brand}
+          className="size-5 object-contain"
+          onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+        />
+      ) : (
+        <span className="text-base">{emoji}</span>
+      )}
+    </div>
+  );
+}
 
 // ─── Countdown hook — ticks every second, client-side only ────────────────────
 function useBroadcastCountdown(expiresAt: string): number {
@@ -134,7 +174,7 @@ function BroadcastCountdownBanner({ b }: { b: ActiveBroadcastRow }) {
 
   return (
     <div className={`rounded-2xl border px-4 py-3 flex items-center gap-3 transition-colors ${borderColor} ${urgent && !b.claimed_by_me && !expired ? "animate-pulse" : ""}`}>
-      <span className="text-2xl shrink-0">{BRAND_EMOJI[b.brand] ?? "🎁"}</span>
+      <BrandLogo brand={b.brand} className="size-10" />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <p className="text-sm font-extrabold">{b.brand} <span className="text-muted-foreground font-normal">${Number(b.amount_usd).toFixed(0)}</span></p>
@@ -463,7 +503,7 @@ function DashboardTab({ vendor }: { vendor: VendorSession }) {
           <div className="space-y-2">
             {assignments.slice(0, 3).map(a => (
               <div key={a.id} className="bg-card border border-border/60 rounded-xl px-4 py-3 flex items-center gap-3">
-                <span className="text-xl">{BRAND_EMOJI[a.brand] ?? "🎁"}</span>
+                <BrandLogo brand={a.brand} className="size-9" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-bold">{a.brand} {fmtUsd(a.amount_usd)}</p>
                   <p className="text-xs text-muted-foreground">{timeAgo(a.created_at)}</p>
@@ -754,7 +794,7 @@ function CardsTab() {
               <div key={a.id} className={`bg-card border rounded-2xl overflow-hidden ${canAct ? "border-gold/30" : "border-border/60"}`}>
                 {/* Header */}
                 <div className="px-4 py-3 flex items-center gap-3">
-                  <span className="text-2xl">{BRAND_EMOJI[a.brand] ?? "🎁"}</span>
+                  <BrandLogo brand={a.brand} className="size-11" />
                   <div className="flex-1">
                     <p className="text-sm font-bold">{a.brand}</p>
                     <p className="text-xs text-muted-foreground">{fmtUsd(a.amount_usd)} · {a.amount_ngn ? fmtNgn(a.amount_ngn) : "—"}</p>
