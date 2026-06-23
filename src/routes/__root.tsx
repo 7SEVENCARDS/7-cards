@@ -12,7 +12,6 @@ import { NetworkStatus } from "../components/NetworkStatus";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
-import { initSentryClient, captureClientException } from "../lib/sentry.client";
 
 function NotFoundComponent() {
   return (
@@ -40,7 +39,11 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   console.error(error);
   useEffect(() => {
     reportLovableError(error, { boundary: "tanstack_root_error_component" });
-    captureClientException(error, { boundary: "tanstack_root_error_component" }).catch(() => {});
+    import("../lib/sentry.client")
+      .then(({ captureClientException }) =>
+        captureClientException(error, { boundary: "tanstack_root_error_component" }),
+      )
+      .catch(() => {});
   }, [error]);
 
   return (
@@ -174,8 +177,9 @@ function RootComponent() {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
     }
-    // Init Sentry client-side error tracking (no-op if VITE_SENTRY_DSN not set).
-    initSentryClient().catch(() => {});
+    import("../lib/sentry.client")
+      .then(({ initSentryClient }) => initSentryClient())
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
