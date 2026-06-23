@@ -3,29 +3,29 @@
 // Seed Admin User
 //
 // 1. Creates (or updates) the admin Supabase auth account
-// 2. Upserts profiles.role = 'admin' via direct SQL (psql) if SUPABASE_DB_URL
-//    is set, with PostgREST as fallback
+// 2. Sets app_metadata.role = 'admin' (works immediately, no migrations needed)
+// 3. Upserts profiles.role = 'admin' via direct SQL if SUPABASE_DB_URL is set
 //
-// Required env vars (all stored as GitHub Secrets):
+// Required env vars (stored as GitHub Secrets):
 //   VITE_SUPABASE_URL        — Supabase project URL
 //   SUPABASE_SERVICE_ROLE_KEY — Service-role key (bypasses RLS)
 //   ADMIN_EMAIL              — Email the admin will log in with
 //   ADMIN_PASSWORD           — Password the admin will log in with
 //
-// Optional (enables direct-SQL path which avoids PostgREST schema-cache issues):
+// Optional (enables direct-SQL profiles upsert):
 //   SUPABASE_DB_URL          — postgres:// connection string
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { execSync } from "node:child_process";
 
-const SUPABASE_URL   = process.env.VITE_SUPABASE_URL?.replace(/\/$/, "");
-const SERVICE_KEY    = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const ADMIN_EMAIL    = process.env.ADMIN_EMAIL;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-const DB_URL         = process.env.SUPABASE_DB_URL; // optional
+const SUPABASE_URL    = process.env.VITE_SUPABASE_URL?.replace(/\/$/, "");
+const SERVICE_KEY     = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const ADMIN_EMAIL     = process.env.ADMIN_EMAIL;
+const ADMIN_PASSWORD  = process.env.ADMIN_PASSWORD;
+const DB_URL          = process.env.SUPABASE_DB_URL;
 
-const missing = ["VITE_SUPABASE_URL","SUPABASE_SERVICE_ROLE_KEY","ADMIN_EMAIL","ADMIN_PASSWORD"]
-  .filter(k => !process.env[k]);
+const missing = ["VITE_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "ADMIN_EMAIL", "ADMIN_PASSWORD"]
+  .filter((k) => !process.env[k]);
 if (missing.length) {
   console.error("✗ Missing required env vars:", missing.join(", "));
   process.exit(1);
@@ -37,8 +37,8 @@ const authHeaders = {
   "Content-Type": "application/json",
 };
 
-// ── 1. Create the auth user (auto-confirms email) ─────────────────────────────
-console.log(`\n[1/3] Creating auth user: ${ADMIN_EMAIL}`);
+// ── 1. Create or find the auth user ──────────────────────────────────────────
+console.log(`\n[1/4] Creating auth user: ${ADMIN_EMAIL}`);
 
 let userId = null;
 
@@ -57,7 +57,8 @@ if (createRes.ok) {
   userId = createData.id;
   console.log("✓ Created new auth user:", userId);
 } else {
-  console.log("  User already exists, searching by email…");
+  console.log("  User may already exist:", createData.msg || createData.message || JSON.stringify(createData));
+
   let page = 1;
   outer: while (true) {
     const listRes = await fetch(
@@ -71,8 +72,11 @@ if (createRes.ok) {
     const listData = await listRes.json();
     const users = listData.users ?? (Array.isArray(listData) ? listData : []);
     if (users.length === 0) break;
-    const found = users.find(u => u.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase());
-    if (found) { userId = found.id; break outer; }
+    const found = users.find((u) => u.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase());
+    if (found) {
+      userId = found.id;
+      break outer;
+    }
     if (users.length < 1000) break;
     page++;
   }
@@ -82,102 +86,74 @@ if (createRes.ok) {
     process.exit(1);
   }
   console.log("✓ Found existing user:", userId);
-
-  const updateRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
-    method: "PUT",
-    headers: authHeaders,
-    body: JSON.stringify({ password: ADMIN_PASSWORD, email_confirm: true }),
-  });
-  if (updateRes.ok) {
-    console.log("✓ Password updated and email confirmed");
-  } else {
-    console.warn("⚠ Could not update user:", await updateRes.text());
-  }
 }
 
-// ── 2. Upsert profiles.role = 'admin' ─────────────────────────────────────────
-console.log(`\n[2/3] Setting profiles.role = 'admin' for user ${userId}`);
+// ── 2. Update password + confirm email ───────────────────────────────────────
+console.log("\n[2/4] Updating password and confirming email…");
+const updateRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
+  method: "PUT",
+  headers: authHeaders,
+  body: JSON.stringify({
+    password: ADMIN_PASSWORD,
+    email_confirm: true,
+    app_metadata: { role: "admin" },
+  }),
+});
+if (updateRes.ok) {
+  console.log("✓ Password updated, email confirmed, app_metadata.role = 'admin' set");
+} else {
+  console.warn("⚠ User update returned:", await updateRes.text());
+}
 
+// ── 3. Upsert profiles.role = 'admin' via direct SQL (if DB URL available) ────
 if (DB_URL) {
-  // Direct SQL path — avoids PostgREST schema-cache issues
-  const sql = [
-    `INSERT INTO profiles (id, role, full_name)`,
-    `VALUES ('${userId}', 'admin', 'Admin')`,
-    `ON CONFLICT (id) DO UPDATE SET role = 'admin';`,
-  ].join(" ");
-
+  console.log("\n[3/4] Upserting profiles.role via direct SQL…");
+  const sql = `INSERT INTO profiles (id, role, full_name) VALUES ('${userId}', 'admin', 'Admin') ON CONFLICT (id) DO UPDATE SET role = 'admin';`;
   try {
     const out = execSync(`psql "$SUPABASE_DB_URL" -c "${sql}"`, {
       env: process.env,
       stdio: "pipe",
     }).toString();
-    console.log("✓ profiles.role = 'admin' set via direct SQL:", out.trim());
+    console.log("✓ profiles.role = 'admin' set via SQL:", out.trim());
   } catch (e) {
-    console.error("✗ Direct SQL failed:", e.stderr?.toString() || e.message);
-    process.exit(1);
-  }
-} else {
-  // PostgREST fallback
-  console.log("  (SUPABASE_DB_URL not set — using PostgREST REST API)");
-  const patchRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}`,
-    {
-      method: "PATCH",
-      headers: { ...authHeaders, Prefer: "return=representation" },
-      body: JSON.stringify({ role: "admin" }),
-    }
-  );
-  if (patchRes.ok) {
-    const rows = await patchRes.json();
-    if (rows.length > 0) {
-      console.log("✓ profiles.role = 'admin' updated via PATCH");
+    const msg = e.stderr?.toString() || e.message;
+    if (msg.includes("does not exist") || msg.includes("PGRST")) {
+      console.warn("⚠ profiles table not found — migrations not yet applied.");
+      console.warn("  app_metadata.role = 'admin' is set as fallback.");
     } else {
-      // Row didn't exist — insert
-      const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/profiles`, {
-        method: "POST",
-        headers: { ...authHeaders, Prefer: "return=minimal" },
-        body: JSON.stringify({ id: userId, role: "admin", full_name: "Admin" }),
-      });
-      if (insertRes.ok || insertRes.status === 201) {
-        console.log("✓ profiles row inserted with role = 'admin'");
-      } else {
-        console.error("✗ profiles INSERT failed:", await insertRes.text());
-        process.exit(1);
-      }
+      console.error("✗ Direct SQL failed:", msg);
+      process.exit(1);
     }
-  } else {
-    console.error("✗ PATCH profiles failed:", await patchRes.text());
-    console.error("  Hint: set SUPABASE_DB_URL secret to enable direct-SQL path.");
-    process.exit(1);
   }
-}
-
-// ── 3. Verify ─────────────────────────────────────────────────────────────────
-console.log(`\n[3/3] Verifying…`);
-
-let role = null;
-if (DB_URL) {
-  const out = execSync(
-    `psql "$SUPABASE_DB_URL" -t -c "SELECT role FROM profiles WHERE id = '${userId}';"`,
-    { env: process.env, stdio: "pipe" }
-  ).toString().trim();
-  role = out;
 } else {
-  const verRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=role`,
-    { headers: authHeaders }
-  );
-  const [row] = await verRes.json();
-  role = row?.role;
+  console.log("\n[3/4] Skipping profiles SQL upsert (SUPABASE_DB_URL not set)");
+  console.log("  app_metadata.role = 'admin' is set as fallback — admin routes will work.");
 }
 
-if (role?.trim() !== "admin") {
-  console.error("✗ Verification failed — role is:", JSON.stringify(role));
+// ── 4. Verify ─────────────────────────────────────────────────────────────────
+console.log("\n[4/4] Verifying…");
+const verifyRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
+  headers: authHeaders,
+});
+if (!verifyRes.ok) {
+  console.error("✗ Could not fetch user for verification");
   process.exit(1);
+}
+const verifyData = await verifyRes.json();
+const appRole = verifyData.app_metadata?.role;
+const emailConfirmed = !!verifyData.email_confirmed_at;
+
+if (appRole !== "admin") {
+  console.error("✗ Verification failed — app_metadata.role is:", JSON.stringify(appRole));
+  process.exit(1);
+}
+if (!emailConfirmed) {
+  console.warn("⚠ Email not yet confirmed — login may require email verification");
 }
 
 console.log("\n✅ Admin seeded successfully!");
-console.log("   Email:   ", ADMIN_EMAIL);
-console.log("   User ID: ", userId);
-console.log("   Role:     admin ✓");
+console.log("   Email:           ", ADMIN_EMAIL);
+console.log("   User ID:         ", userId);
+console.log("   app_metadata.role:", appRole, "✓");
+console.log("   Email confirmed: ", emailConfirmed ? "yes ✓" : "no (check Supabase dashboard)");
 console.log("\nLog in at: https://7evencards.xyz");
