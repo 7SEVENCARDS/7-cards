@@ -1,0 +1,195 @@
+name: Run Database Migrations
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type YES to confirm running migrations against production Supabase'
+        required: true
+        default: ''
+      dry_run:
+        description: 'Dry run — connect and list tables without applying changes'
+        type: boolean
+        default: false
+
+jobs:
+  migrate:
+    name: Apply SQL Migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Validate confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "YES" ]; then
+            echo "::error::You must type YES in the confirm field to run migrations."
+            exit 1
+          fi
+
+      - name: Install psql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client
+
+      - name: Test DB connection
+        env:
+          PGPASSWORD: unused
+        run: |
+          echo "Testing connection to Supabase..."
+          psql "${{ secrets.SUPABASE_DB_URL }}" -c "SELECT version();" -t
+          echo "Connection OK"
+
+      - name: Dry run — list current tables
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: |
+          echo "=== Current tables in public schema ==="
+          psql "${{ secrets.SUPABASE_DB_URL }}" -c "\dt public.*" || true
+          echo "=== Dry run complete — no changes applied ==="
+
+      - name: Apply base schema
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          echo "Applying supabase/schema.sql..."
+          psql "${{ secrets.SUPABASE_DB_URL }}" \
+            --set ON_ERROR_STOP=0 \
+            -f supabase/schema.sql
+          echo "schema.sql done"
+
+      - name: Apply migration 001 — subscriptions
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/001_subscriptions.sql && echo "001 done"
+
+      - name: Apply migration 002 — support_messages
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/002_support_messages.sql && echo "002 done"
+
+      - name: Apply migration 003 — complete_schema
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/003_complete_schema.sql && echo "003 done"
+
+      - name: Apply migration 004 — fix_constraints
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/004_fix_constraints.sql && echo "004 done"
+
+      - name: Apply migration 005 — admin_audit_log
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/005_admin_audit_log.sql && echo "005 done"
+
+      - name: Apply migration 006 — launch_fixes
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/006_launch_fixes.sql && echo "006 done"
+
+      - name: Apply migration 007 — crypto_ops
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/007_crypto_ops.sql && echo "007 done"
+
+      - name: Apply migration 008 — support_freescout
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/008_support_freescout.sql && echo "008 done"
+
+      - name: Apply migration 009 — vendor_network
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/009_vendor_network.sql && echo "009 done"
+
+      - name: Apply migration 010 — vendor_withdrawals
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/010_vendor_withdrawals.sql && echo "010 done"
+
+      - name: Apply migration 011 — vendor_referrals
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/011_vendor_referrals.sql && echo "011 done"
+
+      - name: Apply migration 012 — vendor_wallet_atomic_ops
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/012_vendor_wallet_atomic_ops.sql && echo "012 done"
+
+      - name: Apply migration 013 — vendor_security_deposit
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/013_vendor_security_deposit.sql && echo "013 done"
+
+      - name: Apply migration 014 — production_hardening
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/014_production_hardening.sql && echo "014 done"
+
+      - name: Apply migration 015 — telegram_broadcast
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/015_telegram_broadcast.sql && echo "015 done"
+
+      - name: Apply migration 016 — immutable_audit
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/016_immutable_audit.sql && echo "016 done"
+
+      - name: Apply migration 017 — vendor_rate_check
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/017_vendor_rate_check.sql && echo "017 done"
+
+      - name: Apply migration 018 — card_batch_dispatch
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/018_card_batch_dispatch.sql && echo "018 done"
+
+      - name: Apply migration 019 — vendor_rate_approval
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/019_vendor_rate_approval.sql && echo "019 done"
+
+      - name: Apply migration 020 — admin_telegram
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/020_admin_telegram.sql && echo "020 done"
+
+      - name: Apply migration 021 — api_tenants
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/021_api_tenants.sql && echo "021 done"
+
+      - name: Apply migration 022 — api_billing
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/022_api_billing.sql && echo "022 done"
+
+      - name: Apply migration 023 — multi_region_rates
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/023_multi_region_rates.sql && echo "023 done"
+
+      - name: Apply migration 024 — cybermonikers_avatars
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/024_cybermonikers_avatars.sql && echo "024 done"
+
+      - name: Apply migration 025 — ocr_scan_data
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/025_ocr_scan_data.sql && echo "025 done"
+
+      - name: Apply migration 026 — weekly_trade_commission
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/026_weekly_trade_commission.sql && echo "026 done"
+
+      - name: Apply migration 027 — card_images
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/027_card_images.sql && echo "027 done"
+
+      - name: Apply migration 028 — rbac_expansion
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/028_rbac_expansion.sql && echo "028 done"
+
+      - name: Apply migration 029 — wallet_ledger_reconciliation
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/029_wallet_ledger_reconciliation.sql && echo "029 done"
+
+      - name: Apply migration 030 — provider_operation_log
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/030_provider_operation_log.sql && echo "030 done"
+
+      - name: Apply migration 031 — ecosystem_excellence
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: psql "${{ secrets.SUPABASE_DB_URL }}" --set ON_ERROR_STOP=0 -f supabase/migrations/031_ecosystem_excellence.sql && echo "031 done"
+
+      - name: Verify final state
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          echo "=== Tables in public schema after migrations ==="
+          psql "${{ secrets.SUPABASE_DB_URL }}" -c "
+            SELECT tablename, tableowner
+            FROM pg_tables
+            WHERE schemaname = 'public'
+            ORDER BY tablename;
+          "
+          echo "=== Migration run complete ==="
