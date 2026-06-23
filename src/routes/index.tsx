@@ -1452,7 +1452,7 @@ function ProfileScreen({
 
       <div className="px-5 mt-6 space-y-2">
         <MenuItem icon={Trophy}      label="The Hustle League"  sub={`Level ${xp?.level ?? 1} · ${levelName} · ${(xp?.streakDays ?? 0)}d streak`} tint="text-gold"   onClick={onNavigateLeague} />
-        <MenuItem icon={Gift}        label="Invite Friends"     sub="You both earn ₦500 + XP bonus"  tint="text-pink"   onClick={onNavigateReferral} />
+        <MenuItem icon={Gift}        label="Referral Network"   sub="5% commission after 7 trades/month" tint="text-pink" onClick={onNavigateReferral} />
         <MenuItem icon={ShieldCheck} label="Security & KYC"     sub={profile?.kyc_status === "verified" ? "✅ Verified · Higher limits unlocked" : profile?.kyc_status === "submitted" ? "⏳ Under Review" : "Tap to verify — unlock $5,000 limit"} tint="text-cyan" onClick={onNavigateKYC} />
         <MenuItem icon={Wallet}      label="Payout Accounts"    sub="Manage bank accounts"           tint="text-orange" onClick={onNavigatePayout} />
         <MenuItem icon={MessageCircleIcon} label="Support & Help" sub={profile?.premium ? "Priority · replies in 1 hour" : "24/7 AI · 1-day human reply"} tint="text-gold" onClick={onNavigateSupport} />
