@@ -36,6 +36,9 @@ const OPTIONAL_SECRETS = [
   "RESEND_API_KEY",
   "DOJAH_APP_ID",
   "DOJAH_SECRET_KEY",
+  "MONO_SECRET_KEY",
+  "MONO_PUBLIC_KEY",
+  "GEMINI_API_KEY",
 ] as const;
 
 let startupChecked = false;
@@ -79,17 +82,36 @@ async function normalizeCatastrophicSsrResponse(response: Response): Promise<Res
   if (!contentType.includes("application/json")) return response;
 
   const body = await response.clone().text();
-  if (!body.includes('"unhandled":true') || !body.includes('"message":"HTTPError"')) {
-    return response;
+
+  // Case 1: h3 unhandled SSR catastrophic error — render friendly error page.
+  if (body.includes('"unhandled":true') && body.includes('"message":"HTTPError"')) {
+    const ssrErr = consumeLastCapturedError() ?? new Error(`h3 swallowed SSR error: ${body}`);
+    captureServerException(ssrErr, { type: "ssr_catastrophic" });
+    console.error(ssrErr);
+    return new Response(renderErrorPage(), {
+      status: 500,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
   }
 
-  const ssrErr = consumeLastCapturedError() ?? new Error(`h3 swallowed SSR error: ${body}`);
-  captureServerException(ssrErr, { type: "ssr_catastrophic" });
-  console.error(ssrErr);
-  return new Response(renderErrorPage(), {
-    status: 500,
-    headers: { "content-type": "text/html; charset=utf-8" },
-  });
+  // Case 2: h3/Nitro sometimes promotes a 422 or 429 server-function error to HTTP 500
+  // with the real statusCode embedded in the JSON body. Demote to the correct status
+  // so clients receive 422/429 instead of a misleading 500.
+  try {
+    const parsed = JSON.parse(body) as { statusCode?: number; statusMessage?: string; message?: string };
+    const embedded = parsed.statusCode ?? 0;
+    if (embedded === 429 || embedded === 422) {
+      const msg = parsed.statusMessage ?? parsed.message ?? "Request rejected";
+      return new Response(
+        JSON.stringify({ error: msg, statusCode: embedded }),
+        { status: embedded, headers: { "content-type": "application/json" } },
+      );
+    }
+  } catch {
+    // Body is not valid JSON with statusCode — keep the original 500.
+  }
+
+  return response;
 }
 
 function tooManyRequests(retryAfterSecs = 60): Response {

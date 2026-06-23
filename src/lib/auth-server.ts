@@ -239,7 +239,7 @@ export async function logAdminAction(
 // Validates session AND confirms the caller has a row in the vendors table.
 // Returns the authenticated user's UUID.
 // Throws AuthError (401) if not authenticated.
-// Throws ForbiddenError (403) if authenticated but not a vendor, or suspended.
+// Throws ForbiddenError (403) if authenticated but not a vendor, or not active.
 
 export async function requireVendorAuth(): Promise<string> {
   const userId = await requireUser();
@@ -254,9 +254,15 @@ export async function requireVendorAuth(): Promise<string> {
   if (!vendor) {
     throw new ForbiddenError("Vendor account required");
   }
-
-  if (vendor.status === "suspended") {
-    throw new ForbiddenError("Vendor account is suspended");
+  // Strict active-only check — pending approval or suspended must not pass.
+  if (vendor.status !== "active") {
+    const msg =
+      vendor.status === "pending"
+        ? "Vendor account is pending approval — contact support."
+        : vendor.status === "suspended"
+        ? "Vendor account is suspended — contact support."
+        : "Vendor account is not active.";
+    throw new ForbiddenError(msg);
   }
 
   return userId;

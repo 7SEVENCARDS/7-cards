@@ -1,17 +1,51 @@
 import { describe, it, expect } from "vitest";
 
 // ─── Cookie token extraction logic (re-implemented for unit testing) ───────────
-// Mirrors extractAccessToken in auth-server.ts
+// Mirrors extractAccessToken in auth-server.ts exactly — kept in sync manually.
+// Handles both the unchunked form and the chunked form Supabase uses for large JWTs.
 
-function extractAccessToken(cookieHeader: string): string | null {
-  const tokenMatch = cookieHeader.match(/sb-[^-]+-auth-token=([^;]+)/);
-  if (!tokenMatch) return null;
+function parseTokenJson(raw: string): string | null {
   try {
-    const raw = decodeURIComponent(tokenMatch[1]);
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed)
       ? (parsed[0]?.access_token ?? null)
       : (parsed?.access_token ?? null);
+  } catch {
+    return null;
+  }
+}
+
+function extractAccessToken(cookieHeader: string): string | null {
+  // 1. Try the unchunked cookie: sb-<ref>-auth-token=<value>
+  const unchunkedMatch = cookieHeader.match(/sb-[A-Za-z0-9]+-auth-token=([^;]+)/);
+  if (unchunkedMatch) {
+    const token = parseTokenJson(decodeURIComponent(unchunkedMatch[1]));
+    if (token) return token;
+  }
+
+  // 2. Detect chunked cookies: sb-<ref>-auth-token.N=<value>
+  const chunkNameMatch = cookieHeader.match(/sb-([A-Za-z0-9]+)-auth-token.d+=/);
+  if (!chunkNameMatch) return null;
+
+  const projectRef = chunkNameMatch[1];
+  const chunkMap = new Map<number, string>();
+
+  for (const segment of cookieHeader.split(';')) {
+    const eqIdx = segment.indexOf('=');
+    if (eqIdx === -1) continue;
+    const name  = segment.slice(0, eqIdx).trim();
+    const value = segment.slice(eqIdx + 1).trim();
+    const m = name.match(new RegExp(`^sb-${projectRef}-auth-token\\.(\\d+)import { describe, it, expect } from "vitest";
+
+));
+    if (m) chunkMap.set(parseInt(m[1], 10), value);
+  }
+
+  if (chunkMap.size === 0) return null;
+
+  try {
+    const joined = Array.from({ length: chunkMap.size }, (_, i) => chunkMap.get(i) ?? '').join('');
+    return parseTokenJson(decodeURIComponent(joined));
   } catch {
     return null;
   }
@@ -65,6 +99,14 @@ describe("extractAccessToken", () => {
     );
     const cookie = `session_id=abc; sb-xyzabc-auth-token=${payload}; theme=dark`;
     expect(extractAccessToken(cookie)).toBe("tok_multi");
+  });
+  it("reassembles a two-chunk chunked Supabase cookie", () => {
+    const full = JSON.stringify({ access_token: "tok_chunked_xyz" });
+    const mid = Math.ceil(full.length / 2);
+    const c0 = encodeURIComponent(full.slice(0, mid));
+    const c1 = encodeURIComponent(full.slice(mid));
+    const cookie = `sb-abc123-auth-token.0=${c0}; sb-abc123-auth-token.1=${c1}`;
+    expect(extractAccessToken(cookie)).toBe("tok_chunked_xyz");
   });
 });
 
