@@ -260,12 +260,14 @@ function App() {
             onWithdraw={() => setTab("withdraw")}
             onHistory={() => setTab("history")}
             onLeague={() => setTab("league")}
+            onWallet={() => setTab("wallet")}
             userName={userName}
             ngnBalance={ngnBalance}
             recentTrades={recentTrades as TradeRow[]}
             bestRate={getRateForBrand("Apple")}
             xp={xp as XPData | undefined}
             unreadCount={unreadCount}
+            userId={user?.id ?? ""}
           />
         )}
         {tab === "sell" && (
@@ -476,13 +478,20 @@ function timeAgo(iso: string): string {
 }
 
 function HomeScreen({
-  onSell, onNotifications, onWithdraw, onHistory, onLeague, userName, ngnBalance, recentTrades, bestRate, xp, unreadCount,
+  onSell, onNotifications, onWithdraw, onHistory, onLeague, onWallet, userName, ngnBalance, recentTrades, bestRate, xp, unreadCount, userId,
 }: {
-  onSell: () => void; onNotifications: () => void; onWithdraw: () => void; onHistory: () => void; onLeague: () => void;
-  userName: string; ngnBalance: number; recentTrades: TradeRow[]; bestRate: number; xp?: XPData; unreadCount: number;
+  onSell: () => void; onNotifications: () => void; onWithdraw: () => void; onHistory: () => void; onLeague: () => void; onWallet: () => void;
+  userName: string; ngnBalance: number; recentTrades: TradeRow[]; bestRate: number; xp?: XPData; unreadCount: number; userId: string;
 }) {
   const [hideBalance, setHideBalance] = useState(false);
   const [showCryptoSoon, setShowCryptoSoon] = useState(false);
+
+  const { data: earnings } = useQuery<EarningsData>({
+    queryKey:  ["earnings-history", userId],
+    queryFn:   () => getEarningsHistory({ data: { userId } }),
+    staleTime: 120_000,
+    enabled:   !!userId,
+  });
 
   const levelName = (xp?.level ?? 1) >= 15 ? "Boss" : (xp?.level ?? 1) >= 10 ? "Pro" : "Rookie";
   const xpToNext = ((xp?.level ?? 1) + 1) * 1000;
@@ -619,6 +628,48 @@ function HomeScreen({
           ))}
         </div>
       </div>
+
+      {/* Thursday Commission Nudge */}
+      {earnings && (
+        <div className="px-5 mt-5">
+          <button
+            onClick={onWallet}
+            className={`w-full rounded-2xl p-4 border flex items-center gap-3 active:scale-[0.98] transition text-left ${
+              earnings.eligibleThisWeek
+                ? "bg-jungle/20 border-cyan/30"
+                : "bg-card border-border"
+            }`}
+          >
+            <div className={`size-10 rounded-xl grid place-items-center shrink-0 ${earnings.eligibleThisWeek ? "bg-cyan/20" : "bg-secondary"}`}>
+              <CalendarClock className={`size-4 ${earnings.eligibleThisWeek ? "text-cyan" : "text-muted-foreground"}`} />
+            </div>
+            <div className="flex-1 min-w-0">
+              {earnings.eligibleThisWeek ? (
+                <>
+                  <p className="text-sm font-extrabold text-cyan">₦500 Payout This Thursday! 🎉</p>
+                  <p className="text-[11px] text-muted-foreground">You've qualified — paid at 7pm every Thursday</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-bold">Earn ₦500 This Thursday</p>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <div className="flex-1 h-1 bg-secondary rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-gold to-amber-400 rounded-full"
+                        style={{ width: `${Math.min(100, (earnings.weeklyVolumeNgn / 7000) * 100)}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] text-muted-foreground shrink-0">
+                      ₦{earnings.weeklyVolumeNgn.toLocaleString()} / ₦7,000
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+            <ChevronRight className="size-4 text-muted-foreground shrink-0" />
+          </button>
+        </div>
+      )}
 
       {/* Best rates carousel */}
       <div className="px-5 mt-7">
