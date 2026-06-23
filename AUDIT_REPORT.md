@@ -482,6 +482,18 @@ curl https://7evencards.xyz/api/health
 | 9 | `src/server-functions/trades.ts` | Atomic CAS double-spend protection in `processPayout` | 6 | P1 |
 | 10 | `src/server-functions/vendors.ts` | Vendor performance scoring engine (3 new endpoints) | 7 | P2 |
 | 11 | `.github/workflows/deploy.yml` | Node.js 20 → 24 (deprecation fix) | 5 | P3 |
+| 12 | `src/server-functions/trades.ts` | `requireVendorAuth()` on vendor-only endpoints | — | P0 |
+| 13 | `src/server-functions/vendors.ts` | `requireAdmin()` on `refreshExchangeRates` | — | P0 |
+| 14 | `src/lib/onesignal.ts` + `telegram.ts` | `fetchWithTimeout` on all external notification calls | — | P1 |
+| 15 | `wrangler.toml` | `NODE_ENV=production` + `IS_DEMO_MODE=false` vars | — | P2 |
+| 16 | `src/server-functions/trades.ts` | `pending_review` status gate — admin must approve before payout | — | P0 |
+| 17 | `src/server-functions/kyc.ts` | Replaced `process.env.NODE_ENV` with `getEnv("IS_DEMO_MODE")` (×2) | — | P0 |
+| 18 | `src/server-functions/crypto.ts` | Replaced `process.env.NODE_ENV` with `getEnv("IS_DEMO_MODE")` (×2) | — | P0 |
+| 19 | `src/server-functions/premium.ts` | Replaced `process.env.NODE_ENV` with `getEnv("IS_DEMO_MODE")` (×2) | — | P0 |
+| 20 | `src/server-functions/payout-accounts.ts` | Replaced `process.env.NODE_ENV` with `getEnv("IS_DEMO_MODE")` | — | P0 |
+| 21 | `src/server-functions/vendors.ts` | Replaced `process.env.NODE_ENV` with `getEnv("IS_DEMO_MODE")` | — | P0 |
+| 22 | `src/lib/db-helpers.ts` | Replaced hardcoded `1485` with `DEFAULT_NGN_RATE` from `constants.ts` (×2) | — | P2 |
+| 23 | `7cards/` | Removed orphaned folder (3 dead scaffold files) | — | P2 |
 
 ---
 
