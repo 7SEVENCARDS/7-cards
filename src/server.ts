@@ -3,7 +3,7 @@ import "./lib/error-capture";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
 import { initWorkerEnv, getEnv } from "./lib/worker-env";
-import { initSentryServer, captureServerException } from "./lib/sentry.server";
+import { initSentryServer, captureServerException, startServerSpan } from "./lib/sentry.server";
 import {
   handleSquadPayoutWebhook,
   handleSquadPaymentWebhook,
@@ -216,7 +216,10 @@ export default {
       });
       try {
         const handler = await getServerEntry();
-        const response = await handler.fetch(rewrittenReq, env, ctx);
+        const response = await startServerSpan(
+          { name: `SSR ${request.method} vendor`, op: "http.server" },
+          () => handler.fetch(rewrittenReq, env, ctx),
+        );
         const normalized = await normalizeCatastrophicSsrResponse(response);
         return addSecurityHeaders(normalized, requestId);
       } catch (error) {
@@ -261,7 +264,10 @@ export default {
       });
       try {
         const handler = await getServerEntry();
-        const response = await handler.fetch(rewrittenReq, env, ctx);
+        const response = await startServerSpan(
+          { name: `SSR ${request.method} admin`, op: "http.server" },
+          () => handler.fetch(rewrittenReq, env, ctx),
+        );
         const normalized = await normalizeCatastrophicSsrResponse(response);
         return addSecurityHeaders(normalized, requestId);
       } catch (error) {
@@ -452,7 +458,10 @@ export default {
     // ── All other routes → TanStack React Start ─────────────────────────────
     try {
       const handler = await getServerEntry();
-      const response = await handler.fetch(request, env, ctx);
+      const response = await startServerSpan(
+        { name: `SSR ${request.method} ${url.pathname}`, op: "http.server" },
+        () => handler.fetch(request, env, ctx),
+      );
       const normalized = await normalizeCatastrophicSsrResponse(response);
       return addSecurityHeaders(normalized, requestId);
     } catch (error) {

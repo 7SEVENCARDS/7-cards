@@ -39,8 +39,22 @@ export async function initSentryClient(): Promise<void> {
     environment: import.meta.env.MODE === "production" ? "production" : "development",
     // Tag every event with the git SHA so Sentry can correlate issues to deploys.
     release: (import.meta.env.VITE_SENTRY_RELEASE as string | undefined) ?? undefined,
-    // Error capture only — no performance tracing or session replay.
-    tracesSampleRate: 0,
+    integrations: [
+      // Instruments page loads, navigations, and server function fetch calls.
+      // Connects client traces to server traces via sentry-trace headers on
+      // requests to 7evencards.xyz so you can see the full client→server waterfall.
+      Sentry.browserTracingIntegration(),
+    ],
+    // 1% performance sampling — captures real user navigation and page-load
+    // latency without noticeable overhead.
+    tracesSampleRate: 0.01,
+    // Propagate trace context on requests to 7evencards.xyz so client spans
+    // link to server spans in Sentry's trace view.
+    tracePropagationTargets: [
+      "7evencards.xyz",
+      "vendor.7evencards.xyz",
+      /^\/api\//,
+    ],
     replaysSessionSampleRate: 0,
     replaysOnErrorSampleRate: 0,
     ignoreErrors: ["AbortError", "Network request failed", "NetworkError"],
