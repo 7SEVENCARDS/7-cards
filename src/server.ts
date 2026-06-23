@@ -479,6 +479,7 @@ export default {
           critical,
           optional,
           db: { ok: dbOk, latencyMs: dbLatencyMs, error: dbError },
+          env: { node_env: getEnv("NODE_ENV") ?? null, is_demo_mode: (getEnv("IS_DEMO_MODE") ?? "false") === "true" },
         }), {
           status: allOk ? 200 : 503,
           headers: { "Content-Type": "application/json" },
