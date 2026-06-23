@@ -26,12 +26,15 @@ import {
   ShieldCheck,
   Sparkles,
   Trophy,
+  TrendingUp,
   User,
   Wallet,
   XCircle,
   Zap,
   LogOut,
   MessageCircle as MessageCircleIcon,
+  CalendarClock,
+  Users,
 } from "lucide-react";
 
 
@@ -61,7 +64,8 @@ import { supabase } from "../lib/supabase";
 import { createTrade, verifyGiftCard, processPayout, submitCardBatch, getTradeLimits } from "../server-functions/trades";
 import { getKYCStatus } from "../server-functions/kyc";
 import { lookupAccount, addPayoutAccount } from "../server-functions/payout-accounts";
-import { requestUserWithdrawal } from "../server-functions/wallet";
+import { requestUserWithdrawal, getEarningsHistory } from "../server-functions/wallet";
+import type { EarningsData } from "../server-functions/wallet";
 
 export const Route = createFileRoute("/")({
   component: App,
@@ -324,6 +328,7 @@ function App() {
           <WalletScreen
             wallets={wallets as WalletData[]}
             recentTrades={recentTrades as TradeRow[]}
+            userId={user?.id ?? ""}
             onViewHistory={() => setTab("history")}
             onWithdraw={() => setTab("withdraw")}
           />
@@ -1193,12 +1198,19 @@ function Badge({ icon, label, sub, earned }: { icon: string; label: string; sub:
 /* ─────────────────────────────────── WALLET ─────────────────────────────────── */
 
 function WalletScreen({
-  wallets, recentTrades, onViewHistory, onWithdraw,
+  wallets, recentTrades, userId, onViewHistory, onWithdraw,
 }: {
-  wallets: WalletData[]; recentTrades: TradeRow[]; onViewHistory: () => void; onWithdraw: () => void;
+  wallets: WalletData[]; recentTrades: TradeRow[]; userId: string; onViewHistory: () => void; onWithdraw: () => void;
 }) {
   const [activeTab, setActiveTab] = useState(0);
   const [showCryptoSoon, setShowCryptoSoon] = useState(false);
+
+  const { data: earnings, isLoading: earningsLoading } = useQuery<EarningsData>({
+    queryKey: ["earnings-history", userId],
+    queryFn:  () => getEarningsHistory({ data: { userId } }),
+    staleTime: 60_000,
+    enabled:   !!userId,
+  });
 
   const ngnWallet = wallets.find((w) => w.currency === "NGN");
   const ngnBalance = Number(ngnWallet?.balance ?? 0);
@@ -1274,7 +1286,7 @@ function WalletScreen({
       {/* Tabs */}
       <div className="px-5">
         <div className="flex gap-2 bg-card p-1 rounded-2xl border border-border">
-          {["Assets", "Activity"].map((t, i) => (
+          {["Assets", "Activity", "Earnings"].map((t, i) => (
             <button
               key={t}
               onClick={() => setActiveTab(i)}
@@ -1357,6 +1369,101 @@ function WalletScreen({
               <div>
                 <p className="text-sm font-extrabold">No activity yet</p>
                 <p className="text-xs text-muted-foreground mt-1">Completed trades appear here</p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Earnings */}
+      {activeTab === 2 && (
+        <div className="px-5 mt-4 space-y-3">
+
+          {/* Next payout banner */}
+          {earningsLoading ? (
+            <div className="h-24 bg-card rounded-3xl border border-border animate-pulse" />
+          ) : earnings ? (
+            <div className={`rounded-3xl p-4 border ${earnings.eligibleThisWeek ? "bg-jungle/20 border-cyan/30" : "bg-card border-border"}`}>
+              <div className="flex items-center gap-3">
+                <div className={`size-11 rounded-2xl grid place-items-center ${earnings.eligibleThisWeek ? "bg-cyan/20" : "bg-secondary"}`}>
+                  <CalendarClock className={`size-5 ${earnings.eligibleThisWeek ? "text-cyan" : "text-muted-foreground"}`} />
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-extrabold">
+                    {earnings.eligibleThisWeek ? "₦500 Coming Thursday! 🎉" : "Earn ₦500 This Thursday"}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    {earnings.eligibleThisWeek
+                      ? `You've traded ₦${earnings.weeklyVolumeNgn.toLocaleString()} this week — payout at 7pm on Thursday`
+                      : "Trade ₦7,000+ this week to qualify for the Thursday payout"}
+                  </p>
+                </div>
+                {earnings.eligibleThisWeek && (
+                  <div className="text-right shrink-0">
+                    <p className="text-xl font-extrabold text-cyan">₦500</p>
+                    <p className="text-[9px] text-cyan/60 font-semibold">incoming</p>
+                  </div>
+                )}
+              </div>
+              {!earnings.eligibleThisWeek && (
+                <div className="mt-3 bg-secondary rounded-xl h-1.5 overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-gold to-amber-400 rounded-full transition-all"
+                    style={{ width: `${Math.min(100, (earnings.weeklyVolumeNgn / 7000) * 100)}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {/* Total lifetime earnings */}
+          {earnings && earnings.totalEarnedNgn > 0 && (
+            <div className="bg-card rounded-3xl border border-border p-4 flex items-center gap-3">
+              <div className="size-11 rounded-2xl bg-gold/15 grid place-items-center">
+                <TrendingUp className="size-5 text-gold" />
+              </div>
+              <div className="flex-1">
+                <p className="text-xs text-muted-foreground font-semibold">Total Commission Earned</p>
+                <p className="text-lg font-extrabold text-gold">₦{earnings.totalEarnedNgn.toLocaleString()}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Timeline */}
+          {earningsLoading ? (
+            [...Array(3)].map((_, i) => (
+              <div key={i} className="h-16 bg-card rounded-2xl border border-border animate-pulse" />
+            ))
+          ) : earnings && earnings.entries.length > 0 ? (
+            <>
+              <p className="text-xs text-muted-foreground font-bold uppercase tracking-wider">Commission History</p>
+              {earnings.entries.map((e) => (
+                <div key={e.id} className="bg-card rounded-2xl border border-border/60 p-4 flex items-center gap-3">
+                  <div className={`size-10 rounded-xl grid place-items-center shrink-0 ${e.type === "weekly_commission" ? "bg-gold/15" : "bg-cyan/15"}`}>
+                    {e.type === "weekly_commission"
+                      ? <CalendarClock className="size-4 text-gold" />
+                      : <Users className="size-4 text-cyan" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold truncate">{e.label}</p>
+                    <p className="text-[11px] text-muted-foreground">{e.sub}</p>
+                  </div>
+                  <p className={`text-sm font-extrabold shrink-0 ${e.type === "weekly_commission" ? "text-gold" : "text-cyan"}`}>
+                    +₦{e.amount_ngn.toLocaleString()}
+                  </p>
+                </div>
+              ))}
+            </>
+          ) : (
+            <div className="flex flex-col items-center gap-3 py-10 text-center">
+              <div className="size-16 rounded-3xl bg-card border border-border grid place-items-center">
+                <TrendingUp className="size-8 text-muted-foreground" />
+              </div>
+              <div>
+                <p className="text-sm font-bold">No earnings yet</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Trade ₦7,000+ this week for your first ₦500 Thursday payout
+                </p>
               </div>
             </div>
           )}
