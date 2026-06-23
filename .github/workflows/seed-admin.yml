@@ -17,10 +17,25 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Install PostgreSQL client
+        run: sudo apt-get install -y postgresql-client
+
+      - name: Apply database migrations
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          echo "Running migrations against Supabase database..."
+          for f in $(ls supabase/migrations/*.sql | grep -v COMBINED | sort); do
+            echo "  → $(basename $f)"
+            psql "$SUPABASE_DB_URL" -f "$f" 2>&1 | grep -vE "^(NOTICE|SET|CREATE|ALTER|INSERT|UPDATE|DROP|GRANT|REVOKE|BEGIN|COMMIT|DO)" || true
+          done
+          echo "✓ Migrations complete"
+
       - name: Seed admin user
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
         run: node scripts/seed-admin.mjs
