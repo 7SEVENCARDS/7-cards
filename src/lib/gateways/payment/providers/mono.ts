@@ -9,8 +9,8 @@
 // MONO_SECRET_KEY is set. Payment ops will fall back to Squad.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { getEnv } from "../../worker-env";
-import { fetchWithTimeout } from "../../fetch-with-timeout";
+import { getEnv } from "../../../worker-env";
+import { fetchWithTimeout } from "../../../fetch-with-timeout";
 import type {
   PaymentProvider,
   AccountLookupParams,

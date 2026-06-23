@@ -5,7 +5,7 @@
 // Env:  SQUADCO_SECRET_KEY, SQUADCO_ENV
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { getEnv } from "../../worker-env";
+import { getEnv } from "../../../worker-env";
 import type {
   PaymentProvider,
   AccountLookupParams,
@@ -27,7 +27,7 @@ export class SquadProvider implements PaymentProvider {
   }
 
   async lookupBankAccount(params: AccountLookupParams): Promise<AccountLookupResult> {
-    const { lookupBankAccount } = await import("../../squadco");
+    const { lookupBankAccount } = await import("../../../squadco");
     const raw = await lookupBankAccount(params);
     return {
       accountName: raw.account_name,
@@ -37,12 +37,12 @@ export class SquadProvider implements PaymentProvider {
   }
 
   async initiatePayout(params: PayoutParams): Promise<PayoutResult> {
-    const { initiatePayout } = await import("../../squadco");
+    const { initiatePayout } = await import("../../../squadco");
     return initiatePayout(params);
   }
 
   async getPayoutStatus(transactionRef: string): Promise<PayoutStatusResult> {
-    const { getPayoutStatus } = await import("../../squadco");
+    const { getPayoutStatus } = await import("../../../squadco");
     const raw = await getPayoutStatus(transactionRef);
     const status = (raw.status?.toLowerCase() ?? "pending") as PayoutStatusResult["status"];
     return {
@@ -53,7 +53,7 @@ export class SquadProvider implements PaymentProvider {
   }
 
   async createPaymentLink(params: PaymentLinkParams): Promise<PaymentLinkResult> {
-    const { createPaymentLink } = await import("../../squadco");
+    const { createPaymentLink } = await import("../../../squadco");
     return createPaymentLink(params);
   }
 }

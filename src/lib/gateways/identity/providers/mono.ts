@@ -10,8 +10,8 @@
 // MONO_SECRET_KEY is set in GitHub Secrets / Cloudflare environment.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { getEnv } from "../../worker-env";
-import { fetchWithTimeout } from "../../fetch-with-timeout";
+import { getEnv } from "../../../worker-env";
+import { fetchWithTimeout } from "../../../fetch-with-timeout";
 import type {
   IdentityProvider,
   BVNLookupResult,

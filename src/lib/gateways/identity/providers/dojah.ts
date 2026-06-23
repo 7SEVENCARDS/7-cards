@@ -5,7 +5,7 @@
 // Env:  DOJAH_APP_ID, DOJAH_SECRET_KEY
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { getEnv } from "../../worker-env";
+import { getEnv } from "../../../worker-env";
 import type {
   IdentityProvider,
   BVNLookupResult,
@@ -28,7 +28,7 @@ export class DojahProvider implements IdentityProvider {
   }
 
   async verifyBVN(bvn: string): Promise<BVNLookupResult> {
-    const { lookupBVN } = await import("../../dojah");
+    const { lookupBVN } = await import("../../../dojah");
     const raw = await lookupBVN(bvn);
     return {
       bvn: raw.bvn,
@@ -43,7 +43,7 @@ export class DojahProvider implements IdentityProvider {
   }
 
   async verifyNIN(nin: string): Promise<NINLookupResult> {
-    const { lookupNIN } = await import("../../dojah");
+    const { lookupNIN } = await import("../../../dojah");
     const raw = await lookupNIN(nin);
     return {
       nin: raw.nin,
