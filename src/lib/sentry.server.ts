@@ -25,6 +25,8 @@ export function initSentryServer(): void {
   Sentry.init({
     dsn,
     environment: getEnv("NODE_ENV") === "production" ? "production" : "development",
+    // Tag every event with the git SHA so Sentry can correlate issues to deploys.
+    release: getEnv("SENTRY_RELEASE") ?? undefined,
     // Disable performance tracing — error capture only.
     tracesSampleRate: 0,
     // Suppress noisy operational errors that don't need investigation.

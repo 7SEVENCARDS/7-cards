@@ -5,6 +5,7 @@
 //     error logger plugins, and sandbox detection (port/host/strictPort).
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
+import { sentryVitePlugin } from "@sentry/vite-plugin";
 
 export default defineConfig({
   // Force the Nitro/Cloudflare Workers build outside the Lovable sandbox (e.g. GitHub Actions).
@@ -17,6 +18,13 @@ export default defineConfig({
     server: { entry: "server" },
   },
   vite: {
+    build: {
+      // "hidden" source maps: .map files are generated but the sourceMappingURL comment is
+      // omitted from the output bundle, so maps are never served to end-users.
+      // @sentry/vite-plugin uploads them to Sentry and deletes the files afterwards —
+      // stack traces in Sentry will show original TypeScript line numbers.
+      sourcemap: "hidden",
+    },
     // pnpm virtual store (.pnpm/) can cause Rollup to lose track of sub-dependencies
     // (e.g. @tanstack/query-core inside @tanstack/react-query) during the Nitro SSR
     // bundling phase. resolve.dedupe forces a single instance and ssr.noExternal ensures
@@ -41,5 +49,30 @@ export default defineConfig({
         "@tanstack/history",
       ],
     },
+    plugins: [
+      // ── Sentry source map upload ─────────────────────────────────────────────
+      // Only active when SENTRY_AUTH_TOKEN is present (CI / production builds).
+      // Uploads .map files to Sentry (org: 7even, project: node-cloudflare-workers),
+      // tags the release with the git SHA for issue–deploy correlation, then removes
+      // every .map file so no source maps are ever deployed to the public CDN.
+      ...(process.env.SENTRY_AUTH_TOKEN
+        ? [
+            sentryVitePlugin({
+              org:       process.env.SENTRY_ORG     ?? "7even",
+              project:   process.env.SENTRY_PROJECT ?? "node-cloudflare-workers",
+              authToken: process.env.SENTRY_AUTH_TOKEN,
+              release: {
+                name: process.env.SENTRY_RELEASE ?? "dev",
+              },
+              telemetry: false,
+              sourcemaps: {
+                assets: ["dist/**/*.map", ".output/**/*.map"],
+                // Delete .map files after upload — they must not reach the Worker bundle.
+                filesToDeleteAfterUpload: ["dist/**/*.map", ".output/**/*.map"],
+              },
+            }),
+          ]
+        : []),
+    ],
   },
 });

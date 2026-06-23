@@ -37,6 +37,8 @@ export async function initSentryClient(): Promise<void> {
   Sentry.init({
     dsn,
     environment: import.meta.env.MODE === "production" ? "production" : "development",
+    // Tag every event with the git SHA so Sentry can correlate issues to deploys.
+    release: (import.meta.env.VITE_SENTRY_RELEASE as string | undefined) ?? undefined,
     // Error capture only — no performance tracing or session replay.
     tracesSampleRate: 0,
     replaysSessionSampleRate: 0,
