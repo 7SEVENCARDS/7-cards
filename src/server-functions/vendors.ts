@@ -728,7 +728,7 @@ export const provisionVirtualAccount = createServerFn({ method: "POST" })
     // Set SQUADCO_DEMO=true for local dev/sandbox testing only.
     if (!accountNumber) {
       const isDemoMode =
-        getEnv("SQUADCO_DEMO") === "true" && process.env.NODE_ENV !== "production";
+        getEnv("SQUADCO_DEMO") === "true" && getEnv("IS_DEMO_MODE") === "true";
       if (!isDemoMode) {
         throw new Error(
           "Virtual account creation failed — Squad API unavailable. Check SQUADCO_SECRET_KEY and Squad dashboard."
