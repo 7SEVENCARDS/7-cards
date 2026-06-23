@@ -75,6 +75,11 @@ export default defineConfig({
                 // Delete .map files after upload -- must not reach the Worker bundle.
                 filesToDeleteAfterUpload: ["dist/**/*.map", ".output/**/*.map"],
               },
+              // Non-fatal: Sentry API unavailability (e.g. 504) must never block a deploy.
+              // Source map upload is best-effort; the app deploys regardless.
+              errorHandler: (err) => {
+                console.warn("[sentry-vite-plugin] Upload failed (non-fatal):", err.message);
+              },
             }),
           ]
         : []),
