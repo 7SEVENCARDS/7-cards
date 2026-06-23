@@ -33,6 +33,7 @@ import {
   UserCheck,
   UserX,
   Star,
+  Activity,
 } from "lucide-react";
 import {
   getAdminStats,
@@ -70,7 +71,7 @@ import {
   adminRegisterVendor,
 } from "../server-functions/vendors";
 
-type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors" | "audit";
+type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors" | "audit" | "system";
 
 type Props = {
   adminId: string;
@@ -2075,6 +2076,191 @@ function VendorsTab({ adminId }: { adminId: string }) {
   );
 }
 
+// ─── System Health Tab ────────────────────────────────────────────────────────
+type HealthPayload = {
+  ok: boolean;
+  ts: number;
+  critical: Record<string, boolean>;
+  optional: Record<string, boolean>;
+};
+
+const SERVICE_LABELS: Record<string, string> = {
+  supabase:       "Supabase (DB + Auth)",
+  squadco:        "Squad (Payments)",
+  reloadly:       "Reloadly (Card Verify)",
+  busha:          "Busha (Crypto)",
+  onesignal:      "OneSignal (Push)",
+  app_secret:     "App Secret (Sessions)",
+  cron:           "Cron Secret (Scheduler)",
+  telegram:       "Telegram Bot (Vendor)",
+  admin_telegram: "Telegram Bot (Admin)",
+  resend:         "Resend (Email)",
+  dojah:          "Dojah (KYC / BVN)",
+};
+
+const SERVICE_DOCS: Record<string, string> = {
+  dojah:          "app.dojah.io → Apps → API Keys → add DOJAH_APP_ID + DOJAH_SECRET_KEY to GitHub Secrets",
+  resend:         "resend.com/api-keys → add RESEND_API_KEY to GitHub Secrets",
+  telegram:       "BotFather → add TELEGRAM_BOT_TOKEN + TELEGRAM_WEBHOOK_SECRET to GitHub Secrets",
+  admin_telegram: "BotFather → add ADMIN_TELEGRAM_BOT_TOKEN + ADMIN_TELEGRAM_BOT_USERNAME + ADMIN_TELEGRAM_WEBHOOK_SECRET to GitHub Secrets",
+};
+
+function HealthRow({
+  label, ok, hint, critical,
+}: { label: string; ok: boolean; hint?: string; critical?: boolean }) {
+  return (
+    <div className="flex items-start gap-3 px-4 py-3 border-b border-white/5 last:border-0">
+      {ok
+        ? <CheckCircle2 className="size-4 text-green-400 mt-0.5 shrink-0" />
+        : <XCircle className={`size-4 mt-0.5 shrink-0 ${critical ? "text-red-400" : "text-yellow-400"}`} />
+      }
+      <div className="flex-1 min-w-0">
+        <p className={`text-sm font-semibold ${ok ? "text-foreground" : critical ? "text-red-300" : "text-yellow-300"}`}>
+          {label}
+        </p>
+        {!ok && hint && (
+          <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">{hint}</p>
+        )}
+      </div>
+      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
+        ok
+          ? "bg-green-500/10 text-green-400"
+          : critical
+          ? "bg-red-500/10 text-red-400"
+          : "bg-yellow-500/10 text-yellow-400"
+      }`}>
+        {ok ? "OK" : critical ? "DOWN" : "WARN"}
+      </span>
+    </div>
+  );
+}
+
+function SystemHealthTab() {
+  const [data, setData]       = useState<HealthPayload | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [lastFetch, setLastFetch] = useState<number | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetch = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await globalThis.fetch("/api/health");
+      const json: HealthPayload = await res.json();
+      setData(json);
+      setLastFetch(Date.now());
+    } catch {
+      /* network error — keep stale data */
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetch();
+    intervalRef.current = setInterval(fetch, 60_000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [fetch]);
+
+  const allOk      = data?.ok ?? false;
+  const downCount  = data
+    ? Object.values({ ...data.critical, ...data.optional }).filter(v => !v).length
+    : 0;
+
+  return (
+    <div className="px-5 pt-4 pb-10 space-y-5">
+
+      {/* Summary banner */}
+      {data && (
+        <div className={`rounded-2xl border p-4 flex items-center gap-3 ${
+          allOk
+            ? "bg-green-500/5 border-green-500/20"
+            : "bg-red-500/5 border-red-500/20"
+        }`}>
+          {allOk
+            ? <CheckCircle2 className="size-6 text-green-400 shrink-0" />
+            : <AlertTriangle className="size-6 text-red-400 shrink-0" />
+          }
+          <div>
+            <p className={`text-sm font-extrabold ${allOk ? "text-green-300" : "text-red-300"}`}>
+              {allOk ? "All systems operational" : `${downCount} service${downCount !== 1 ? "s" : ""} need attention`}
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              Last checked: {lastFetch ? new Date(lastFetch).toLocaleTimeString() : "—"} · Auto-refreshes every 60s
+            </p>
+          </div>
+        </div>
+      )}
+
+      {loading && !data && <CenterLoader />}
+
+      {/* Critical services */}
+      {data && (
+        <div>
+          <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-2">
+            Critical — must be up
+          </p>
+          <div className="bg-card border border-border/60 rounded-2xl overflow-hidden">
+            {Object.entries(data.critical).map(([key, ok]) => (
+              <HealthRow
+                key={key}
+                label={SERVICE_LABELS[key] ?? key}
+                ok={ok}
+                hint={SERVICE_DOCS[key]}
+                critical
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Optional services */}
+      {data && (
+        <div>
+          <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-2">
+            Optional — degrade gracefully when missing
+          </p>
+          <div className="bg-card border border-border/60 rounded-2xl overflow-hidden">
+            {Object.entries(data.optional).map(([key, ok]) => (
+              <HealthRow
+                key={key}
+                label={SERVICE_LABELS[key] ?? key}
+                ok={ok}
+                hint={SERVICE_DOCS[key]}
+                critical={false}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Fix instructions for any missing optional */}
+      {data && Object.entries(data.optional).some(([, v]) => !v) && (
+        <div className="bg-yellow-500/5 border border-yellow-500/20 rounded-2xl p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="size-4 text-yellow-400 shrink-0" />
+            <p className="text-xs font-bold text-yellow-300">How to fix missing secrets</p>
+          </div>
+          <ol className="text-[11px] text-muted-foreground space-y-1 list-decimal list-inside leading-relaxed">
+            <li>Get the API key from the provider dashboard (see hint below each service)</li>
+            <li>Go to <span className="font-bold text-foreground">GitHub → repo → Settings → Secrets → Actions</span></li>
+            <li>Add the secret(s) listed in the hint</li>
+            <li>Push any commit to <span className="font-bold text-foreground">main</span> — the deploy pipeline uploads them to Cloudflare Workers automatically</li>
+          </ol>
+        </div>
+      )}
+
+      <button
+        onClick={fetch}
+        disabled={loading}
+        className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-secondary text-xs font-semibold text-muted-foreground disabled:opacity-50"
+      >
+        <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
+        {loading ? "Checking…" : "Refresh now"}
+      </button>
+    </div>
+  );
+}
+
 // ─── Main Admin Screen ────────────────────────────────────────────────────────
 export function AdminScreen({ adminId, onBack }: Props) {
   const [tab, setTab] = useState<AdminTab>("stats");
@@ -2089,6 +2275,7 @@ export function AdminScreen({ adminId, onBack }: Props) {
     { key: "credit",  label: "Credit",  icon: Wallet },
     { key: "vendors", label: "Vendors", icon: Building2 },
     { key: "audit",   label: "Audit",   icon: Zap },
+    { key: "system",  label: "System",  icon: Activity },
   ];
 
   return (
@@ -2140,6 +2327,7 @@ export function AdminScreen({ adminId, onBack }: Props) {
             <AuditLogViewer />
           </div>
         )}
+        {tab === "system"  && <SystemHealthTab />}
       </div>
     </div>
   );
