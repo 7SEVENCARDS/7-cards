@@ -1,0 +1,238 @@
+name: Set up Sentry alert rules
+
+# Run once manually to bootstrap alert rules in Sentry.
+# Safe to re-run — existing rules with the same name are left unchanged
+# (Sentry returns 400 on duplicate names, which we treat as success).
+on:
+  workflow_dispatch:
+
+jobs:
+  setup-alerts:
+    name: Create Sentry alert rules (7even / node-cloudflare-workers)
+    runs-on: ubuntu-latest
+
+    env:
+      SENTRY_ORG:     ${{ secrets.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+      SENTRY_TOKEN:   ${{ secrets.SENTRY_AUTH_TOKEN }}
+      # 7even org is EU-hosted
+      SENTRY_API:     https://de.sentry.io/api/0
+
+    steps:
+      # ── Discover org metadata ───────────────────────────────────────────────
+      # Fetch the first available team slug so metric alert triggers can target
+      # the team for email notifications. Falls back to empty (Sentry defaults).
+      - name: Fetch team info
+        run: |
+          TEAM_ID=$(curl -sf \
+            "$SENTRY_API/teams/$SENTRY_ORG/" \
+            -H "Authorization: Bearer $SENTRY_TOKEN" | \
+            python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+if isinstance(data, list) and data:
+    print(data[0]['id'])
+else:
+    print('')
+" 2>/dev/null || echo "")
+          echo "TEAM_ID=$TEAM_ID" >> "$GITHUB_ENV"
+          echo "Discovered team ID: ${TEAM_ID:-<none>}"
+
+      # ── Issue alert: New Issue ──────────────────────────────────────────────
+      # Fires the first time a brand-new error fingerprint appears in production.
+      # Email goes to the issue owner (or all active members as fallback).
+      - name: Create "New Issue" alert rule
+        run: |
+          STATUS=$(curl -s -o /tmp/resp.json -w "%{http_code}" -X POST \
+            "$SENTRY_API/projects/$SENTRY_ORG/$SENTRY_PROJECT/rules/" \
+            -H "Authorization: Bearer $SENTRY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "name": "New Issue (production)",
+              "actionMatch": "all",
+              "filterMatch": "all",
+              "conditions": [
+                {
+                  "id": "sentry.rules.conditions.first_seen_event.FirstSeenEventCondition"
+                }
+              ],
+              "filters": [
+                {
+                  "id": "sentry.rules.filters.tagged_event.TaggedEventFilter",
+                  "key": "environment",
+                  "match": "eq",
+                  "value": "production"
+                }
+              ],
+              "actions": [
+                {
+                  "id": "sentry.mail.actions.NotifyEmailAction",
+                  "targetType": "IssueOwners",
+                  "fallthroughType": "ActiveMembers"
+                }
+              ],
+              "frequency": 1440
+            }')
+          if [ "$STATUS" = "200" ] || [ "$STATUS" = "201" ]; then
+            echo "✓ New Issue alert created (HTTP $STATUS)"
+          elif [ "$STATUS" = "400" ]; then
+            echo "– New Issue alert already exists (HTTP 400 — skipping)"
+          else
+            echo "✗ Unexpected HTTP $STATUS"; cat /tmp/resp.json; exit 1
+          fi
+
+      # ── Issue alert: Regression ─────────────────────────────────────────────
+      # Fires when an issue that was previously resolved reappears in production.
+      # This is the most actionable alert — a fix was shipped but didn't hold.
+      - name: Create "Regression" alert rule
+        run: |
+          STATUS=$(curl -s -o /tmp/resp.json -w "%{http_code}" -X POST \
+            "$SENTRY_API/projects/$SENTRY_ORG/$SENTRY_PROJECT/rules/" \
+            -H "Authorization: Bearer $SENTRY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "name": "Regression (production)",
+              "actionMatch": "all",
+              "filterMatch": "all",
+              "conditions": [
+                {
+                  "id": "sentry.rules.conditions.regression_event.RegressionEventCondition"
+                }
+              ],
+              "filters": [
+                {
+                  "id": "sentry.rules.filters.tagged_event.TaggedEventFilter",
+                  "key": "environment",
+                  "match": "eq",
+                  "value": "production"
+                }
+              ],
+              "actions": [
+                {
+                  "id": "sentry.mail.actions.NotifyEmailAction",
+                  "targetType": "IssueOwners",
+                  "fallthroughType": "ActiveMembers"
+                }
+              ],
+              "frequency": 1440
+            }')
+          if [ "$STATUS" = "200" ] || [ "$STATUS" = "201" ]; then
+            echo "✓ Regression alert created (HTTP $STATUS)"
+          elif [ "$STATUS" = "400" ]; then
+            echo "– Regression alert already exists (HTTP 400 — skipping)"
+          else
+            echo "✗ Unexpected HTTP $STATUS"; cat /tmp/resp.json; exit 1
+          fi
+
+      # ── Issue alert: High-frequency error ──────────────────────────────────
+      # Fires when a single issue has occurred more than 100 times, suggesting
+      # a systemic problem (e.g. a tight retry loop hitting a broken dependency).
+      - name: Create "High-frequency error" alert rule
+        run: |
+          STATUS=$(curl -s -o /tmp/resp.json -w "%{http_code}" -X POST \
+            "$SENTRY_API/projects/$SENTRY_ORG/$SENTRY_PROJECT/rules/" \
+            -H "Authorization: Bearer $SENTRY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "name": "High-frequency Error (production)",
+              "actionMatch": "all",
+              "filterMatch": "all",
+              "conditions": [
+                {
+                  "id": "sentry.rules.conditions.event_frequency.EventFrequencyCondition",
+                  "value": 100,
+                  "comparisonType": "count",
+                  "interval": "1h"
+                }
+              ],
+              "filters": [
+                {
+                  "id": "sentry.rules.filters.tagged_event.TaggedEventFilter",
+                  "key": "environment",
+                  "match": "eq",
+                  "value": "production"
+                }
+              ],
+              "actions": [
+                {
+                  "id": "sentry.mail.actions.NotifyEmailAction",
+                  "targetType": "IssueOwners",
+                  "fallthroughType": "ActiveMembers"
+                }
+              ],
+              "frequency": 60
+            }')
+          if [ "$STATUS" = "200" ] || [ "$STATUS" = "201" ]; then
+            echo "✓ High-frequency error alert created (HTTP $STATUS)"
+          elif [ "$STATUS" = "400" ]; then
+            echo "– High-frequency error alert already exists (HTTP 400 — skipping)"
+          else
+            echo "✗ Unexpected HTTP $STATUS"; cat /tmp/resp.json; exit 1
+          fi
+
+      # ── Metric alert: Error spike ───────────────────────────────────────────
+      # Triggers when total error events across the project exceed thresholds
+      # within a 5-minute window — indicates a broad production incident.
+      #   warning  : >20 errors / 5 min  (something worth investigating)
+      #   critical : >100 errors / 5 min (production is actively on fire)
+      - name: Create "Error Spike" metric alert
+        run: |
+          # Build the actions array — target team if discovered, else leave empty
+          # (Sentry falls back to default notification settings when actions is [])
+          if [ -n "$TEAM_ID" ]; then
+            ACTIONS='[{"type":"email","targetType":"team","targetIdentifier":"'"$TEAM_ID"'"}]'
+          else
+            ACTIONS='[]'
+          fi
+
+          STATUS=$(curl -s -o /tmp/resp.json -w "%{http_code}" -X POST \
+            "$SENTRY_API/projects/$SENTRY_ORG/$SENTRY_PROJECT/alert-rules/" \
+            -H "Authorization: Bearer $SENTRY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"name\": \"Error Spike (production)\",
+              \"dataset\": \"events\",
+              \"aggregate\": \"count()\",
+              \"query\": \"level:error\",
+              \"timeWindow\": 5,
+              \"thresholdType\": 0,
+              \"resolveThreshold\": 10,
+              \"environment\": \"production\",
+              \"triggers\": [
+                {
+                  \"label\": \"critical\",
+                  \"alertThreshold\": 100,
+                  \"actions\": $ACTIONS
+                },
+                {
+                  \"label\": \"warning\",
+                  \"alertThreshold\": 20,
+                  \"actions\": $ACTIONS
+                }
+              ]
+            }")
+          if [ "$STATUS" = "200" ] || [ "$STATUS" = "201" ]; then
+            echo "✓ Error Spike metric alert created (HTTP $STATUS)"
+          elif [ "$STATUS" = "400" ]; then
+            MSG=$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d)" < /tmp/resp.json 2>/dev/null || cat /tmp/resp.json)
+            # "name already in use" means it already exists — idempotent
+            if echo "$MSG" | grep -qi "already"; then
+              echo "– Error Spike alert already exists (skipping)"
+            else
+              echo "✗ HTTP 400: $MSG"; exit 1
+            fi
+          else
+            echo "✗ Unexpected HTTP $STATUS"; cat /tmp/resp.json; exit 1
+          fi
+
+      # ── Summary ────────────────────────────────────────────────────────────
+      - name: Summary
+        run: |
+          echo ""
+          echo "Alert rules configured for $SENTRY_ORG / $SENTRY_PROJECT:"
+          echo "  • New Issue (production)          — fires on first occurrence of any new error"
+          echo "  • Regression (production)         — fires when a resolved issue reappears"
+          echo "  • High-frequency Error            — fires when >100 events from one issue / 1h"
+          echo "  • Error Spike (production)        — warning >20, critical >100 errors / 5 min"
+          echo ""
+          echo "View & tune them at: https://7even.sentry.io/alerts/"
