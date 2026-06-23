@@ -34,6 +34,11 @@ import {
   UserX,
   Star,
   Activity,
+  UserCog,
+  Shield,
+  Search,
+  ChevronLeft,
+  Crown,
 } from "lucide-react";
 import {
   getAdminStats,
@@ -50,7 +55,10 @@ import {
   bulkUpdateRates,
   getEscrowQueue,
   processEscrowTrade,
+  adminListUsers,
+  adminSetRole,
 } from "../server-functions/admin";
+import { checkSuperAdminAccess } from "../server-functions/admin-auth";
 import {
   generateAdminTelegramLinkCode,
   getAdminTelegramStatus,
@@ -71,7 +79,7 @@ import {
   adminRegisterVendor,
 } from "../server-functions/vendors";
 
-type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors" | "audit" | "system";
+type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors" | "audit" | "system" | "roles";
 
 type Props = {
   adminId: string;
@@ -2261,6 +2269,286 @@ function SystemHealthTab() {
   );
 }
 
+// ─── Role Management Tab ──────────────────────────────────────────────────────
+const ROLE_LABELS: Record<string, { label: string; color: string; bg: string }> = {
+  user:        { label: "User",        color: "text-zinc-400",   bg: "bg-zinc-800/60" },
+  support:     { label: "Support",     color: "text-blue-400",   bg: "bg-blue-500/10" },
+  vendor:      { label: "Vendor",      color: "text-green-400",  bg: "bg-green-500/10" },
+  admin:       { label: "Admin",       color: "text-yellow-400", bg: "bg-yellow-500/10" },
+  super_admin: { label: "Super Admin", color: "text-purple-400", bg: "bg-purple-500/10" },
+};
+
+type UserRow = {
+  id: string;
+  full_name: string;
+  phone: string | null;
+  avatar_url: string | null;
+  role: string;
+  kyc_status: string;
+  premium: boolean;
+  created_at: string;
+};
+
+function RoleBadge({ role }: { role: string }) {
+  const r = ROLE_LABELS[role] ?? { label: role, color: "text-zinc-400", bg: "bg-zinc-800/60" };
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${r.color} ${r.bg}`}>
+      {role === "super_admin" && <Crown className="size-2.5" />}
+      {role === "admin"       && <Shield className="size-2.5" />}
+      {r.label}
+    </span>
+  );
+}
+
+function RolesTab({ adminId }: { adminId: string }) {
+  const [users, setUsers]               = useState<UserRow[]>([]);
+  const [loading, setLoading]           = useState(true);
+  const [search, setSearch]             = useState("");
+  const [roleFilter, setRoleFilter]     = useState("all");
+  const [page, setPage]                 = useState(1);
+  const [total, setTotal]               = useState(0);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [changing, setChanging]         = useState<string | null>(null);
+  const [confirm, setConfirm]           = useState<{ userId: string; name: string; newRole: string } | null>(null);
+
+  const LIMIT = 40;
+
+  useEffect(() => {
+    checkSuperAdminAccess({ data: {} })
+      .then(r => setIsSuperAdmin(r.isSuperAdmin))
+      .catch(() => setIsSuperAdmin(false));
+  }, [adminId]);
+
+  const loadPage = useCallback(async (p: number, q: string, rf: string) => {
+    setLoading(true);
+    try {
+      const result = await adminListUsers({ data: { search: q, role: rf === "all" ? undefined : rf, page: p } });
+      setUsers(result.users as UserRow[]);
+      setTotal(result.total);
+      setPage(p);
+    } catch {
+      toast.error("Failed to load users");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadPage(1, search, roleFilter); }, []);
+
+  const handleSearch = useCallback((q: string) => {
+    setSearch(q);
+    loadPage(1, q, roleFilter);
+  }, [roleFilter, loadPage]);
+
+  const handleRoleFilter = useCallback((rf: string) => {
+    setRoleFilter(rf);
+    loadPage(1, search, rf);
+  }, [search, loadPage]);
+
+  const confirmChange = (user: UserRow, newRole: string) => {
+    if (user.id === adminId) { toast.error("You cannot change your own role"); return; }
+    setConfirm({ userId: user.id, name: user.full_name || user.phone || user.id, newRole });
+  };
+
+  const doChange = async () => {
+    if (!confirm) return;
+    setChanging(confirm.userId);
+    setConfirm(null);
+    try {
+      await adminSetRole({ data: { targetUserId: confirm.userId, newRole: confirm.newRole } });
+      toast.success(`Role changed to ${confirm.newRole}`);
+      setUsers(prev => prev.map(u => u.id === confirm.userId ? { ...u, role: confirm.newRole } : u));
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to change role");
+    } finally {
+      setChanging(null);
+    }
+  };
+
+  const totalPages = Math.ceil(total / LIMIT);
+
+  return (
+    <div className="p-4 space-y-4">
+      {/* Header */}
+      <div className="flex items-start justify-between">
+        <div>
+          <h2 className="text-base font-bold flex items-center gap-2">
+            <UserCog className="size-4 text-cyan" /> Role Management
+          </h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {isSuperAdmin
+              ? "Super admin — you can view and assign roles."
+              : "Admin view — contact a super admin to change roles."}
+          </p>
+        </div>
+        <span className="text-xs text-muted-foreground">{total} users</span>
+      </div>
+
+      {/* Permission banner for non-super-admins */}
+      {!isSuperAdmin && (
+        <div className="flex items-center gap-2 rounded-xl bg-yellow-500/10 border border-yellow-500/20 px-3 py-2">
+          <Shield className="size-4 text-yellow-400 shrink-0" />
+          <p className="text-xs text-yellow-300">
+            View only. Only super admins can assign or change roles.
+          </p>
+        </div>
+      )}
+
+      {/* Search + filter */}
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Search by name or phone…"
+            defaultValue={search}
+            onChange={e => handleSearch(e.target.value)}
+            className="w-full pl-8 pr-3 py-2 rounded-xl bg-card border border-white/5 text-sm placeholder:text-muted-foreground focus:outline-none focus:border-cyan/40"
+          />
+        </div>
+        <select
+          value={roleFilter}
+          onChange={e => handleRoleFilter(e.target.value)}
+          className="px-3 py-2 rounded-xl bg-card border border-white/5 text-sm text-foreground focus:outline-none focus:border-cyan/40"
+        >
+          <option value="all">All roles</option>
+          <option value="user">User</option>
+          <option value="support">Support</option>
+          <option value="vendor">Vendor</option>
+          <option value="admin">Admin</option>
+          <option value="super_admin">Super Admin</option>
+        </select>
+      </div>
+
+      {/* User list */}
+      {loading ? (
+        <CenterLoader />
+      ) : users.length === 0 ? (
+        <EmptyState icon={Users} message="No users found" />
+      ) : (
+        <div className="space-y-2">
+          {users.map(user => {
+            const isMe = user.id === adminId;
+            const isChanging = changing === user.id;
+            return (
+              <div
+                key={user.id}
+                className="flex items-center gap-3 bg-card rounded-2xl border border-white/5 px-4 py-3"
+              >
+                {/* Avatar */}
+                <div className="size-9 rounded-full bg-gradient-to-br from-cyan/20 to-cyan/5 border border-white/5 grid place-items-center shrink-0">
+                  {user.avatar_url
+                    ? <img src={user.avatar_url} className="size-9 rounded-full object-cover" alt="" />
+                    : <span className="text-xs font-bold text-cyan">
+                        {(user.full_name || user.phone || "?").slice(0, 2).toUpperCase()}
+                      </span>
+                  }
+                </div>
+
+                {/* Info */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold truncate">
+                      {user.full_name || <span className="text-muted-foreground italic">Unnamed</span>}
+                    </p>
+                    {isMe && (
+                      <span className="text-[10px] text-cyan font-bold">(you)</span>
+                    )}
+                    {user.premium && (
+                      <Star className="size-3 text-yellow-400 fill-yellow-400" />
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {user.phone ?? "No phone"} · joined {new Date(user.created_at).toLocaleDateString()}
+                  </p>
+                </div>
+
+                {/* Role badge + change */}
+                <div className="flex items-center gap-2 shrink-0">
+                  {isChanging ? (
+                    <Loader2 className="size-4 animate-spin text-cyan" />
+                  ) : isSuperAdmin && !isMe ? (
+                    <select
+                      value={user.role}
+                      onChange={e => confirmChange(user, e.target.value)}
+                      className="text-xs rounded-lg bg-background border border-white/10 px-2 py-1 text-foreground focus:outline-none focus:border-cyan/40"
+                    >
+                      <option value="user">User</option>
+                      <option value="support">Support</option>
+                      <option value="vendor">Vendor</option>
+                      <option value="admin">Admin</option>
+                      <option value="super_admin">Super Admin</option>
+                    </select>
+                  ) : (
+                    <RoleBadge role={user.role} />
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between pt-2">
+          <button
+            onClick={() => loadPage(page - 1, search, roleFilter)}
+            disabled={page <= 1}
+            className="flex items-center gap-1 text-xs text-muted-foreground disabled:opacity-30"
+          >
+            <ChevronLeft className="size-3.5" /> Prev
+          </button>
+          <span className="text-xs text-muted-foreground">
+            Page {page} of {totalPages}
+          </span>
+          <button
+            onClick={() => loadPage(page + 1, search, roleFilter)}
+            disabled={page >= totalPages}
+            className="flex items-center gap-1 text-xs text-muted-foreground disabled:opacity-30"
+          >
+            Next <ChevronRight className="size-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Confirmation modal */}
+      {confirm && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-card border border-white/10 p-5 space-y-4">
+            <div>
+              <h3 className="text-base font-bold">Confirm Role Change</h3>
+              <p className="text-sm text-muted-foreground mt-1">
+                Change <strong className="text-foreground">{confirm.name}</strong>'s role to{" "}
+                <strong className={ROLE_LABELS[confirm.newRole]?.color ?? "text-foreground"}>
+                  {ROLE_LABELS[confirm.newRole]?.label ?? confirm.newRole}
+                </strong>?
+              </p>
+              <p className="text-xs text-muted-foreground mt-2">
+                This will be logged to the audit trail and cannot be undone automatically.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirm(null)}
+                className="flex-1 py-2.5 rounded-xl bg-background border border-white/10 text-sm text-muted-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={doChange}
+                className="flex-1 py-2.5 rounded-xl bg-cyan text-black text-sm font-bold"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Admin Screen ────────────────────────────────────────────────────────
 export function AdminScreen({ adminId, onBack }: Props) {
   const [tab, setTab] = useState<AdminTab>("stats");
@@ -2276,6 +2564,7 @@ export function AdminScreen({ adminId, onBack }: Props) {
     { key: "vendors", label: "Vendors", icon: Building2 },
     { key: "audit",   label: "Audit",   icon: Zap },
     { key: "system",  label: "System",  icon: Activity },
+    { key: "roles",   label: "Roles",   icon: UserCog },
   ];
 
   return (
@@ -2328,6 +2617,7 @@ export function AdminScreen({ adminId, onBack }: Props) {
           </div>
         )}
         {tab === "system"  && <SystemHealthTab />}
+        {tab === "roles"   && <RolesTab adminId={adminId} />}
       </div>
     </div>
   );

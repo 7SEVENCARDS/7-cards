@@ -765,3 +765,76 @@ export const getSpreadRevenue = createServerFn({ method: "GET" })
       })),
     };
   });
+
+// ─── Role Management (super_admin only for writes) ────────────────────────────
+
+export const adminListUsers = createServerFn({ method: "GET" })
+  .validator((d: { search?: string; role?: string; page?: number }) => d)
+  .handler(async ({ data }) => {
+    const { requireAdmin } = await import("../lib/auth-server");
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    const page   = Math.max(1, data.page ?? 1);
+    const limit  = 40;
+    const offset = (page - 1) * limit;
+
+    let q = db
+      .from("profiles")
+      .select("id, full_name, phone, avatar_url, role, kyc_status, premium, created_at", { count: "exact" })
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (data.role && data.role !== "all") {
+      q = q.eq("role", data.role);
+    }
+    if (data.search) {
+      const term = data.search.trim();
+      q = q.or(`full_name.ilike.%${term}%,phone.ilike.%${term}%`);
+    }
+
+    const { data: rows, error, count } = await q;
+    if (error) throw error;
+
+    return { users: rows ?? [], total: count ?? 0, page, limit };
+  });
+
+export const adminSetRole = createServerFn({ method: "POST" })
+  .validator((d: { targetUserId: string; newRole: string }) => d)
+  .handler(async ({ data }) => {
+    const { requireSuperAdmin, logAdminAction } = await import("../lib/auth-server");
+    const adminId = await requireSuperAdmin();
+
+    const VALID_ROLES = ["user", "admin", "support", "vendor", "super_admin"];
+    if (!VALID_ROLES.includes(data.newRole)) {
+      throw new Error("Invalid role value");
+    }
+    if (data.targetUserId === adminId) {
+      throw new Error("You cannot change your own role");
+    }
+
+    const db = getServerSupabase();
+
+    const { data: existing } = await db
+      .from("profiles")
+      .select("role, full_name")
+      .eq("id", data.targetUserId)
+      .single();
+
+    if (!existing) throw new Error("User not found");
+
+    const { error } = await db
+      .from("profiles")
+      .update({ role: data.newRole })
+      .eq("id", data.targetUserId);
+
+    if (error) throw error;
+
+    await logAdminAction(adminId, "set_role", data.targetUserId, {
+      prev_role: existing.role,
+      new_role:  data.newRole,
+      full_name: existing.full_name,
+    });
+
+    return { success: true, prevRole: existing.role, newRole: data.newRole };
+  });
