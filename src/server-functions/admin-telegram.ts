@@ -91,7 +91,7 @@ export async function getAllLinkedAdminChatIds(): Promise<bigint[]> {
 
 // ─── Internal: send a fan-out notification + track in DB ─────────────────────
 export async function sendAdminNotification(opts: {
-  itemType: "manual_review" | "withdrawal" | "kyc" | "vendor_rate" | "dispute" | "fraud" | "payout_failed" | "support";
+  itemType: "manual_review" | "withdrawal" | "kyc" | "vendor_rate" | "dispute" | "fraud" | "payout_failed" | "support" | "role_change";
   itemId: string;
   text: string;
   inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>;

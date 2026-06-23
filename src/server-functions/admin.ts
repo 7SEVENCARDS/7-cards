@@ -836,6 +836,35 @@ export const adminSetRole = createServerFn({ method: "POST" })
       full_name: existing.full_name,
     });
 
+    // Notify all Telegram-linked admins when a role is elevated to admin/super_admin.
+    // Fire-and-forget — never block the response on notification delivery.
+    if (["admin", "super_admin"].includes(data.newRole)) {
+      const ROLE_EMOJI: Record<string, string> = {
+        admin:       "🛡️",
+        super_admin: "👑",
+        vendor:      "🏪",
+        support:     "💬",
+        user:        "👤",
+      };
+      const emoji = ROLE_EMOJI[data.newRole] ?? "🔄";
+      const name  = existing.full_name ?? data.targetUserId.slice(0, 8);
+      void import("./admin-telegram").then(({ sendAdminNotification }) =>
+        sendAdminNotification({
+          itemType: "role_change",
+          itemId:   data.targetUserId,
+          text: [
+            `${emoji} *Role Elevated*`,
+            ``,
+            `User: *${name}*`,
+            `${existing.role} → *${data.newRole}*`,
+            ``,
+            `By admin: \`${adminId.slice(0, 8)}…\``,
+            `At: ${new Date().toUTCString()}`,
+          ].join("\n"),
+        })
+      ).catch(() => {/* swallow — notification is best-effort */});
+    }
+
     return { success: true, prevRole: existing.role, newRole: data.newRole };
   });
 
