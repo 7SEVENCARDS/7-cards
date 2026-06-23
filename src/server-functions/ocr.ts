@@ -1,4 +1,4 @@
-import { createServerFn } from "@tanstack/react-start/server";
+import { createServerFn } from "@tanstack/react-start";
 import { getEnv } from "../lib/worker-env";
 import { getServerSupabase } from "../lib/supabase.server";
 
