@@ -93,6 +93,12 @@ zone_name = "7evencards.xyz"
 pattern   = "vendor.7evencards.xyz/*"
 zone_name = "7evencards.xyz"
 
+# admin.7evencards.xyz → rewrites to /admin/* (handled in server.ts)
+# Separate admin portal with its own login gate and auth checks.
+[[env.production.routes]]
+pattern   = "admin.7evencards.xyz/*"
+zone_name = "7evencards.xyz"
+
 # ─── Cron Triggers ────────────────────────────────────────────────────────────
 # Both crons invoke the scheduled() export (injected post-build by
 # scripts/patch-cf-scheduled.mjs). The handler checks event.cron to route to

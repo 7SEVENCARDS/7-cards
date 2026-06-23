@@ -226,6 +226,50 @@ export default {
       }
     }
 
+    // admin.7evencards.xyz → admin portal (dedicated admin experience)
+    if (url.hostname === "admin.7evencards.xyz") {
+      if (!allow(rlKey("global", ip), 200, 60_000)) {
+        return addSecurityHeaders(tooManyRequests(60), requestId);
+      }
+      if (
+        request.method === "POST" ||
+        request.method === "PUT" ||
+        request.method === "PATCH"
+      ) {
+        const contentLength = request.headers.get("content-length");
+        if (contentLength && Number(contentLength) > MAX_BODY_BYTES) {
+          return addSecurityHeaders(bodyTooLarge(), requestId);
+        }
+      }
+      const rewritten = new URL(request.url);
+      rewritten.hostname = "7evencards.xyz";
+      if (!rewritten.pathname.startsWith("/admin")) {
+        rewritten.pathname =
+          "/admin" + (rewritten.pathname === "/" ? "" : rewritten.pathname);
+      }
+      const rewrittenReq = new Request(rewritten.toString(), {
+        method: request.method,
+        headers: request.headers,
+        body: request.body ?? undefined,
+        redirect: "manual",
+      });
+      try {
+        const handler = await getServerEntry();
+        const response = await handler.fetch(rewrittenReq, env, ctx);
+        const normalized = await normalizeCatastrophicSsrResponse(response);
+        return addSecurityHeaders(normalized, requestId);
+      } catch (error) {
+        console.error(error);
+        return addSecurityHeaders(
+          new Response(renderErrorPage(), {
+            status: 500,
+            headers: { "content-type": "text/html; charset=utf-8" },
+          }),
+          requestId,
+        );
+      }
+    }
+
     if (!allow(rlKey("global", ip), 300, 60_000)) {
       return addSecurityHeaders(tooManyRequests(60), requestId);
     }

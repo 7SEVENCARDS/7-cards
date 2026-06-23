@@ -109,16 +109,70 @@ export async function requireAdmin(): Promise<string> {
     .eq("id", userId)
     .single();
 
-  if (profile?.role === "admin") {
+  if (profile?.role === "admin" || profile?.role === "super_admin") {
     return userId;
   }
 
   // Fallback: app_metadata.role (set by seed script; works pre-migrations)
-  if ((user.app_metadata as Record<string, unknown>)?.role === "admin") {
+  const metaRole = (user.app_metadata as Record<string, unknown>)?.role;
+  if (metaRole === "admin" || metaRole === "super_admin") {
     return userId;
   }
 
   throw new ForbiddenError("Admin access required");
+}
+
+// ─── requireSuperAdmin ────────────────────────────────────────────────────────
+// Validates session AND checks that the caller is a super_admin.
+// Only super_admins may perform root-level operations (promote other admins,
+// delete tenants, etc.).
+//
+// Throws AuthError (401) if not authenticated.
+// Throws ForbiddenError (403) if authenticated but not super_admin.
+
+export async function requireSuperAdmin(): Promise<string> {
+  const request = getRequest();
+  const cookieHeader = request?.headers.get("cookie") ?? "";
+  const accessToken = extractAccessToken(cookieHeader);
+
+  if (!accessToken) throw new AuthError();
+
+  const db = getServerSupabase();
+  const {
+    data: { user },
+    error,
+  } = await db.auth.getUser(accessToken);
+
+  if (error || !user) throw new AuthError();
+
+  const userId = user.id;
+
+  const { data: profile } = await db
+    .from("profiles")
+    .select("role")
+    .eq("id", userId)
+    .single();
+
+  if (profile?.role === "super_admin") return userId;
+
+  const metaRole = (user.app_metadata as Record<string, unknown>)?.role;
+  if (metaRole === "super_admin") return userId;
+
+  throw new ForbiddenError("Super admin access required");
+}
+
+// ─── getCallerRole ────────────────────────────────────────────────────────────
+// Returns the profiles.role for a validated user ID.
+// Call this AFTER requireUser() / requireAdmin() — it trusts the userId.
+
+export async function getCallerRole(userId: string): Promise<string> {
+  const db = getServerSupabase();
+  const { data: profile } = await db
+    .from("profiles")
+    .select("role")
+    .eq("id", userId)
+    .single();
+  return profile?.role ?? "user";
 }
 
 // ─── logAdminAction ───────────────────────────────────────────────────────────
