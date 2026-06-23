@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
+import { getEnv } from "../lib/worker-env";
 
 // ─── List own payout accounts ─────────────────────────────────────────────────
 export const listPayoutAccounts = createServerFn({ method: "GET" })
@@ -35,8 +36,8 @@ export const lookupAccount = createServerFn({ method: "POST" })
       const msg = e instanceof Error ? e.message : String(e);
 
       if (msg.includes("not configured")) {
-        // Demo mode — blocked in production
-        if (process.env.NODE_ENV === "production") {
+        // Demo mode — only allowed when IS_DEMO_MODE=true
+        if (getEnv("IS_DEMO_MODE") !== "true") {
           return { success: false, error: "Bank lookup service not available." };
         }
         return { success: true, demo: true, accountName: "Demo Account Holder" };
