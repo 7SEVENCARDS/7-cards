@@ -21,6 +21,8 @@
     "build:workspace": "pnpm run typecheck:workspace && pnpm -r --if-present run build"
   },
   "dependencies": {
+    "@sentry/browser": "^8.55.0",
+    "@sentry/cloudflare": "^8.55.0",
     "@hookform/resolvers": "^5.2.2",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",

@@ -3,6 +3,7 @@ import "./lib/error-capture";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
 import { initWorkerEnv, getEnv } from "./lib/worker-env";
+import { initSentryServer, captureServerException } from "./lib/sentry.server";
 import {
   handleSquadPayoutWebhook,
   handleSquadPaymentWebhook,
@@ -81,7 +82,9 @@ async function normalizeCatastrophicSsrResponse(response: Response): Promise<Res
     return response;
   }
 
-  console.error(consumeLastCapturedError() ?? new Error(`h3 swallowed SSR error: ${body}`));
+  const ssrErr = consumeLastCapturedError() ?? new Error(`h3 swallowed SSR error: ${body}`);
+  captureServerException(ssrErr, { type: "ssr_catastrophic" });
+  console.error(ssrErr);
   return new Response(renderErrorPage(), {
     status: 500,
     headers: { "content-type": "text/html; charset=utf-8" },
@@ -121,7 +124,7 @@ function addSecurityHeaders(res: Response, reqId?: string): Response {
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "font-src 'self' https://fonts.gstatic.com data:",
       "img-src 'self' data: blob: https:",
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.onesignal.com https://onesignal.com https://api.dojah.io https://giftcards.reloadly.com https://giftcards-sandbox.reloadly.com https://auth.reloadly.com https://api-d.squadco.com https://sandbox-api-d.squadco.com https://api.busha.co",
+      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.onesignal.com https://onesignal.com https://api.dojah.io https://giftcards.reloadly.com https://giftcards-sandbox.reloadly.com https://auth.reloadly.com https://api-d.squadco.com https://sandbox-api-d.squadco.com https://api.busha.co https://*.sentry.io https://*.ingest.sentry.io https://*.ingest.us.sentry.io",
       "worker-src blob:",
       "frame-src 'none'",
       "frame-ancestors 'none'",
@@ -165,6 +168,8 @@ export default {
     initWorkerEnv(env);
     // Fail-fast on first request if critical secrets are absent.
     runStartupValidation();
+    // Sentry: initialise once per isolate — no-op if SENTRY_DSN not set.
+    initSentryServer();
 
     // ── Request trace ID — attach to every log line for correlation ──────────
     // X-Request-ID echoed from client if provided; generated server-side if not.
@@ -215,6 +220,7 @@ export default {
         const normalized = await normalizeCatastrophicSsrResponse(response);
         return addSecurityHeaders(normalized, requestId);
       } catch (error) {
+        captureServerException(error, { route: "vendor_subdomain" });
         console.error(error);
         return addSecurityHeaders(
           new Response(renderErrorPage(), {
@@ -259,6 +265,7 @@ export default {
         const normalized = await normalizeCatastrophicSsrResponse(response);
         return addSecurityHeaders(normalized, requestId);
       } catch (error) {
+        captureServerException(error, { route: "admin_subdomain" });
         console.error(error);
         return addSecurityHeaders(
           new Response(renderErrorPage(), {
@@ -386,6 +393,7 @@ export default {
         admin_telegram:  !!getEnv("ADMIN_TELEGRAM_BOT_TOKEN"),
         resend:          !!getEnv("RESEND_API_KEY"),
         dojah:           !!(getEnv("DOJAH_APP_ID") && getEnv("DOJAH_SECRET_KEY")),
+        sentry:          !!getEnv("SENTRY_DSN"),
       };
 
       // ── Live Supabase connectivity probe ─────────────────────────────────────
@@ -448,6 +456,7 @@ export default {
       const normalized = await normalizeCatastrophicSsrResponse(response);
       return addSecurityHeaders(normalized, requestId);
     } catch (error) {
+      captureServerException(error, { route: "ssr_main" });
       console.error(error);
       return addSecurityHeaders(
         new Response(renderErrorPage(), {

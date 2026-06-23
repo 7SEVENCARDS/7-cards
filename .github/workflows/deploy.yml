@@ -82,6 +82,7 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
           VITE_ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
+          VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
 
       # ── Inject Cloudflare Workers scheduled() handler ───────────────────────
       # Nitro does not generate a scheduled() export — this post-build script
@@ -147,6 +148,7 @@ jobs:
           _RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           _ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
           _GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          _SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
           upload_secret() {
             local name="$1"
@@ -176,6 +178,7 @@ jobs:
           upload_secret RESEND_API_KEY             "$_RESEND_API_KEY"
           upload_secret ADMIN_EMAIL                "$_ADMIN_EMAIL"
           upload_secret GEMINI_API_KEY             "$_GEMINI_API_KEY"
+          upload_secret SENTRY_DSN                 "$_SENTRY_DSN"
 
       # ── Setup Resend email domain for custom branding ─────────────────────
       - name: Setup Resend email domain (7evencards.xyz)
