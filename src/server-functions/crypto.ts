@@ -3,6 +3,7 @@ import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
 import { assertAmount } from "../lib/validate";
 import { DEMO_DEPOSIT_ADDRESSES, COMPANY_SPREAD } from "../lib/busha";
+import { getEnv } from "../lib/worker-env";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -126,7 +127,7 @@ export const initiateCryptoSwap = createServerFn({ method: "POST" })
       const msg = e instanceof Error ? e.message : String(e);
       const isDemo = msg.includes("not configured");
 
-      if (isDemo && process.env.NODE_ENV !== "production") {
+      if (isDemo && getEnv("IS_DEMO_MODE") === "true") {
         const { getCryptoRates } = await import("../lib/busha");
         const rates = await getCryptoRates();
         const getPrice = (sym: string) =>
@@ -271,7 +272,7 @@ export const initiateCryptoSend = createServerFn({ method: "POST" })
       const msg = e instanceof Error ? e.message : String(e);
       const isDemo = msg.includes("not configured");
 
-      if (isDemo && process.env.NODE_ENV !== "production") {
+      if (isDemo && getEnv("IS_DEMO_MODE") === "true") {
         await db.rpc("deduct_wallet_balance", {
           p_user_id: userId,
           p_currency: data.currency,
