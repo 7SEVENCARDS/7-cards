@@ -368,7 +368,7 @@ export default {
       }
     }
 
-    // ── Health check — shows config status without exposing secret values ──
+    // ── Health check — verifies config AND live Supabase connectivity ────────
     if (url.pathname === "/api/health") {
       // Critical: all must be present for 200. Optional: logged but won't cause 503.
       const critical = {
@@ -387,13 +387,47 @@ export default {
         resend:          !!getEnv("RESEND_API_KEY"),
         dojah:           !!(getEnv("DOJAH_APP_ID") && getEnv("DOJAH_SECRET_KEY")),
       };
-      const allOk = Object.values(critical).every(Boolean);
-      if (!allOk) {
+
+      // ── Live Supabase DB probe — verifies actual connectivity, not just env vars
+      let dbOk = false;
+      let dbLatencyMs: number | null = null;
+      let dbError: string | null = null;
+      if (critical.supabase) {
+        const t0 = Date.now();
+        try {
+          const { getServerSupabase } = await import("./lib/supabase.server");
+          const db = getServerSupabase();
+          // Use Promise.race to enforce a 3-second timeout on the probe.
+          const probe = db.from("profiles").select("id").limit(1).maybeSingle();
+          const timeout = new Promise<never>((_, rej) =>
+            setTimeout(() => rej(new Error("db_probe_timeout")), 3000)
+          );
+          const result = await Promise.race([probe, timeout]) as Awaited<typeof probe>;
+          dbLatencyMs = Date.now() - t0;
+          dbOk = !result.error;
+          if (result.error) dbError = result.error.message;
+        } catch (e) {
+          dbLatencyMs = Date.now() - t0;
+          dbOk = false;
+          dbError = e instanceof Error ? e.message : String(e);
+          console.error("[Health] DB probe failed:", dbError);
+        }
+      }
+
+      const configOk = Object.values(critical).every(Boolean);
+      const allOk    = configOk && dbOk;
+      if (!configOk) {
         const missing = Object.entries(critical).filter(([, v]) => !v).map(([k]) => k);
         console.warn("[Health] Missing critical secrets:", missing.join(", "));
       }
       return addSecurityHeaders(
-        new Response(JSON.stringify({ ok: allOk, ts: Date.now(), critical, optional }), {
+        new Response(JSON.stringify({
+          ok: allOk,
+          ts: Date.now(),
+          critical,
+          optional,
+          db: { ok: dbOk, latencyMs: dbLatencyMs, error: dbError },
+        }), {
           status: allOk ? 200 : 503,
           headers: { "Content-Type": "application/json" },
         }),

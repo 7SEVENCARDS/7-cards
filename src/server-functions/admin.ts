@@ -868,6 +868,43 @@ export const adminSetRole = createServerFn({ method: "POST" })
     return { success: true, prevRole: existing.role, newRole: data.newRole };
   });
 
+// ─── Reconciliation Report ────────────────────────────────────────────────────
+// Detects financial inconsistencies: stale assignments, missing settlements,
+// and recent wallet ledger activity. Called from the admin Audit tab.
+
+export const adminGetReconciliationReport = createServerFn({ method: "GET" })
+  .validator((d: Record<string, never>) => d)
+  .handler(async () => {
+    await requireAdmin();
+    const db = getServerSupabase();
+
+    const since24h = new Date(Date.now() - 86_400_000).toISOString();
+
+    const [unreconciledRes, staleRes, ledgerRes, statusRes] = await Promise.all([
+      db.from("v_unreconciled_trades" as "trades").select("*", { count: "exact" }).limit(50),
+      db.from("v_stale_assignments"   as "vendor_card_assignments").select("*", { count: "exact" }).limit(50),
+      db.from("wallet_ledger" as "profiles").select("id", { count: "exact" }).gte("created_at", since24h),
+      db.from("trades").select("status").in("status", ["verified","processing","paid","scanning","pending_review"]),
+    ]);
+
+    const tradeCounts: Record<string, number> = {};
+    for (const t of statusRes.data ?? []) {
+      tradeCounts[t.status] = (tradeCounts[t.status] ?? 0) + 1;
+    }
+
+    const unreconciledCount = unreconciledRes.count ?? 0;
+    const staleCount        = staleRes.count ?? 0;
+
+    return {
+      ts:                   new Date().toISOString(),
+      healthy:              unreconciledCount === 0 && staleCount === 0,
+      unreconciledTrades:   { count: unreconciledCount, rows: unreconciledRes.data ?? [] },
+      staleAssignments:     { count: staleCount,        rows: staleRes.data ?? [] },
+      walletLedger24hCount: ledgerRes.count ?? 0,
+      tradeStatusBreakdown: tradeCounts,
+    };
+  });
+
 // ─── Admin Audit Log Query ────────────────────────────────────────────────────
 // Queries admin_audit_log (admin write actions). Distinct from trade_audit_log
 // (vendor/trade events). Supports filter by action type, admin, target, date.
