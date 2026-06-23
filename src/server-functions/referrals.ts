@@ -138,13 +138,13 @@ export const applyReferralCode = createServerFn({ method: "POST" })
       {
         user_id: referrer.id,
         title: "New Referral! 🎉",
-        message: "Someone just signed up with your code! When they complete their first trade, you BOTH earn ₦500 + 100 XP bonus.",
+        message: "Someone just joined with your code! When they complete 7 trades in a month, you'll start earning 5% commission on every trade they make.",
         type: "success",
       },
       {
         user_id: userId,
         title: "Referral Code Applied! 🔗",
-        message: `You're now linked to ${referrerMoniker}. Complete your first trade to unlock ₦500 + 100 XP bonus for both of you!`,
+        message: `You're now linked to ${referrerMoniker}. Complete 7 trades this month to unlock your referrer's 5% commission network. First trade earns you both +100 XP!`,
         type: "success",
       },
     ]);
