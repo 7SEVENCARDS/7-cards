@@ -36,7 +36,7 @@ export function ReferralScreen({ userId, onBack }: ReferralScreenProps) {
   });
 
   const referralLink = stats?.referralCode
-    ? `https://7evencards.xyz/join?ref=${stats.referralCode}`
+    ? `https://7evencards.xyz/?ref=${stats.referralCode}`
     : "";
 
   const shareText = `Trade gift cards for instant cash on 7SEVEN CARDS! 🚀\n\nUse my invite link — we both get +100 XP on your first trade. Once you complete 7 trades in a month, I start earning 5% commission on every trade you make.\n\n${referralLink}`;

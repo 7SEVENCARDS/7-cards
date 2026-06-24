@@ -106,6 +106,12 @@ export const applyReferralCode = createServerFn({ method: "POST" })
     const userId = await requireUser();
     const db = getServerSupabase();
 
+    // Server-side sanitize: strip non-alphanumeric chars and enforce length bounds
+    const cleanCode = data.code.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
+    if (!cleanCode || cleanCode.length < 4) {
+      return { success: false, error: "Invalid referral code format." };
+    }
+
     const { data: self } = await db
       .from("profiles")
       .select("referred_by, referral_code")
@@ -116,14 +122,14 @@ export const applyReferralCode = createServerFn({ method: "POST" })
       return { success: false, error: "You've already used a referral code." };
     }
 
-    if (self?.referral_code === data.code.toUpperCase()) {
+    if (self?.referral_code === cleanCode) {
       return { success: false, error: "You can't use your own referral code." };
     }
 
     const { data: referrer } = await db
       .from("profiles")
       .select("id, display_name")
-      .eq("referral_code", data.code.toUpperCase())
+      .eq("referral_code", cleanCode)
       .single();
 
     if (!referrer) {

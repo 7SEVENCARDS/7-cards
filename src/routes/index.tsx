@@ -66,8 +66,16 @@ import { getKYCStatus } from "../server-functions/kyc";
 import { lookupAccount, addPayoutAccount } from "../server-functions/payout-accounts";
 import { requestUserWithdrawal, getEarningsHistory } from "../server-functions/wallet";
 import type { EarningsData } from "../server-functions/wallet";
+import { applyReferralCode } from "../server-functions/referrals";
 
 export const Route = createFileRoute("/")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    // ?ref=CODE — referral code from a shared invite link
+    ref:
+      typeof search.ref === "string"
+        ? search.ref.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10)
+        : undefined,
+  }),
   component: App,
 });
 
@@ -84,6 +92,7 @@ type ActiveSell = {
 
 function App() {
   const { user, loading: sessionLoading } = useSession();
+  const { ref: referralCodeFromUrl } = Route.useSearch();
   const [tab, setTab] = useState<Tab>("home");
   const [activeSell, setActiveSell] = useState<ActiveSell | null>(null);
   const [pendingCode, setPendingCode] = useState<{ code: string; pin?: string } | null>(null);
@@ -154,7 +163,7 @@ function App() {
 
   // ── Auth gate ─────────────────────────────────────────────────────────────
   if (!user) {
-    return <AuthScreen onAuthenticated={() => {}} />;
+    return <AuthScreen onAuthenticated={() => {}} referralCode={referralCodeFromUrl} />;
   }
 
   // ── Derived helpers ───────────────────────────────────────────────────────
@@ -245,6 +254,18 @@ function App() {
       setActiveSell(null);
     }
   };
+
+  // ── Apply pending referral code after sign-up / sign-in ──────────────────
+  // AuthScreen stores the code in localStorage before signUp so it survives
+  // email-confirmation redirects. We consume it exactly once the session is live.
+  useEffect(() => {
+    if (!user) return;
+    const pending = localStorage.getItem("7sc_pending_ref");
+    if (!pending) return;
+    localStorage.removeItem("7sc_pending_ref");
+    applyReferralCode({ data: { code: pending } }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
