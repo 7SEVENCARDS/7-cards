@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import {
   ChevronLeft, Sparkles, CheckCircle2, Zap, ShieldCheck,
   Clock, Crown, Loader2, AlertCircle, Star, TrendingUp,
-  Headphones, Wallet, X,
+  Headphones, Wallet, X, BarChart3, ArrowUpRight,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -11,6 +11,7 @@ import {
   activatePremium,
   cancelPremium,
 } from "../server-functions/premium";
+import { PremiumAnalyticsScreen } from "./PremiumAnalyticsScreen";
 
 const BENEFITS = [
   { icon: TrendingUp, label: "+2% better rates on every trade",   sub: "Earn more NGN per dollar traded"         },
@@ -34,6 +35,7 @@ export function PremiumScreen({ userId, userEmail, userName, onBack }: PremiumSc
   const [error, setError]               = useState("");
   const [showCancel, setShowCancel]     = useState(false);
   const [cancelling, setCancelling]     = useState(false);
+  const [showAnalytics, setShowAnalytics] = useState(false);
 
   const { data: status, isLoading } = useQuery({
     queryKey: ["premium-status", userId],
@@ -97,6 +99,16 @@ export function PremiumScreen({ userId, userEmail, userName, onBack }: PremiumSc
   const fmtDate = (iso: string) =>
     new Date(iso).toLocaleDateString("en-NG", { day: "numeric", month: "long", year: "numeric" });
 
+  // ── Analytics sub-screen ──────────────────────────────────────────────────
+  if (showAnalytics) {
+    return (
+      <PremiumAnalyticsScreen
+        userId={userId}
+        onBack={() => setShowAnalytics(false)}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col min-h-dvh bg-background pb-8">
       <div className="mx-auto w-full max-w-[480px] flex flex-col">
@@ -157,6 +169,23 @@ export function PremiumScreen({ userId, userEmail, userName, onBack }: PremiumSc
                   </div>
                 </div>
               </div>
+
+              {/* Analytics CTA */}
+              <button
+                onClick={() => setShowAnalytics(true)}
+                className="w-full flex items-center justify-between bg-card border border-gold/30 rounded-2xl p-4 transition hover:border-gold/60"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="size-10 rounded-xl bg-gold/15 grid place-items-center">
+                    <BarChart3 className="size-5 text-gold" />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-sm font-bold">Premium Analytics</p>
+                    <p className="text-[11px] text-muted-foreground">Trust progress, trades, milestones & referrals</p>
+                  </div>
+                </div>
+                <ArrowUpRight className="size-4 text-gold flex-shrink-0" />
+              </button>
 
               {/* Active benefits */}
               <div>
