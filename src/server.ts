@@ -437,6 +437,34 @@ export default {
         );
       }
 
+      // ── Cron: weekly analytics email (every Monday 08:00 UTC = 09:00 WAT) ────
+      // Queries all 9 BI metrics, builds a branded HTML email with CSV attachment,
+      // and sends to ADMIN_EMAIL (comma-separated list supported).
+      // Trigger: CF Cron "0 8 * * 1"  (Monday 08:00 UTC)
+      // Manual:  curl -X POST https://7evencards.xyz/api/cron/weekly-analytics \
+      //            -H "x-cron-secret: $CRON_SECRET"
+      if (url.pathname === "/api/cron/weekly-analytics") {
+        const secret   = request.headers.get("x-cron-secret");
+        const expected = getEnv("CRON_SECRET");
+        if (!expected || secret !== expected) {
+          return addSecurityHeaders(
+            new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } }),
+            requestId,
+          );
+        }
+        const { getServerSupabase }         = await import("./lib/supabase.server");
+        const { sendWeeklyAnalyticsEmail }  = await import("./lib/weekly-analytics-email");
+        const db       = getServerSupabase();
+        const cronWork = sendWeeklyAnalyticsEmail(db)
+          .then(r => console.info("[Cron] Weekly analytics email:", r))
+          .catch(e => console.error("[Cron] Weekly analytics email failed:", e instanceof Error ? e.message : e));
+        (ctx as { waitUntil?: (p: Promise<unknown>) => void }).waitUntil?.(cronWork);
+        return addSecurityHeaders(
+          new Response(JSON.stringify({ ok: true, started: true }), { headers: { "Content-Type": "application/json" } }),
+          requestId,
+        );
+      }
+
       // ── Cron: Supabase keep-alive ping (every 3 days at 10:00 UTC) ───────────
       // Supabase free-tier projects auto-pause after 7 days of inactivity.
       // This endpoint makes a lightweight REST HEAD request (no CRON_SECRET
