@@ -114,7 +114,7 @@ zone_name = "7evencards.xyz"
 # "0 10 */3 * *" — every 3 days at 10:00 UTC → /api/cron/keepalive
 #                  (Supabase free-tier keep-alive — prevents 7-day auto-pause)
 [env.production.triggers]
-crons = ["0 */6 * * *", "0 18 * * 4", "0 2 * * *", "0 10 */3 * *"]
+crons = ["0 */6 * * *", "0 18 * * 4", "0 2 * * *", "0 10 */3 * *", "0 8 * * 1"]
 
 # ─── Workers Rate Limiting (distributed, edge-level) ─────────────────────────
 # The app currently uses per-isolate in-process rate limiting (src/lib/rate-limiter.ts).
