@@ -10,6 +10,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getEnv } from "./worker-env";
 import { fetchWithTimeout } from "./fetch-with-timeout";
+import { sendAdminBotMessage, isAdminBotConfigured } from "./telegram";
 
 const FROM_NAME    = "7SEVEN CARDS";
 const FROM_ADDRESS = "noreply@7evencards.xyz";
@@ -573,6 +574,78 @@ function buildEmailHtml(m: WeeklyMetrics): string {
 </html>`;
 }
 
+// ─── Telegram message builder ────────────────────────────────────────────────
+
+function buildTelegramMessage(m: WeeklyMetrics): string {
+  const fmtN  = (n: number) => n.toLocaleString("en-NG");
+  const fmtNgn = (n: number) => `₦${fmtN(Math.round(n))}`;
+  const fmtPct = (n: number) => `${n}%`;
+
+  const lines: string[] = [
+    `📊 <b>Week in Numbers</b> — ${m.weekLabel}`,
+    ``,
+    `👥 <b>Users</b>`,
+    `  Total: ${fmtN(m.users.total)} · KYC: ${fmtN(m.users.kycVerified)} · +${fmtN(m.users.newThisWeek)} new`,
+  ];
+
+  lines.push(``, `💳 <b>Trading Activity</b>`);
+  lines.push(`  ${fmtN(m.trades.thisWeek)} trades · ${fmtNgn(m.trades.volume7dNgn)} volume`);
+
+  if (m.userLtv) {
+    lines.push(``, `💰 <b>User LTV (30d cohort)</b>`);
+    lines.push(`  Avg ${fmtNgn(m.userLtv.avgNgn)} · ${m.userLtv.avgTradesPerUser} trades/user`);
+    lines.push(`  ${fmtN(m.userLtv.activePayingUsers)} active paying users`);
+  }
+
+  if (m.premiumConversion) {
+    lines.push(``, `⭐ <b>Premium</b>`);
+    lines.push(`  ${fmtPct(m.premiumConversion.conversionRate)} conversion · ${fmtN(m.premiumConversion.premiumUsers)} members`);
+  }
+
+  if (m.fraudRate) {
+    const fraudOk = m.fraudRate.ratePct <= 0.5;
+    const fraudIcon = m.fraudRate.ratePct > 2 ? "🚨" : m.fraudRate.ratePct > 0.5 ? "⚠️" : "✅";
+    lines.push(``, `🛡️ <b>Fraud &amp; Settlement</b>`);
+    lines.push(`  ${fraudIcon} Fraud rate: ${fmtPct(m.fraudRate.ratePct)} (${fmtN(m.fraudRate.fraudCount7d)} events)`);
+    if (!fraudOk) lines.push(`  ⚠️ Review fraud queue in Mission Control`);
+  }
+
+  if (m.inventoryVelocity && m.inventoryVelocity.sampleSize > 0) {
+    lines.push(`  ⏱ Settlement: avg ${fmtN(m.inventoryVelocity.avgMinutes)} min · P90 ${fmtN(m.inventoryVelocity.p90Minutes)} min`);
+  }
+
+  if (m.treasuryVelocity) {
+    lines.push(``, `⚡ <b>Treasury (7d)</b>`);
+    lines.push(`  ${fmtN(m.treasuryVelocity.totalDecisions7d)} decisions · ${fmtPct(m.treasuryVelocity.buyRate7dPct)} buy rate`);
+  }
+
+  if (m.vendorLtv) {
+    lines.push(``, `🏦 <b>Vendor Pool</b>`);
+    lines.push(`  Balance: ${fmtNgn(m.vendorLtv.totalBalanceNgn)} · ${fmtN(m.vendorLtv.vendorCount)} vendors`);
+  }
+
+  if (m.profitByBrand.length > 0) {
+    const top = m.profitByBrand[0];
+    lines.push(``, `💳 <b>Top Card Brand</b>: ${top.brand} — ${fmtNgn(top.totalNgn)} (${fmtN(top.count)} trades)`);
+  }
+
+  if (m.regionalPerf.length > 0) {
+    const top = m.regionalPerf[0];
+    lines.push(`🗺️ <b>Top Region</b>: ${top.region} — ${fmtPct(top.sharePct)} share`);
+  }
+
+  if (m.providerHealth.length > 0) {
+    const degraded = m.providerHealth.filter(p => p.successRate < 99);
+    if (degraded.length > 0) {
+      lines.push(``, `🔌 <b>Provider Alerts</b>`);
+      for (const p of degraded) lines.push(`  ⚠️ ${p.provider}: ${fmtPct(p.successRate)} success · ${fmtN(p.avgLatencyMs)}ms`);
+    }
+  }
+
+  lines.push(``, `<a href="https://7evencards.xyz/admin">Open Mission Control →</a>`);
+  return lines.join("\n");
+}
+
 // ─── Main exported function ───────────────────────────────────────────────────
 
 export async function sendWeeklyAnalyticsEmail(db: SupabaseClient): Promise<{
@@ -607,6 +680,7 @@ export async function sendWeeklyAnalyticsEmail(db: SupabaseClient): Promise<{
     attachments: [{ filename: fileName, content: csvB64 }],
   });
 
+  let emailOk = false;
   try {
     const res = await fetchWithTimeout(
       "https://api.resend.com/emails",
@@ -618,14 +692,35 @@ export async function sendWeeklyAnalyticsEmail(db: SupabaseClient): Promise<{
       15_000,
     );
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      console.warn("[WeeklyAnalytics] Resend error:", res.status, text.slice(0, 300));
-      return { ok: false, recipientCount: recipients.length, weekLabel: metrics.weekLabel };
+      const errText = await res.text().catch(() => "");
+      console.warn("[WeeklyAnalytics] Resend error:", res.status, errText.slice(0, 300));
+    } else {
+      console.info("[WeeklyAnalytics] Email sent →", recipients.join(", "));
+      emailOk = true;
     }
-    console.info("[WeeklyAnalytics] Email sent →", recipients.join(", "));
-    return { ok: true, recipientCount: recipients.length, weekLabel: metrics.weekLabel };
   } catch (e) {
     console.error("[WeeklyAnalytics] fetch failed:", e instanceof Error ? e.message : e);
-    return { ok: false, recipientCount: recipients.length, weekLabel: metrics.weekLabel };
   }
+
+  // ── Telegram push ────────────────────────────────────────────────────────
+  const adminChatId = getEnv("ADMIN_TELEGRAM_CHAT_ID");
+  if (adminChatId && isAdminBotConfigured()) {
+    try {
+      const text = buildTelegramMessage(metrics);
+      const tgRes = await sendAdminBotMessage(adminChatId, text, [[
+        { text: "📊 Open Mission Control", callback_data: "open_admin" },
+      ]]);
+      if (tgRes.ok) {
+        console.info("[WeeklyAnalytics] Telegram push sent, messageId:", tgRes.messageId);
+      } else {
+        console.warn("[WeeklyAnalytics] Telegram push failed:", tgRes.error);
+      }
+    } catch (e) {
+      console.warn("[WeeklyAnalytics] Telegram push error:", e instanceof Error ? e.message : e);
+    }
+  } else {
+    console.info("[WeeklyAnalytics] Telegram not configured — skipping push");
+  }
+
+  return { ok: emailOk, recipientCount: recipients.length, weekLabel: metrics.weekLabel };
 }
