@@ -520,3 +520,17 @@ export const getMissionControlData = createServerFn({ method: "GET" })
       },
     };
   });
+
+// ─── On-demand: trigger weekly analytics email + Telegram push ────────────────
+// Same job as the Monday 08:00 UTC cron, callable from Mission Control UI.
+// POST — requires admin session.
+export const triggerWeeklyAnalyticsReport = createServerFn({ method: "POST" })
+  .validator((d: Record<string, never>) => d)
+  .handler(async () => {
+    await requireAdmin();
+    const { getServerSupabase }        = await import("../lib/supabase.server");
+    const { sendWeeklyAnalyticsEmail } = await import("../lib/weekly-analytics-email");
+    const db     = getServerSupabase();
+    const result = await sendWeeklyAnalyticsEmail(db);
+    return result;
+  });
