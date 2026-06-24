@@ -39,6 +39,11 @@ const OPTIONAL_SECRETS = [
   "MONO_SECRET_KEY",
   "MONO_PUBLIC_KEY",
   "GEMINI_API_KEY",
+  // Payment fallback providers (Squad → Paystack → Flutterwave)
+  "PAYSTACK_SECRET_KEY",
+  "FLUTTERWAVE_SECRET_KEY",
+  // Crypto fallback provider (Busha → IvoryPay)
+  "IVORYPAY_API_KEY",
 ] as const;
 
 let startupChecked = false;

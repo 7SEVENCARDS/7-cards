@@ -9,8 +9,9 @@
 // Adding a new provider: implement PaymentProvider, add to PROVIDERS array.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { SquadProvider } from "./providers/squad";
-import { MonoPaymentProvider } from "./providers/mono";
+import { SquadProvider }        from "./providers/squad";
+import { PaystackProvider }     from "./providers/paystack";
+import { FlutterwaveProvider }  from "./providers/flutterwave";
 import type {
   PaymentProvider,
   PaymentProviderName,
@@ -26,10 +27,11 @@ import type {
 import type { ProviderOperationLog } from "../identity/types";
 
 // ── Provider registry — order determines routing priority ─────────────────────
+// Payout chain: Squad (primary) → Paystack (secondary) → Flutterwave (tertiary)
 const PROVIDERS: PaymentProvider[] = [
   new SquadProvider(),
-  new MonoPaymentProvider(),
-  // Future: new PaystackProvider(), new FlutterwaveProvider()
+  new PaystackProvider(),
+  new FlutterwaveProvider(),
 ];
 
 // ── Audit hook ────────────────────────────────────────────────────────────────

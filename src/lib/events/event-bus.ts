@@ -77,20 +77,33 @@ export const eventBus = new EventBus();
 
 // ─── Built-in handlers ────────────────────────────────────────────────────────
 
-// Trust score recomputation on user events
+// Trust score recomputation on user events (Phase 11: Trust Engine)
 eventBus.subscribe("UserVerified", async (event, db) => {
   const { entityId: userId } = event;
-  await db.rpc("compute_user_trust_score", { p_user_id: userId }).catch((e: unknown) => {
-    console.warn("[EventBus] Trust score recompute failed after UserVerified:", e instanceof Error ? e.message : e);
-  });
+  try {
+    const { computeTrustScore } = await import("../trust-engine");
+    await computeTrustScore(userId, db);
+  } catch (e) {
+    // Fallback to DB RPC if trust engine import fails
+    await db.rpc("compute_user_trust_score", { p_user_id: userId }).catch((e2: unknown) => {
+      console.warn("[EventBus] Trust score recompute failed after UserVerified:", e2 instanceof Error ? e2.message : e2);
+    });
+    console.warn("[EventBus] Trust Engine import failed after UserVerified:", e instanceof Error ? e.message : e);
+  }
 });
 
 eventBus.subscribe("TradeCompleted", async (event, db) => {
   const { payload } = event;
   if (payload.user_id) {
-    await db.rpc("compute_user_trust_score", { p_user_id: payload.user_id }).catch((e: unknown) => {
-      console.warn("[EventBus] Trust score recompute failed after TradeCompleted:", e instanceof Error ? e.message : e);
-    });
+    try {
+      const { computeTrustScore } = await import("../trust-engine");
+      await computeTrustScore(payload.user_id as string, db);
+    } catch (e) {
+      await db.rpc("compute_user_trust_score", { p_user_id: payload.user_id }).catch((e2: unknown) => {
+        console.warn("[EventBus] Trust score recompute failed after TradeCompleted:", e2 instanceof Error ? e2.message : e2);
+      });
+      console.warn("[EventBus] Trust Engine import failed after TradeCompleted:", e instanceof Error ? e.message : e);
+    }
   }
   if (payload.vendor_id) {
     await db.rpc("recalculate_vendor_score", { p_vendor_id: payload.vendor_id }).catch((e: unknown) => {

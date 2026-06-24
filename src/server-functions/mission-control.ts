@@ -65,6 +65,18 @@ export const getMissionControlData = createServerFn({ method: "GET" })
 
       // ── Support ──────────────────────────────────────────────────────
       { count: openSupport },
+
+      // ── Trust Engine ──────────────────────────────────────────────────
+      { count: eliteTrustCount },
+      { count: trustedCount },
+      { count: newTrustCount },
+
+      // ── Treasury ──────────────────────────────────────────────────────
+      { count: treasuryBuyToday },
+      { count: totalDecisionsToday },
+
+      // ── Provider Health ───────────────────────────────────────────────
+      { data: providerLogs },
     ] = await Promise.all([
       // Users
       db.from("profiles").select("*", { count: "exact", head: true }),
@@ -127,6 +139,33 @@ export const getMissionControlData = createServerFn({ method: "GET" })
         .eq("type", "support")
         .eq("read", false)
         .catch(() => ({ count: 0 })) as Promise<{ count: number | null }>,
+
+      // ── Trust Engine ─────────────────────────────────────────────────────
+      db.from("trust_scores").select("*", { count: "exact", head: true })
+        .eq("trust_level", "Elite")
+        .catch(() => ({ count: 0 })) as Promise<{ count: number | null }>,
+      db.from("trust_scores").select("*", { count: "exact", head: true })
+        .eq("trust_level", "Trusted")
+        .catch(() => ({ count: 0 })) as Promise<{ count: number | null }>,
+      db.from("trust_scores").select("*", { count: "exact", head: true })
+        .eq("trust_level", "New")
+        .catch(() => ({ count: 0 })) as Promise<{ count: number | null }>,
+
+      // ── Treasury ─────────────────────────────────────────────────────────
+      db.from("treasury_decisions").select("*", { count: "exact", head: true })
+        .eq("decision", "TREASURY_BUY")
+        .gte("decided_at", dayStart.toISOString())
+        .catch(() => ({ count: 0 })) as Promise<{ count: number | null }>,
+      db.from("treasury_decisions").select("*", { count: "exact", head: true })
+        .gte("decided_at", dayStart.toISOString())
+        .catch(() => ({ count: 0 })) as Promise<{ count: number | null }>,
+
+      // ── Provider Health ───────────────────────────────────────────────────
+      db.from("provider_operation_log")
+        .select("provider, gateway, success, latency_ms")
+        .gte("created_at", h1Ago.toISOString())
+        .limit(500)
+        .catch(() => ({ data: [] })) as Promise<{ data: Array<{ provider: string; gateway: string; success: boolean; latency_ms: number }> | null }>,
     ]);
 
     // Compute volume totals
@@ -212,5 +251,31 @@ export const getMissionControlData = createServerFn({ method: "GET" })
         occurred_at: string;
       }>,
       reconciliation: lastRecon?.[0] ?? null,
+      trust: {
+        elite:   eliteTrustCount   ?? 0,
+        trusted: trustedCount      ?? 0,
+        newUsers: newTrustCount    ?? 0,
+        total:   (eliteTrustCount ?? 0) + (trustedCount ?? 0) + (newTrustCount ?? 0),
+      },
+      treasury: {
+        buyDecisionsToday:   treasuryBuyToday     ?? 0,
+        totalDecisionsToday: totalDecisionsToday  ?? 0,
+        vendorRouteToday:    Math.max(0, (totalDecisionsToday ?? 0) - (treasuryBuyToday ?? 0)),
+      },
+      providerHealth: (() => {
+        const logs = (providerLogs ?? []) as Array<{ provider: string; gateway: string; success: boolean; latency_ms: number }>;
+        const grouped: Record<string, { success: number; total: number }> = {};
+        for (const l of logs) {
+          if (!grouped[l.provider]) grouped[l.provider] = { success: 0, total: 0 };
+          grouped[l.provider].total++;
+          if (l.success) grouped[l.provider].success++;
+        }
+        return Object.entries(grouped).map(([provider, s]) => ({
+          provider,
+          successRate: Math.round((s.success / s.total) * 100),
+          totalCalls:  s.total,
+          status: (s.success / s.total) >= 0.9 ? "healthy" : (s.success / s.total) >= 0.7 ? "degraded" : "down",
+        }));
+      })(),
     };
   });
