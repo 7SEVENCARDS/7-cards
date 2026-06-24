@@ -18,7 +18,7 @@ import {
   Crown, Globe, Package, Target, Gauge, Server,
   ShieldAlert, Wallet, Map, Download,
 } from "lucide-react";
-import { getMissionControlData } from "../server-functions/mission-control";
+import { getMissionControlData, triggerWeeklyAnalyticsReport } from "../server-functions/mission-control";
 
 type MCData = Awaited<ReturnType<typeof getMissionControlData>>;
 
@@ -137,6 +137,8 @@ export function MissionControlTab() {
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [sending, setSending]       = useState(false);
+  const [sendResult, setSendResult] = useState<{ ok: boolean; label: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -149,6 +151,25 @@ export function MissionControlTab() {
       setError(e instanceof Error ? e.message : "Failed to load mission control data");
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const handleSendReport = useCallback(async () => {
+    setSending(true);
+    setSendResult(null);
+    try {
+      const result = await triggerWeeklyAnalyticsReport({ data: {} });
+      setSendResult({
+        ok:    result.ok,
+        label: result.ok
+          ? `Sent to ${result.recipientCount} recipient${result.recipientCount !== 1 ? "s" : ""} + Telegram`
+          : "Send failed — check server logs",
+      });
+    } catch (e) {
+      setSendResult({ ok: false, label: e instanceof Error ? e.message : "Send failed" });
+    } finally {
+      setSending(false);
+      setTimeout(() => setSendResult(null), 8_000);
     }
   }, []);
 
@@ -328,6 +349,29 @@ export function MissionControlTab() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Send Now — triggers weekly email + Telegram push on demand */}
+          <button
+            onClick={handleSendReport}
+            disabled={sending || loading}
+            className={`flex items-center gap-1.5 text-xs py-1.5 px-3 rounded-lg border transition-colors ${
+              sendResult
+                ? sendResult.ok
+                  ? "text-green-400 bg-green-400/10 border-green-400/20"
+                  : "text-red-400 bg-red-400/10 border-red-400/20"
+                : "text-muted-foreground bg-secondary border-transparent hover:border-border"
+            }`}
+            title="Send weekly analytics report now (email + Telegram)"
+          >
+            {sending
+              ? <><Loader2 className="size-3 animate-spin" /> Sending…</>
+              : sendResult
+                ? sendResult.ok
+                  ? <><CheckCircle2 className="size-3" /> {sendResult.label}</>
+                  : <><AlertTriangle className="size-3" /> {sendResult.label}</>
+                : <><Zap className="size-3" /> Send Report</>
+            }
+          </button>
+
           {data && (
             <button
               onClick={handleExportCsv}
