@@ -1,9 +1,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Mission Control Tab — Phases 4 & 5
+// Mission Control Tab — Executive Command Center
 //
-// Executive command center for 7SEVEN CARDS admin.
 // Auto-refreshes every 30 seconds.
-// Displays: users, trades, volume, queues, vendors, settlements, risk, events.
+// Core metrics: users, trades, volume, queues, vendors, settlement, risk,
+//               events, reconciliation, trust, treasury, providerHealth
+// BI metrics:   userLtv, vendorLtv, premiumConversion, fraudRate,
+//               inventoryVelocity, profitByBrand, regionalPerformance,
+//               treasuryVelocity, providerHealth (success rates detail)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useEffect, useCallback } from "react";
@@ -12,6 +15,8 @@ import {
   CheckCircle2, Clock, Activity, Shield,
   Zap, RefreshCw, Building2, BarChart3,
   AlertOctagon, Loader2, CircleDot, ArrowUpRight,
+  Crown, Globe, Package, Target, Gauge, Server,
+  ShieldAlert, Wallet, Map,
 } from "lucide-react";
 import { getMissionControlData } from "../server-functions/mission-control";
 
@@ -37,25 +42,29 @@ function timeAgo(iso: string) {
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
 }
+function fmtMins(m: number) {
+  if (m < 60)  return `${m}m`;
+  if (m < 1440) return `${(m / 60).toFixed(1)}h`;
+  return `${(m / 1440).toFixed(1)}d`;
+}
 
 const EVENT_LABELS: Record<string, string> = {
-  TradeCreated:          "Trade created",
-  TradeCompleted:        "Trade completed",
-  TradeAssigned:         "Trade assigned",
-  UserVerified:          "KYC verified",
-  UserRegistered:        "New user",
-  VendorApproved:        "Vendor approved",
-  VendorSuspended:       "Vendor suspended",
-  FraudDetected:         "⛔ Fraud detected",
-  SettlementCompleted:   "Settlement done",
-  SettlementFailed:      "Settlement failed",
-  WalletCredited:        "Wallet credited",
-  ReconciliationRun:     "Reconciliation ran",
-  FeatureFlagChanged:    "Flag toggled",
+  TradeCreated:        "Trade created",
+  TradeCompleted:      "Trade completed",
+  TradeAssigned:       "Trade assigned",
+  UserVerified:        "KYC verified",
+  UserRegistered:      "New user",
+  VendorApproved:      "Vendor approved",
+  VendorSuspended:     "Vendor suspended",
+  FraudDetected:       "Fraud detected",
+  SettlementCompleted: "Settlement done",
+  SettlementFailed:    "Settlement failed",
+  WalletCredited:      "Wallet credited",
+  ReconciliationRun:   "Reconciliation ran",
+  FeatureFlagChanged:  "Flag toggled",
 };
 
 // ── Sub-components ────────────────────────────────────────────────────────────
-
 function MCCard({ children, urgent }: { children: React.ReactNode; urgent?: boolean }) {
   return (
     <div className={`bg-gradient-card rounded-2xl border ${urgent ? "border-red-500/30" : "border-white/5"} p-4`}>
@@ -95,11 +104,38 @@ function QueueRow({ icon: Icon, label, count, color, urgent }: {
   );
 }
 
+function SectionHeader({ icon: Icon, label }: { icon: typeof Users; label: string }) {
+  return (
+    <div className="flex items-center gap-2 mb-3">
+      <Icon className="size-3.5 text-muted-foreground" />
+      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{label}</p>
+    </div>
+  );
+}
+
+function MiniStat({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div className="bg-gradient-card rounded-xl border border-white/5 p-3 text-center">
+      <p className={`text-base font-extrabold tabular-nums ${color}`}>{value.toLocaleString()}</p>
+      <p className="text-[9px] text-muted-foreground mt-0.5">{label}</p>
+    </div>
+  );
+}
+
+function ProgressBar({ value, max, color = "bg-cyan" }: { value: number; max: number; color?: string }) {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  return (
+    <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+      <div className={`h-full ${color} rounded-full transition-all`} style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export function MissionControlTab() {
-  const [data, setData]       = useState<MCData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState<string | null>(null);
+  const [data, setData]             = useState<MCData | null>(null);
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const load = useCallback(async () => {
@@ -141,9 +177,11 @@ export function MissionControlTab() {
 
   if (!data) return null;
 
-  const totalQueueItems = data.queues.kycPending + data.queues.manualReview + data.queues.escrow;
-  const hasRiskAlerts   = data.risk.critical + data.risk.high > 0;
+  const totalQueueItems    = data.queues.kycPending + data.queues.manualReview + data.queues.escrow;
+  const hasRiskAlerts      = data.risk.critical + data.risk.high > 0;
   const hasSettlementIssue = data.settlement.unreconciled > 0;
+  const topBrandNgn        = data.profitByBrand?.[0]?.totalNgn ?? 1;
+  const topRegionCount     = data.regionalPerformance?.[0]?.count ?? 1;
 
   return (
     <div className="px-4 pt-4 pb-12 space-y-5">
@@ -165,21 +203,21 @@ export function MissionControlTab() {
         </button>
       </div>
 
-      {/* ── ALERT BANNER — risk / settlement issues ── */}
+      {/* ── ALERT BANNER ── */}
       {(hasRiskAlerts || hasSettlementIssue) && (
         <div className="rounded-2xl border border-red-500/30 bg-red-500/5 p-4 space-y-1.5">
           <div className="flex items-center gap-2 text-red-400 font-bold text-sm">
             <AlertOctagon className="size-4" /> Attention Required
           </div>
           {data.risk.critical > 0 && (
-            <p className="text-xs text-red-300">⛔ {data.risk.critical} CRITICAL risk entity/ies flagged</p>
+            <p className="text-xs text-red-300">{data.risk.critical} CRITICAL risk entity/ies flagged</p>
           )}
           {data.risk.high > 0 && (
-            <p className="text-xs text-orange-300">⚠️ {data.risk.high} HIGH risk entity/ies active</p>
+            <p className="text-xs text-orange-300">{data.risk.high} HIGH risk entity/ies active</p>
           )}
           {hasSettlementIssue && (
             <p className="text-xs text-yellow-300">
-              💰 {data.settlement.unreconciled} unreconciled trade(s) — {formatNgn(data.settlement.unreconciledNgn)} outstanding
+              {data.settlement.unreconciled} unreconciled trade(s) — {formatNgn(data.settlement.unreconciledNgn)} outstanding
             </p>
           )}
         </div>
@@ -189,10 +227,10 @@ export function MissionControlTab() {
       <section>
         <SectionHeader icon={Users} label="Users" />
         <div className="grid grid-cols-2 gap-3">
-          <BigMetric icon={Users}       label="Total Users"    value={data.users.total.toLocaleString()}       color="text-cyan" />
-          <BigMetric icon={Activity}    label="Active Today"   value={data.users.dailyActive.toLocaleString()} color="text-green-400" sub="sessions updated today" />
-          <BigMetric icon={ArrowUpRight} label="New Today"     value={data.users.newToday.toLocaleString()}    color="text-cyan" />
-          <BigMetric icon={Shield}      label="KYC Verified"   value={data.users.kycVerified.toLocaleString()} color="text-gold" />
+          <BigMetric icon={Users}        label="Total Users"  value={data.users.total.toLocaleString()}       color="text-cyan" />
+          <BigMetric icon={Activity}     label="Active Today" value={data.users.dailyActive.toLocaleString()} color="text-green-400" sub="sessions updated today" />
+          <BigMetric icon={ArrowUpRight} label="New Today"    value={data.users.newToday.toLocaleString()}    color="text-cyan" />
+          <BigMetric icon={Shield}       label="KYC Verified" value={data.users.kycVerified.toLocaleString()} color="text-gold" />
         </div>
       </section>
 
@@ -213,22 +251,276 @@ export function MissionControlTab() {
       <section>
         <SectionHeader icon={DollarSign} label="Trade Volume" />
         <div className="grid grid-cols-2 gap-3">
-          <BigMetric icon={DollarSign} label="Today (NGN)"   value={formatNgn(data.volume.todayNgn)}   color="text-green-400" sub={formatUsd(data.volume.todayUsd)} />
-          <BigMetric icon={DollarSign} label="This Month"    value={formatNgn(data.volume.monthNgn)}   color="text-cyan"      sub={formatUsd(data.volume.monthUsd)} />
-          <BigMetric icon={BarChart3}  label="All-Time NGN"  value={formatNgn(data.volume.allTimeNgn)} color="text-gold"      sub={formatUsd(data.volume.allTimeUsd)} />
+          <BigMetric icon={DollarSign}   label="Today (NGN)"  value={formatNgn(data.volume.todayNgn)}   color="text-green-400" sub={formatUsd(data.volume.todayUsd)} />
+          <BigMetric icon={DollarSign}   label="This Month"   value={formatNgn(data.volume.monthNgn)}   color="text-cyan"      sub={formatUsd(data.volume.monthUsd)} />
+          <BigMetric icon={BarChart3}    label="All-Time NGN" value={formatNgn(data.volume.allTimeNgn)} color="text-gold"      sub={formatUsd(data.volume.allTimeUsd)} />
           <BigMetric icon={CheckCircle2} label="Unreconciled" value={formatNgn(data.settlement.unreconciledNgn)} color={data.settlement.unreconciled > 0 ? "text-red-400" : "text-muted-foreground"} sub={`${data.settlement.unreconciled} trade(s)`} />
         </div>
       </section>
+
+      {/* ── USER LTV ── */}
+      {data.userLtv && (
+        <section>
+          <SectionHeader icon={Target} label={`User LTV (Last ${data.userLtv.windowDays}d)`} />
+          <div className="grid grid-cols-2 gap-3">
+            <BigMetric icon={Wallet}   label="Avg LTV (NGN)"       value={formatNgn(data.userLtv.avgNgn)}          color="text-gold" sub={formatUsd(data.userLtv.avgUsd)} />
+            <BigMetric icon={BarChart3} label="Avg Trades / User"  value={`${data.userLtv.avgTradesPerUser}x`}      color="text-cyan" sub={`${data.userLtv.activePayingUsers.toLocaleString()} active payers`} />
+          </div>
+        </section>
+      )}
+
+      {/* ── VENDOR LTV ── */}
+      {data.vendorLtv && (
+        <section>
+          <SectionHeader icon={Building2} label="Vendor LTV" />
+          <div className="grid grid-cols-2 gap-3">
+            <BigMetric icon={Wallet}   label="Avg Lifetime NGN"  value={formatNgn(data.vendorLtv.avgLifetimeNgn)}  color="text-emerald-400" sub={`${data.vendorLtv.vendorCount} vendors`} />
+            <BigMetric icon={DollarSign} label="Total Funded NGN" value={formatNgn(data.vendorLtv.totalFundedNgn)} color="text-cyan" sub={`${formatNgn(data.vendorLtv.totalBalanceNgn)} balance`} />
+          </div>
+        </section>
+      )}
+
+      {/* ── PREMIUM CONVERSION ── */}
+      {data.premiumConversion && (
+        <section>
+          <SectionHeader icon={Crown} label="Premium Conversion" />
+          <MCCard>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-2xl font-extrabold text-gold">{data.premiumConversion.conversionRate}%</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">conversion rate</p>
+              </div>
+              <div className="text-right">
+                <p className="text-sm font-bold text-gold">{data.premiumConversion.premiumUsers.toLocaleString()}</p>
+                <p className="text-[10px] text-muted-foreground">premium members</p>
+                <p className="text-[10px] text-muted-foreground">of {data.premiumConversion.totalUsers.toLocaleString()} users</p>
+              </div>
+            </div>
+            <ProgressBar value={data.premiumConversion.premiumUsers} max={data.premiumConversion.totalUsers} color="bg-gold" />
+          </MCCard>
+        </section>
+      )}
+
+      {/* ── FRAUD RATE ── */}
+      {data.fraudRate && (
+        <section>
+          <SectionHeader icon={ShieldAlert} label="Fraud Rate" />
+          <div className="grid grid-cols-2 gap-3">
+            <BigMetric
+              icon={ShieldAlert}
+              label="Fraud Rate (30d)"
+              value={`${data.fraudRate.ratePct}%`}
+              color={data.fraudRate.ratePct > 2 ? "text-red-400" : data.fraudRate.ratePct > 0.5 ? "text-orange-400" : "text-green-400"}
+              sub={`${data.fraudRate.fraudCount30d} events`}
+            />
+            <BigMetric
+              icon={AlertTriangle}
+              label="Risk Flags Active"
+              value={(data.risk.critical + data.risk.high).toString()}
+              color={data.risk.critical > 0 ? "text-red-400" : data.risk.high > 0 ? "text-orange-400" : "text-muted-foreground"}
+              sub={`${data.risk.critical} critical · ${data.risk.high} high`}
+            />
+          </div>
+          {data.risk.fraudEvents.length > 0 && (
+            <MCCard urgent>
+              <p className="text-[10px] font-bold text-red-400 uppercase tracking-wide mb-3">Recent Fraud Events</p>
+              <div className="space-y-2">
+                {data.risk.fraudEvents.map((e, i) => (
+                  <div key={i} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <AlertOctagon className="size-3 text-red-400 shrink-0" />
+                      <span className="text-xs text-red-300 truncate">
+                        {(e.payload?.verdict as string) ?? "fraud"} — {e.entity_id.slice(0, 8)}
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground shrink-0">{timeAgo(e.occurred_at)}</span>
+                  </div>
+                ))}
+              </div>
+            </MCCard>
+          )}
+        </section>
+      )}
+
+      {/* ── TREASURY VELOCITY ── */}
+      {data.treasuryVelocity && (
+        <section>
+          <SectionHeader icon={Zap} label="Treasury Velocity (24h)" />
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="bg-gradient-card rounded-xl border border-white/5 p-3 text-center">
+              <p className="text-base font-extrabold text-gold tabular-nums">{data.treasuryVelocity.totalDecisions24h}</p>
+              <p className="text-[9px] text-muted-foreground mt-0.5">Decisions</p>
+            </div>
+            <div className="bg-gradient-card rounded-xl border border-white/5 p-3 text-center">
+              <p className="text-base font-extrabold text-cyan tabular-nums">{data.treasuryVelocity.avgDecisionsPerHour}</p>
+              <p className="text-[9px] text-muted-foreground mt-0.5">Per Hour</p>
+            </div>
+            <div className="bg-gradient-card rounded-xl border border-white/5 p-3 text-center">
+              <p className="text-base font-extrabold text-emerald-400 tabular-nums">{data.treasuryVelocity.buyRate24hPct}%</p>
+              <p className="text-[9px] text-muted-foreground mt-0.5">Buy Rate</p>
+            </div>
+          </div>
+          {data.treasuryVelocity.hourly.length > 0 && (
+            <MCCard>
+              <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-3">Hourly Decision Volume</p>
+              <div className="flex items-end gap-0.5 h-16 w-full">
+                {data.treasuryVelocity.hourly.map(h => {
+                  const maxH = Math.max(...data.treasuryVelocity.hourly.map(x => x.total), 1);
+                  const heightPct = Math.max(4, (h.total / maxH) * 100);
+                  return (
+                    <div key={h.hour} className="flex-1 flex flex-col items-center justify-end gap-0.5 min-w-0">
+                      <div
+                        className="w-full rounded-t-sm bg-gold/60 min-h-[2px]"
+                        style={{ height: `${heightPct}%` }}
+                        title={`${h.hour}: ${h.total} decisions`}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flex justify-between mt-1">
+                <span className="text-[9px] text-muted-foreground">{data.treasuryVelocity.hourly[0]?.hour ?? ""}</span>
+                <span className="text-[9px] text-muted-foreground">{data.treasuryVelocity.hourly[data.treasuryVelocity.hourly.length - 1]?.hour ?? ""}</span>
+              </div>
+            </MCCard>
+          )}
+          <div className="grid grid-cols-3 gap-2 mt-2">
+            <div className="bg-gradient-card rounded-xl border border-white/5 p-3 text-center">
+              <p className="text-sm font-extrabold text-gold tabular-nums">{data.treasury.buyDecisionsToday}</p>
+              <p className="text-[9px] text-muted-foreground mt-0.5">Buy Today</p>
+            </div>
+            <div className="bg-gradient-card rounded-xl border border-white/5 p-3 text-center">
+              <p className="text-sm font-extrabold text-cyan tabular-nums">{data.treasury.vendorRouteToday}</p>
+              <p className="text-[9px] text-muted-foreground mt-0.5">Route Today</p>
+            </div>
+            <div className="bg-gradient-card rounded-xl border border-white/5 p-3 text-center">
+              <p className="text-sm font-extrabold text-muted-foreground tabular-nums">{data.treasury.totalDecisionsToday}</p>
+              <p className="text-[9px] text-muted-foreground mt-0.5">Total Today</p>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ── INVENTORY VELOCITY ── */}
+      {data.inventoryVelocity && data.inventoryVelocity.sampleSize > 0 && (
+        <section>
+          <SectionHeader icon={Gauge} label="Inventory Velocity (Trade → Settlement)" />
+          <div className="grid grid-cols-3 gap-2">
+            <div className="bg-gradient-card rounded-2xl border border-white/5 p-4 text-center">
+              <p className="text-lg font-extrabold text-cyan">{fmtMins(data.inventoryVelocity.avgMinutes)}</p>
+              <p className="text-[9px] text-muted-foreground mt-1">Average</p>
+            </div>
+            <div className="bg-gradient-card rounded-2xl border border-white/5 p-4 text-center">
+              <p className="text-lg font-extrabold text-emerald-400">{fmtMins(data.inventoryVelocity.medianMinutes)}</p>
+              <p className="text-[9px] text-muted-foreground mt-1">Median</p>
+            </div>
+            <div className="bg-gradient-card rounded-2xl border border-white/5 p-4 text-center">
+              <p className="text-lg font-extrabold text-orange-400">{fmtMins(data.inventoryVelocity.p90Minutes)}</p>
+              <p className="text-[9px] text-muted-foreground mt-1">P90</p>
+            </div>
+          </div>
+          <p className="text-[10px] text-muted-foreground text-center mt-2">
+            Based on {data.inventoryVelocity.sampleSize.toLocaleString()} settled trades
+          </p>
+        </section>
+      )}
+
+      {/* ── PROFIT PER CARD TYPE ── */}
+      {data.profitByBrand && data.profitByBrand.length > 0 && (
+        <section>
+          <SectionHeader icon={Package} label="Profit Per Card Type" />
+          <MCCard>
+            <div className="space-y-3">
+              {data.profitByBrand.map((b) => (
+                <div key={b.brand}>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xs font-semibold truncate">{b.brand}</span>
+                      <span className="text-[9px] text-muted-foreground shrink-0">{b.count} trades</span>
+                    </div>
+                    <div className="text-right shrink-0 ml-2">
+                      <p className="text-xs font-extrabold text-gold">{formatNgn(b.totalNgn)}</p>
+                      {b.avgRateNgn > 0 && (
+                        <p className="text-[9px] text-muted-foreground">₦{b.avgRateNgn.toLocaleString()}/$</p>
+                      )}
+                    </div>
+                  </div>
+                  <ProgressBar value={b.totalNgn} max={topBrandNgn} color="bg-gold/60" />
+                </div>
+              ))}
+            </div>
+          </MCCard>
+        </section>
+      )}
+
+      {/* ── PROVIDER SUCCESS RATES ── */}
+      {data.providerHealth && data.providerHealth.length > 0 && (
+        <section>
+          <SectionHeader icon={Server} label="Provider Success Rates (Last 1h)" />
+          <MCCard>
+            <div className="space-y-3">
+              {data.providerHealth.map((p) => (
+                <div key={p.provider}>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`size-2 rounded-full shrink-0 ${p.status === "healthy" ? "bg-green-400" : p.status === "degraded" ? "bg-orange-400" : "bg-red-400"}`} />
+                      <span className="text-xs font-semibold capitalize">{p.provider}</span>
+                    </div>
+                    <div className="flex items-center gap-3 text-right shrink-0">
+                      {p.avgLatencyMs > 0 && (
+                        <span className="text-[10px] text-muted-foreground">{p.avgLatencyMs}ms</span>
+                      )}
+                      <span className={`text-xs font-extrabold ${p.status === "healthy" ? "text-green-400" : p.status === "degraded" ? "text-orange-400" : "text-red-400"}`}>
+                        {p.successRate}%
+                      </span>
+                      <span className="text-[9px] text-muted-foreground">{p.totalCalls} calls</span>
+                    </div>
+                  </div>
+                  <ProgressBar
+                    value={p.successRate}
+                    max={100}
+                    color={p.status === "healthy" ? "bg-green-400" : p.status === "degraded" ? "bg-orange-400" : "bg-red-400"}
+                  />
+                </div>
+              ))}
+            </div>
+          </MCCard>
+        </section>
+      )}
+
+      {/* ── REGIONAL PERFORMANCE ── */}
+      {data.regionalPerformance && data.regionalPerformance.length > 0 && (
+        <section>
+          <SectionHeader icon={Globe} label="Regional Performance" />
+          <MCCard>
+            <div className="space-y-3">
+              {data.regionalPerformance.map((r) => (
+                <div key={r.region}>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Map className="size-3 text-muted-foreground shrink-0" />
+                      <span className="text-xs font-semibold truncate">{r.region}</span>
+                      <span className="text-[9px] text-muted-foreground shrink-0">{r.count} trades · {r.sharePct}%</span>
+                    </div>
+                    <span className="text-xs font-bold text-cyan shrink-0 ml-2">{formatNgn(r.totalNgn)}</span>
+                  </div>
+                  <ProgressBar value={r.count} max={topRegionCount} color="bg-cyan/60" />
+                </div>
+              ))}
+            </div>
+          </MCCard>
+        </section>
+      )}
 
       {/* ── ACTION QUEUES ── */}
       <section>
         <SectionHeader icon={Clock} label="Action Queues" />
         <MCCard urgent={totalQueueItems > 5}>
           <div className="divide-y divide-white/5">
-            <QueueRow icon={Shield}       label="KYC Pending"    count={data.queues.kycPending}   color="text-gold"       urgent={data.queues.kycPending > 0} />
+            <QueueRow icon={Shield}        label="KYC Pending"    count={data.queues.kycPending}   color="text-gold"       urgent={data.queues.kycPending > 0} />
             <QueueRow icon={AlertTriangle} label="Manual Review"  count={data.queues.manualReview} color="text-orange-400" urgent={data.queues.manualReview > 0} />
-            <QueueRow icon={DollarSign}   label="Escrow / Payout" count={data.queues.escrow}       color="text-cyan"       urgent={data.queues.escrow > 3} />
-            <QueueRow icon={Users}        label="Support"         count={data.queues.support}      color="text-purple-400" />
+            <QueueRow icon={DollarSign}    label="Escrow / Payout" count={data.queues.escrow}      color="text-cyan"       urgent={data.queues.escrow > 3} />
+            <QueueRow icon={Users}         label="Support"         count={data.queues.support}     color="text-purple-400" />
           </div>
         </MCCard>
       </section>
@@ -237,8 +529,8 @@ export function MissionControlTab() {
       <section>
         <SectionHeader icon={Building2} label="Vendors" />
         <div className="grid grid-cols-2 gap-3 mb-3">
-          <BigMetric icon={CheckCircle2}   label="Active"    value={data.vendors.active.toLocaleString()}    color="text-green-400" />
-          <BigMetric icon={AlertTriangle}  label="Suspended" value={data.vendors.suspended.toLocaleString()} color="text-red-400" />
+          <BigMetric icon={CheckCircle2}  label="Active"    value={data.vendors.active.toLocaleString()}    color="text-green-400" />
+          <BigMetric icon={AlertTriangle} label="Suspended" value={data.vendors.suspended.toLocaleString()} color="text-red-400" />
         </div>
         {data.vendors.top.length > 0 && (
           <MCCard>
@@ -260,33 +552,6 @@ export function MissionControlTab() {
                   <span className="text-xs font-bold text-green-400 shrink-0">
                     {Number(v.performance_score).toFixed(0)}
                   </span>
-                </div>
-              ))}
-            </div>
-          </MCCard>
-        )}
-      </section>
-
-      {/* ── RISK & FRAUD ── */}
-      <section>
-        <SectionHeader icon={AlertOctagon} label="Risk & Fraud" />
-        <div className="grid grid-cols-2 gap-3 mb-3">
-          <BigMetric icon={AlertOctagon} label="Critical Risk" value={data.risk.critical.toString()} color={data.risk.critical > 0 ? "text-red-400" : "text-muted-foreground"} />
-          <BigMetric icon={AlertTriangle} label="High Risk"    value={data.risk.high.toString()}     color={data.risk.high > 0 ? "text-orange-400" : "text-muted-foreground"} />
-        </div>
-        {data.risk.fraudEvents.length > 0 && (
-          <MCCard urgent>
-            <p className="text-[10px] font-bold text-red-400 uppercase tracking-wide mb-3">Recent Fraud Events</p>
-            <div className="space-y-2">
-              {data.risk.fraudEvents.map((e, i) => (
-                <div key={i} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <AlertOctagon className="size-3 text-red-400 shrink-0" />
-                    <span className="text-xs text-red-300 truncate">
-                      {(e.payload?.verdict as string) ?? "fraud"} — {e.entity_id.slice(0, 8)}
-                    </span>
-                  </div>
-                  <span className="text-[10px] text-muted-foreground shrink-0">{timeAgo(e.occurred_at)}</span>
                 </div>
               ))}
             </div>
@@ -349,25 +614,6 @@ export function MissionControlTab() {
         </section>
       )}
 
-    </div>
-  );
-}
-
-// ── Small helpers ─────────────────────────────────────────────────────────────
-function SectionHeader({ icon: Icon, label }: { icon: typeof Users; label: string }) {
-  return (
-    <div className="flex items-center gap-2 mb-3">
-      <Icon className="size-3.5 text-muted-foreground" />
-      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{label}</p>
-    </div>
-  );
-}
-
-function MiniStat({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <div className="bg-gradient-card rounded-xl border border-white/5 p-3 text-center">
-      <p className={`text-base font-extrabold tabular-nums ${color}`}>{value.toLocaleString()}</p>
-      <p className="text-[9px] text-muted-foreground mt-0.5">{label}</p>
     </div>
   );
 }
