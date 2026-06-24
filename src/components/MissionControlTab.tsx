@@ -16,7 +16,7 @@ import {
   Zap, RefreshCw, Building2, BarChart3,
   AlertOctagon, Loader2, CircleDot, ArrowUpRight,
   Crown, Globe, Package, Target, Gauge, Server,
-  ShieldAlert, Wallet, Map,
+  ShieldAlert, Wallet, Map, Download,
 } from "lucide-react";
 import { getMissionControlData } from "../server-functions/mission-control";
 
@@ -152,6 +152,139 @@ export function MissionControlTab() {
     }
   }, []);
 
+  const handleExportCsv = useCallback(() => {
+    if (!data) return;
+    const now = new Date().toISOString();
+    const rows: string[] = [];
+
+    const cell = (v: string | number) => {
+      const s = String(v);
+      return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const row = (...cols: (string | number)[]) => rows.push(cols.map(cell).join(","));
+    const blank = () => rows.push("");
+    const heading = (t: string) => { blank(); rows.push(`# ${t}`); };
+
+    rows.push("# 7SEVEN CARDS — Mission Control Analytics Export");
+    rows.push(`# Generated: ${now}`);
+    rows.push(`# Data timestamp: ${new Date(data.ts).toISOString()}`);
+
+    heading("PLATFORM SUMMARY");
+    row("Metric", "Value");
+    row("Total Users", data.users.total);
+    row("KYC Verified Users", data.users.kycVerified);
+    row("Premium Members", data.users.premium);
+    row("New Users Today", data.users.newToday);
+    row("Active Today", data.users.dailyActive);
+    row("Trades Paid (All-Time)", data.trades.paid);
+    row("Trades Failed (All-Time)", data.trades.failed);
+    row("Trades Pending", data.trades.pending);
+    row("Trades Today", data.trades.today);
+    row("Trades This Week", data.trades.thisWeek);
+    row("Volume Today (NGN)", data.volume.todayNgn);
+    row("Volume Today (USD)", data.volume.todayUsd);
+    row("Volume This Month (NGN)", data.volume.monthNgn);
+    row("Volume This Month (USD)", data.volume.monthUsd);
+    row("Volume All-Time (NGN)", data.volume.allTimeNgn);
+    row("Volume All-Time (USD)", data.volume.allTimeUsd);
+    row("Unreconciled Trades", data.settlement.unreconciled);
+    row("Unreconciled (NGN)", data.settlement.unreconciledNgn);
+
+    if (data.userLtv) {
+      heading(`USER LTV (Last ${data.userLtv.windowDays} Days)`);
+      row("Metric", "Value");
+      row("Average LTV (NGN)", data.userLtv.avgNgn);
+      row("Average LTV (USD)", data.userLtv.avgUsd);
+      row("Average Trades Per User", data.userLtv.avgTradesPerUser);
+      row("Active Paying Users", data.userLtv.activePayingUsers);
+    }
+
+    if (data.vendorLtv) {
+      heading("VENDOR LTV");
+      row("Metric", "Value");
+      row("Avg Lifetime Funded (NGN)", data.vendorLtv.avgLifetimeNgn);
+      row("Total Funded All-Time (NGN)", data.vendorLtv.totalFundedNgn);
+      row("Total Current Balance (NGN)", data.vendorLtv.totalBalanceNgn);
+      row("Vendor Count", data.vendorLtv.vendorCount);
+    }
+
+    if (data.premiumConversion) {
+      heading("PREMIUM CONVERSION");
+      row("Metric", "Value");
+      row("Premium Members", data.premiumConversion.premiumUsers);
+      row("Total Users", data.premiumConversion.totalUsers);
+      row("Conversion Rate (%)", data.premiumConversion.conversionRate);
+    }
+
+    if (data.fraudRate) {
+      heading("FRAUD RATE");
+      row("Metric", "Value");
+      row("Fraud Events (30d)", data.fraudRate.fraudCount30d);
+      row("Total Trades", data.fraudRate.totalTrades);
+      row("Fraud Rate (%)", data.fraudRate.ratePct);
+      row("Critical Risk Active", data.risk.critical);
+      row("High Risk Active", data.risk.high);
+    }
+
+    if (data.inventoryVelocity && data.inventoryVelocity.sampleSize > 0) {
+      heading("INVENTORY VELOCITY (TRADE → SETTLEMENT)");
+      row("Metric", "Value (minutes)");
+      row("Average Settlement Time", data.inventoryVelocity.avgMinutes);
+      row("Median Settlement Time", data.inventoryVelocity.medianMinutes);
+      row("P90 Settlement Time", data.inventoryVelocity.p90Minutes);
+      row("Sample Size (trades)", data.inventoryVelocity.sampleSize);
+    }
+
+    if (data.treasuryVelocity) {
+      heading("TREASURY VELOCITY (Last 24h)");
+      row("Metric", "Value");
+      row("Total Decisions (24h)", data.treasuryVelocity.totalDecisions24h);
+      row("Avg Decisions Per Hour", data.treasuryVelocity.avgDecisionsPerHour);
+      row("Buy Rate (%)", data.treasuryVelocity.buyRate24hPct);
+      row("Buy Decisions Today", data.treasury.buyDecisionsToday);
+      row("Route Decisions Today", data.treasury.vendorRouteToday);
+      blank();
+      row("Hour", "Total Decisions", "Buy", "Route");
+      for (const h of data.treasuryVelocity.hourly) row(h.hour, h.total, h.buy, h.route);
+    }
+
+    if (data.profitByBrand && data.profitByBrand.length > 0) {
+      heading("PROFIT PER CARD TYPE");
+      row("Brand", "Trades", "Total NGN", "Total USD", "Avg NGN per Trade", "Avg Rate (NGN/$)");
+      for (const b of data.profitByBrand) row(b.brand, b.count, b.totalNgn, b.totalUsd, b.avgNgnPerTrade, b.avgRateNgn);
+    }
+
+    if (data.providerHealth && data.providerHealth.length > 0) {
+      heading("PROVIDER SUCCESS RATES (Last 1h)");
+      row("Provider", "Success Rate (%)", "Total Calls", "Avg Latency (ms)", "Status");
+      for (const p of data.providerHealth) row(p.provider, p.successRate, p.totalCalls, p.avgLatencyMs, p.status);
+    }
+
+    if (data.regionalPerformance && data.regionalPerformance.length > 0) {
+      heading("REGIONAL PERFORMANCE");
+      row("Region", "Trades", "Share (%)", "Total NGN", "Total USD");
+      for (const r of data.regionalPerformance) row(r.region, r.count, r.sharePct, r.totalNgn, r.totalUsd);
+    }
+
+    heading("QUEUES");
+    row("Queue", "Count");
+    row("KYC Pending", data.queues.kycPending);
+    row("Manual Review", data.queues.manualReview);
+    row("Escrow / Payout", data.queues.escrow);
+    row("Support Open", data.queues.support);
+
+    const csv = rows.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `7cards-analytics-${now.slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [data]);
+
   useEffect(() => {
     load();
     const interval = setInterval(load, 30_000);
@@ -194,13 +327,24 @@ export function MissionControlTab() {
             {loading ? "Refreshing…" : lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString()}` : ""}
           </span>
         </div>
-        <button
-          onClick={load}
-          disabled={loading}
-          className="flex items-center gap-1.5 text-xs text-muted-foreground py-1.5 px-3 rounded-lg bg-secondary"
-        >
-          <RefreshCw className={`size-3 ${loading ? "animate-spin" : ""}`} /> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {data && (
+            <button
+              onClick={handleExportCsv}
+              className="flex items-center gap-1.5 text-xs text-gold py-1.5 px-3 rounded-lg bg-gold/10 border border-gold/20 hover:bg-gold/20 transition-colors"
+              title="Download analytics as CSV"
+            >
+              <Download className="size-3" /> Export CSV
+            </button>
+          )}
+          <button
+            onClick={load}
+            disabled={loading}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground py-1.5 px-3 rounded-lg bg-secondary"
+          >
+            <RefreshCw className={`size-3 ${loading ? "animate-spin" : ""}`} /> Refresh
+          </button>
+        </div>
       </div>
 
       {/* ── ALERT BANNER ── */}
