@@ -93,11 +93,13 @@ export default {
     // "0 18 * * 4"   = Thursday 18:00 UTC (7pm WAT) — weekly trade commission
     // "0 2 * * *"    = daily 02:00 UTC              — reconciliation engine
     // "0 10 */3 * *" = every 3 days 10:00 UTC       — Supabase keep-alive ping
+    // "0 8 * * 1"    = Monday 08:00 UTC (9am WAT)   — weekly analytics email
     // everything else = vendor rate-check (every 6 hours)
     const endpoint =
-      event.cron === "0 18 * * 4"   ? "/api/cron/weekly-commission" :
-      event.cron === "0 2 * * *"    ? "/api/cron/reconcile"         :
-      event.cron === "0 10 */3 * *" ? "/api/cron/keepalive"         :
+      event.cron === "0 18 * * 4"   ? "/api/cron/weekly-commission"  :
+      event.cron === "0 2 * * *"    ? "/api/cron/reconcile"          :
+      event.cron === "0 10 */3 * *" ? "/api/cron/keepalive"          :
+      event.cron === "0 8 * * 1"    ? "/api/cron/weekly-analytics"   :
                                       "/api/cron/rate-check";
 
     console.info("[Scheduled] cron=" + event.cron + " → " + endpoint);
