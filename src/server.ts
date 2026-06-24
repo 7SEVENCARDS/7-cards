@@ -84,7 +84,10 @@ async function normalizeCatastrophicSsrResponse(response: Response): Promise<Res
   const body = await response.clone().text();
 
   // Case 1: h3 unhandled SSR catastrophic error — render friendly error page.
-  if (body.includes('"unhandled":true') && body.includes('"message":"HTTPError"')) {
+  // Catches both the HTTPError variant ("message":"HTTPError") and the plain
+  // Nitro/h3 variant {"error":true,"status":500,"unhandled":true} that lacks a
+  // message field (common when SSR throws during vendor/admin route rendering).
+  if (body.includes('"unhandled":true')) {
     const ssrErr = consumeLastCapturedError() ?? new Error(`h3 swallowed SSR error: ${body}`);
     captureServerException(ssrErr, { type: "ssr_catastrophic" });
     console.error(ssrErr);
