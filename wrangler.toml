@@ -103,16 +103,18 @@ pattern   = "admin.7evencards.xyz/*"
 zone_name = "7evencards.xyz"
 
 # ─── Cron Triggers ────────────────────────────────────────────────────────────
-# Both crons invoke the scheduled() export (injected post-build by
+# All crons invoke the scheduled() export (injected post-build by
 # scripts/patch-cf-scheduled.mjs). The handler checks event.cron to route to
-# the correct /api/cron/* endpoint behind CRON_SECRET guard.
+# the correct /api/cron/* endpoint.
 #
-# "0 */6 * * *"  — every 6 hours → /api/cron/rate-check (vendor rate updates)
+# "0 */6 * * *"  — every 6 hours    → /api/cron/rate-check (vendor rate updates)
 # "0 18 * * 4"   — Thursday 18:00 UTC (= 19:00 WAT = 7pm Nigerian Time)
 #                  → /api/cron/weekly-commission (₦500 to qualifying traders)
-# "0 2 * * *"   — daily at 02:00 UTC → /api/cron/reconcile (reconciliation engine)
+# "0 2 * * *"    — daily at 02:00 UTC → /api/cron/reconcile (reconciliation engine)
+# "0 10 */3 * *" — every 3 days at 10:00 UTC → /api/cron/keepalive
+#                  (Supabase free-tier keep-alive — prevents 7-day auto-pause)
 [env.production.triggers]
-crons = ["0 */6 * * *", "0 18 * * 4", "0 2 * * *"]
+crons = ["0 */6 * * *", "0 18 * * 4", "0 2 * * *", "0 10 */3 * *"]
 
 # ─── Workers Rate Limiting (distributed, edge-level) ─────────────────────────
 # The app currently uses per-isolate in-process rate limiting (src/lib/rate-limiter.ts).

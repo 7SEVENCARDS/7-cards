@@ -90,11 +90,15 @@ export default {
     // The CRON_SECRET header satisfies the same guard as the external-curl path,
     // so the logic truly stays in one place.
     // Route to the correct endpoint based on which cron expression fired.
-    // "0 18 * * 4" = Thursday 19:00 WAT (7pm Nigerian Time) — weekly commission
+    // "0 18 * * 4"   = Thursday 18:00 UTC (7pm WAT) — weekly trade commission
+    // "0 2 * * *"    = daily 02:00 UTC              — reconciliation engine
+    // "0 10 */3 * *" = every 3 days 10:00 UTC       — Supabase keep-alive ping
     // everything else = vendor rate-check (every 6 hours)
-    const endpoint = event.cron === "0 18 * * 4"
-      ? "/api/cron/weekly-commission"
-      : "/api/cron/rate-check";
+    const endpoint =
+      event.cron === "0 18 * * 4"   ? "/api/cron/weekly-commission" :
+      event.cron === "0 2 * * *"    ? "/api/cron/reconcile"         :
+      event.cron === "0 10 */3 * *" ? "/api/cron/keepalive"         :
+                                      "/api/cron/rate-check";
 
     console.info("[Scheduled] cron=" + event.cron + " → " + endpoint);
 

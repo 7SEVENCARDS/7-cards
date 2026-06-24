@@ -431,6 +431,38 @@ export default {
           requestId,
         );
       }
+
+      // ── Cron: Supabase keep-alive ping (every 3 days at 10:00 UTC) ───────────
+      // Supabase free-tier projects auto-pause after 7 days of inactivity.
+      // This endpoint makes a lightweight REST HEAD request (no CRON_SECRET
+      // required — the ping is benign) to keep the project active between
+      // normal traffic peaks. Fires via CF Cron "0 10 */3 * *".
+      if (url.pathname === "/api/cron/keepalive") {
+        const supabaseUrl = getEnv("VITE_SUPABASE_URL") ?? "";
+        const anonKey     = getEnv("VITE_SUPABASE_ANON_KEY") ?? "";
+        const pingWork = (async () => {
+          if (!supabaseUrl || !anonKey) {
+            console.warn("[Cron/Keepalive] Supabase env vars not set — skipping ping");
+            return;
+          }
+          try {
+            const t0  = Date.now();
+            const res = await fetch(`${supabaseUrl}/rest/v1/?select=1`, {
+              method:  "HEAD",
+              headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+              signal:  AbortSignal.timeout(6_000),
+            });
+            console.info(`[Cron/Keepalive] Supabase ping OK — HTTP ${res.status} in ${Date.now() - t0}ms`);
+          } catch (e) {
+            console.error("[Cron/Keepalive] Supabase ping failed:", e instanceof Error ? e.message : String(e));
+          }
+        })();
+        (ctx as { waitUntil?: (p: Promise<unknown>) => void }).waitUntil?.(pingWork);
+        return addSecurityHeaders(
+          new Response(JSON.stringify({ ok: true, ts: Date.now() }), { headers: { "Content-Type": "application/json" } }),
+          requestId,
+        );
+      }
     }
 
     // ── Health check — verifies config AND live Supabase connectivity ────────
