@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
+import { assertNotRateLimited, rlKey } from "../lib/rate-limiter";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -104,6 +105,10 @@ export const applyReferralCode = createServerFn({ method: "POST" })
   .validator((d: { code: string }) => d)
   .handler(async ({ data }) => {
     const userId = await requireUser();
+
+    // Rate-limit: max 5 attempts per user per hour to prevent brute-force code guessing
+    assertNotRateLimited(rlKey("apply-referral", userId), 5, 60 * 60 * 1_000);
+
     const db = getServerSupabase();
 
     // Server-side sanitize: strip non-alphanumeric chars and enforce length bounds
