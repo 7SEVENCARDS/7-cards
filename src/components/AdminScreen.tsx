@@ -67,6 +67,7 @@ import {
 import { AuditLogViewer } from "./AuditLogViewer";
 import { VendorRatePanel } from "./VendorRatePanel";
 import { MissionControlTab } from "./MissionControlTab";
+import { TrustTab, TreasuryTab, ApiKeysTab, ProviderHealthTab, PremiumAdminTab } from "./AdminTabsExtra";
 import {
   adminGetVendors,
   adminUpdateVendorStatus,
@@ -80,7 +81,7 @@ import {
   adminRegisterVendor,
 } from "../server-functions/vendors";
 
-type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors" | "audit" | "system" | "roles" | "mission";
+type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors" | "audit" | "system" | "roles" | "mission" | "trust" | "treasury" | "keys" | "health" | "premium";
 
 type Props = {
   adminId: string;
@@ -2567,6 +2568,11 @@ export function AdminScreen({ adminId, onBack }: Props) {
     { key: "system",   label: "System",  icon: Activity },
     { key: "roles",    label: "Roles",   icon: UserCog },
     { key: "mission",  label: "Mission", icon: BarChart3 },
+    { key: "trust",    label: "Trust",   icon: ShieldCheck },
+    { key: "treasury", label: "Treasury", icon: TrendingUp },
+    { key: "keys",     label: "API Keys", icon: Zap },
+    { key: "health",   label: "Health",  icon: Activity },
+    { key: "premium",  label: "Premium", icon: Crown },
   ];
 
   return (
@@ -2621,6 +2627,11 @@ export function AdminScreen({ adminId, onBack }: Props) {
         {tab === "system"   && <SystemHealthTab />}
         {tab === "roles"    && <RolesTab adminId={adminId} />}
         {tab === "mission"  && <MissionControlTab />}
+        {tab === "trust"    && <TrustTab />}
+        {tab === "treasury" && <TreasuryTab />}
+        {tab === "keys"     && <ApiKeysTab />}
+        {tab === "health"   && <ProviderHealthTab />}
+        {tab === "premium"  && <PremiumAdminTab />}
       </div>
     </div>
   );

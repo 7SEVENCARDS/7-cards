@@ -71,6 +71,7 @@ export interface TrustBreakdown {
   accountAge:            number;
   supportEscalations:    number;
   disputePenalty:        number;
+  premiumMember:         number;   // Phase 15: +5–13 for active premium + milestones
 }
 
 // ─── Level mapping ─────────────────────────────────────────────────────────────
@@ -143,6 +144,7 @@ export async function computeTrustScore(
     accountAge:            0,
     supportEscalations:    0,
     disputePenalty:        0,
+    premiumMember:         0,
   };
 
   // ── Fetch profile ─────────────────────────────────────────────────────────
@@ -264,6 +266,16 @@ export async function computeTrustScore(
 
   // ── Device reputation (placeholder — 1 if no fraud signals on device) ────
   breakdown.deviceReputation = fraudEvents === 0 && (paidCount ?? 0) > 0 ? 3 : 0;
+
+  // ── Premium membership trust acceleration (Phase 15) ─────────────────────
+  try {
+    const { getPremiumTrustBonus } = await import("./premium-engine");
+    const premiumBonus = await getPremiumTrustBonus(userId, db);
+    breakdown.premiumMember = premiumBonus.bonus;
+  } catch {
+    // Premium engine not available — non-fatal
+    breakdown.premiumMember = 0;
+  }
 
   // ── Compute final score ───────────────────────────────────────────────────
   const rawScore = Object.values(breakdown).reduce((sum, v) => sum + v, 0);

@@ -3,8 +3,8 @@ import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
 import { getAppUrl } from "../lib/constants";
 import { getEnv } from "../lib/worker-env";
+import { recordPremiumRevenue, checkAndAwardMilestones, PREMIUM_PRICE_NGN } from "../lib/premium-engine";
 
-const PREMIUM_PRICE_NGN  = 2000;
 const PREMIUM_PRICE_KOBO = PREMIUM_PRICE_NGN * 100;
 
 // ─── Get own subscription status ──────────────────────────────────────────────
@@ -130,9 +130,15 @@ export const activatePremium = createServerFn({ method: "POST" })
     await db.from("notifications").insert({
       user_id: userId,
       title: "Welcome to 7SEVEN Premium! 🚀",
-      message: "You now have access to higher payout limits, +2% better rates, and priority support. Your subscription renews monthly.",
+      message: "You now have access to higher payout limits, +2% better rates, priority support, and trust acceleration. Your subscription renews monthly.",
       type: "success",
     });
+
+    // Record revenue allocation (40% treasury, 20% fraud reserve, 20% ops, 10% infra, 10% growth)
+    await recordPremiumRevenue(db, data.transactionRef ?? `demo-${userId}`, userId);
+
+    // Check and award any initial milestones (e.g. day-0 bootstrap)
+    await checkAndAwardMilestones(db, userId, new Date().toISOString()).catch(() => {/* non-fatal */});
 
     return { success: true };
   });
