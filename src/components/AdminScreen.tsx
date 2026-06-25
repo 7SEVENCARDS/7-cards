@@ -1534,7 +1534,8 @@ function VendorsTab({ adminId }: { adminId: string }) {
   const handlePayWithdrawal = async (id: string) => {
     setActingWithdrawal(id);
     try {
-      await adminApproveWithdrawal({ data: { requestId: id } });
+      const payRes = await adminApproveWithdrawal({ data: { requestId: id } }) as { ok?: boolean; error?: string };
+      if (payRes && payRes.ok === false) throw new Error(payRes.error ?? "Payout failed");
       await loadWithdrawals();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Payout failed");
@@ -1545,7 +1546,8 @@ function VendorsTab({ adminId }: { adminId: string }) {
     if (!rejectModal) return;
     setActingWithdrawal(rejectModal.id);
     try {
-      await adminRejectWithdrawal({ data: { requestId: rejectModal.id, reason: rejectReason } });
+      const rejRes = await adminRejectWithdrawal({ data: { requestId: rejectModal.id, reason: rejectReason } }) as { ok?: boolean; error?: string };
+      if (rejRes && rejRes.ok === false) throw new Error(rejRes.error ?? "Rejection failed");
       setRejectModal(null); setRejectReason("");
       await loadWithdrawals();
     } catch (e) {

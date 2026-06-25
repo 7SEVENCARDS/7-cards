@@ -153,7 +153,8 @@ export function PayoutAccountsScreen({ userId, onBack }: PayoutAccountsScreenPro
   const handleDelete = async (acc: Account) => {
     setDeletingId(acc.id);
     try {
-      await deletePayoutAccount({ data: { accountId: acc.id } });
+      const delResult = await deletePayoutAccount({ data: { accountId: acc.id } }) as { success?: boolean; error?: string };
+      if (delResult && delResult.success === false) throw new Error(delResult.error ?? "Delete failed");
       invalidate();
       setConfirmDelete(null);
     } finally {
