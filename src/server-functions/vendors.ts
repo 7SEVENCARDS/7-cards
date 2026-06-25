@@ -304,8 +304,9 @@ export const getVendorProfile = createServerFn({ method: "GET" })
     const db = getServerSupabase();
 
     const { data, error } = await db.from("vendors").select("*").eq("user_id", userId).single();
-    if (error) throw error;
-    return data as VendorProfile;
+    // PGRST116 = no row — not yet registered as a vendor
+    if (error && (error as Record<string,string>).code !== "PGRST116") throw error;
+    return (data as VendorProfile) ?? null;
   });
 
 // ─── Update Vendor Profile ─────────────────────────────────────────────────────
@@ -371,7 +372,7 @@ export const getMyAssignments = createServerFn({ method: "GET" })
     if (data.status) query = query.eq("status", data.status);
 
     const { data: rows, error } = await query;
-    if (error) throw error;
+    if (error) { console.error("[vendors] getMyAssignments", error.message); return []; }
 
     // Mark unviewed assigned cards as viewed
     const unviewed = (rows ?? []).filter((r) => r.status === "assigned");
@@ -776,7 +777,7 @@ export const provisionVirtualAccount = createServerFn({ method: "POST" })
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) throw new Error((error as {message?:string}).message ?? "Failed to create virtual account");
     return van;
   });
 
@@ -1084,10 +1085,10 @@ export async function approveWithdrawalImpl(
     .eq("id", withdrawalId)
     .eq("status", "pending")
     .single();
-  if (!req) throw new Error("Request not found or already processed");
+  if (!req) return { ok: false, error: "Request not found or already processed" };
 
   const squadcoKey = getEnv("SQUADCO_SECRET_KEY") ?? "";
-  const env = getEnv("SQUADCO_ENV") === "production" ? "api" : "sandbox";
+  const env = getEnv("SQUADCO_ENV") === "production" ? "api-d" : "sandbox-api-d";
   const uniqueId = `7S-WD-${req.id.slice(0, 8)}-${Date.now()}`;
 
   const { fetchWithTimeout } = await import("../lib/fetch-with-timeout");
@@ -1136,7 +1137,7 @@ export async function approveWithdrawalImpl(
       p_vendor_id: req.vendor_id,
       p_amount: Number(req.amount),
     });
-    throw new Error(payoutData?.message ?? "Payout failed — balance restored");
+    return { ok: false, error: payoutData?.message ?? "Payout failed — balance restored" };
   }
 
   try {
@@ -1181,14 +1182,14 @@ export async function rejectWithdrawalImpl(
   adminId: string,
   withdrawalId: string,
   reason?: string,
-): Promise<{ ok: boolean }> {
+): Promise<{ ok: boolean; error?: string }> {
   const { data: req } = await db
     .from("vendor_withdrawal_requests")
     .select("*")
     .eq("id", withdrawalId)
     .eq("status", "pending")
     .single();
-  if (!req) throw new Error("Request not found or already processed");
+  if (!req) return { ok: false, error: "Request not found or already processed" };
 
   await db.rpc("increment_vendor_wallet_balance", {
     p_vendor_id: req.vendor_id,

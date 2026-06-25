@@ -16,7 +16,7 @@ export const getLeaderboard = createServerFn({ method: "GET" })
         .order("weekly_rank", { ascending: true })
         .limit(data.limit ?? 20);
 
-      if (error) throw error;
+      if (error) { console.error("[leaderboard] DB error", error.message); return []; }
       return rows ?? [];
     } catch {
       return [];
@@ -73,7 +73,7 @@ export const getUserBadges = createServerFn({ method: "GET" })
         .select("badge_key, earned_at")
         .eq("user_id", userId);
 
-      if (error) throw error;
+      if (error) { console.error("[leaderboard] DB error", error.message); return []; }
       return badges?.map((b) => b.badge_key) ?? [];
     } catch {
       return [];

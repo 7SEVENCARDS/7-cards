@@ -117,7 +117,7 @@ export const addPayoutAccount = createServerFn({ method: "POST" })
       is_default: data.isDefault ?? false,
     });
 
-    if (error) throw error;
+    if (error) return { success: false, error: (error as {message?:string}).message ?? "Failed to save account" };
     return { success: true };
   });
 

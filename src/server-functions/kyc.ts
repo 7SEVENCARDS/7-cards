@@ -308,7 +308,7 @@ export const getKYCStatus = createServerFn({ method: "GET" })
       .eq("id", userId)
       .single();
 
-    if (error) throw error;
+    if (error) { console.error("[kyc] profile fetch error", error.message); throw error; }
     return {
       status: profile?.kyc_status ?? "pending",
       hasBVN: !!profile?.kyc_bvn,

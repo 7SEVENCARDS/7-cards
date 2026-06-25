@@ -2,7 +2,7 @@ import { useState } from "react";
   import { Mail, Lock, User, ArrowRight, Eye, EyeOff, ShieldCheck, CheckCircle2, Gift } from "lucide-react";
   import { supabase } from "../lib/supabase";
 
-  const PROD_URL = "https://7evencards.xyz";
+  const PROD_URL = (typeof import.meta !== "undefined" ? (import.meta as Record<string, unknown>).env as Record<string,string> | undefined : undefined)?.["VITE_APP_URL"] || "https://7evencards.xyz";
 
   type AuthMode = "signin" | "signup";
 

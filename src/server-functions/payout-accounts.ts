@@ -15,7 +15,7 @@ export const listPayoutAccounts = createServerFn({ method: "GET" })
       .eq("user_id", userId)
       .order("is_default", { ascending: false })
       .order("created_at", { ascending: false });
-    if (error) throw error;
+    if (error) { console.error("[payout-accounts] list", error.message); return []; }
     return rows ?? [];
   });
 
@@ -109,7 +109,7 @@ export const addPayoutAccount = createServerFn({ method: "POST" })
       is_default: data.makeDefault || (count ?? 0) === 0,
     });
 
-    if (error) throw error;
+    if (error) return { success: false, error: (error as {message?:string}).message ?? "Failed to save account" };
     return { success: true };
   });
 
@@ -158,6 +158,6 @@ export const deletePayoutAccount = createServerFn({ method: "POST" })
       .delete()
       .eq("id", data.accountId)
       .eq("user_id", userId);
-    if (error) throw error;
+    if (error) return { success: false, error: (error as {message?:string}).message ?? "Failed to save account" };
     return { success: true };
   });

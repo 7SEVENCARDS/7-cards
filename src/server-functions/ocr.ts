@@ -155,6 +155,6 @@ export const saveOCRResultToTrade = createServerFn({ method: "POST" })
         ocr_scanned_at:   new Date().toISOString(),
       })
       .eq("id", data.tradeId);
-    if (error) throw error;
-    return { success: true };
+    if (error) return { success: false as const, error: (error as {message?:string}).message ?? String(error) };
+    return { success: true as const };
   });
