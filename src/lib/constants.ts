@@ -36,3 +36,9 @@ export const DISPUTES_EMAIL = "disputes@7evencards.xyz";
 
 /** Vendor portal path — append to getAppUrl() */
 export const VENDOR_PORTAL_PATH = "/vendor";
+
+/** NFIU regulatory threshold in Naira — triggers mandatory reporting/review. */
+export const NFIU_THRESHOLD_NGN = 5_000_000;
+
+/** Rolling window in days for the NFIU volume check. */
+export const NFIU_WINDOW_DAYS = 30;

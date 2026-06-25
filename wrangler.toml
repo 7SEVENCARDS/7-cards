@@ -127,20 +127,20 @@ crons = ["0 */6 * * *", "0 18 * * 4", "0 2 * * *", "0 10 */3 * *", "0 8 * * 1"]
 #   wrangler rate-limit create --name rate-limiter-webhook
 #   wrangler rate-limit create --name rate-limiter-kyc
 #
-# [[unsafe.bindings]]
-# type         = "ratelimit"
-# name         = "RATE_LIMITER_LOGIN"
-# namespace_id = "1001"
-# simple       = { limit = 5, period = 60 }
-#
-# [[unsafe.bindings]]
-# type         = "ratelimit"
-# name         = "RATE_LIMITER_WEBHOOK"
-# namespace_id = "1002"
-# simple       = { limit = 120, period = 60 }
-#
-# [[unsafe.bindings]]
-# type         = "ratelimit"
-# name         = "RATE_LIMITER_KYC"
-# namespace_id = "1003"
-# simple       = { limit = 10, period = 600 }
+[[unsafe.bindings]]
+type         = "ratelimit"
+name         = "RATE_LIMITER_LOGIN"
+namespace_id = "1001"
+simple       = { limit = 5, period = 60 }
+
+[[unsafe.bindings]]
+type         = "ratelimit"
+name         = "RATE_LIMITER_WEBHOOK"
+namespace_id = "1002"
+simple       = { limit = 120, period = 60 }
+
+[[unsafe.bindings]]
+type         = "ratelimit"
+name         = "RATE_LIMITER_KYC"
+namespace_id = "1003"
+simple       = { limit = 10, period = 60 }

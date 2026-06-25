@@ -630,6 +630,14 @@ export const processPayout = createServerFn({ method: "POST" })
         status: "paid", xp_earned: xp,
         settled_at: new Date().toISOString(), payout_method: "wallet",
       }).eq("id", data.tradeId);
+      // GAP 5: Null out card credentials after terminal state (NDPR compliance)
+      await db.from("trades").update({ card_code: null, card_pin: null })
+        .eq("id", data.tradeId).eq("status", "paid").catch(() => {});
+      // GAP 7: NFIU threshold check — non-fatal
+      try {
+        const { checkNfiuThreshold } = await import("../lib/nfiu");
+        await checkNfiuThreshold(db, userId, amountNgn);
+      } catch { /* non-critical */ }
       await db.from("notifications").insert({
         user_id: userId, title: "Wallet Credited! 💰",
         message: `₦${amountNgn.toLocaleString()} has been added to your 7SEVEN wallet.`,
@@ -692,6 +700,14 @@ export const processPayout = createServerFn({ method: "POST" })
           xp_earned: xp,
           settled_at: new Date().toISOString(),
         }).eq("id", data.tradeId);
+        // GAP 5: Null out card credentials after terminal state (NDPR compliance)
+        await db.from("trades").update({ card_code: null, card_pin: null })
+          .eq("id", data.tradeId).eq("status", "paid").catch(() => {});
+        // GAP 7: NFIU threshold check — non-fatal
+        try {
+          const { checkNfiuThreshold } = await import("../lib/nfiu");
+          await checkNfiuThreshold(db, userId, amountNgn);
+        } catch { /* non-critical */ }
 
         await db.from("notifications").insert({
           user_id: userId,
@@ -720,6 +736,9 @@ export const processPayout = createServerFn({ method: "POST" })
           status: "failed",
           failure_reason: result.message,
         }).eq("id", data.tradeId);
+        // GAP 5: Null out card credentials on failed terminal state (NDPR compliance)
+        await db.from("trades").update({ card_code: null, card_pin: null })
+          .eq("id", data.tradeId).eq("status", "failed").catch(() => {});
 
         return { success: false, reason: "Payment transfer failed. Please contact support if this persists." };
       }
@@ -750,6 +769,9 @@ export const processPayout = createServerFn({ method: "POST" })
           xp_earned: xp,
           settled_at: new Date().toISOString(),
         }).eq("id", data.tradeId);
+        // GAP 5: Null out card credentials after terminal state (NDPR compliance)
+        await db.from("trades").update({ card_code: null, card_pin: null })
+          .eq("id", data.tradeId).eq("status", "paid").catch(() => {});
 
         await db.from("notifications").insert({
           user_id: userId,
@@ -775,6 +797,9 @@ export const processPayout = createServerFn({ method: "POST" })
       }
 
       await db.from("trades").update({ status: "failed", failure_reason: msg }).eq("id", data.tradeId);
+      // GAP 5: Null out card credentials on failed terminal state (NDPR compliance)
+      await db.from("trades").update({ card_code: null, card_pin: null })
+        .eq("id", data.tradeId).eq("status", "failed").catch(() => {});
       return { success: false, reason: "Payment service unavailable" };
     }
   });

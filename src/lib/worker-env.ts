@@ -35,3 +35,33 @@ export function getEnv(key: string): string | undefined {
   // Fallback: process.env for local dev (NODE_ENV, SQUADCO_ENV, etc.)
   return process.env[key];
 }
+
+// ─── Cloudflare Workers Rate Limiting bindings ────────────────────────────────
+// These are CF Rate Limit bindings (not string env vars), so they must be
+// read from the raw CF env object, not through getEnv() which returns strings.
+
+export interface RateLimiterBinding {
+  limit(opts: { key: string }): Promise<{ success: boolean }>;
+}
+
+export interface WorkerRateLimiters {
+  RATE_LIMITER_LOGIN:   RateLimiterBinding;
+  RATE_LIMITER_WEBHOOK: RateLimiterBinding;
+  RATE_LIMITER_KYC:     RateLimiterBinding;
+}
+
+/**
+ * Get the Workers Rate Limiting binding by name.
+ * Returns undefined when running in local dev (no CF binding available).
+ */
+export function getRateLimiter(name: keyof WorkerRateLimiters): RateLimiterBinding | undefined {
+  const nitroEnv = (globalThis as Record<string, unknown>)['__env__'] as
+    | Record<string, unknown>
+    | undefined;
+  if (!nitroEnv) return undefined;
+  const binding = nitroEnv[name];
+  if (binding && typeof (binding as RateLimiterBinding).limit === 'function') {
+    return binding as RateLimiterBinding;
+  }
+  return undefined;
+}

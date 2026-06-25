@@ -417,6 +417,13 @@ export const markAssignmentRedeemed = createServerFn({ method: "POST" })
         updated_at: new Date().toISOString(),
       })
       .eq("id", data.assignmentId);
+    // GAP 5: Null out card credentials after terminal state (NDPR compliance)
+    await db
+      .from("vendor_card_assignments")
+      .update({ card_code: null, card_pin: null })
+      .eq("id", data.assignmentId)
+      .in("status", ["redeemed"])
+      .catch(() => {});
 
     // Credit vendor wallet — atomic RPC prevents lost-update race
     const amountNgn = assignment.amount_ngn ?? 0;
@@ -496,6 +503,13 @@ export const markAssignmentFailed = createServerFn({ method: "POST" })
         updated_at: new Date().toISOString(),
       })
       .eq("id", data.assignmentId);
+    // GAP 5: Null out card credentials after terminal state (NDPR compliance)
+    await db
+      .from("vendor_card_assignments")
+      .update({ card_code: null, card_pin: null })
+      .eq("id", data.assignmentId)
+      .in("status", ["failed"])
+      .catch(() => {});
 
     // Record failure — auto-suspends at 3 consecutive failures
     const { data: failureResult } = await db.rpc("record_vendor_failure", {
