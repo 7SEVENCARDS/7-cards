@@ -20,7 +20,6 @@ import {
 } from "lucide-react";
 import { getMissionControlData, triggerWeeklyAnalyticsReport } from "../server-functions/mission-control";
 import { getKillSwitchStatus } from "../server-functions/kill-switch";
-import { getKillSwitchStatus } from "../server-functions/kill-switch";
 
 type MCData = Awaited<ReturnType<typeof getMissionControlData>>;
 
