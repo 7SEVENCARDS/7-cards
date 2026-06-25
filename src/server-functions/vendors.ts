@@ -309,6 +309,10 @@ export const getVendorProfile = createServerFn({ method: "GET" })
   });
 
 // ─── Update Vendor Profile ─────────────────────────────────────────────────────
+// requireVendorAuth (not requireUser): suspended/pending vendors must not be
+// able to change their bank account details or contact info while locked out.
+// A suspended vendor swapping their bank account mid-suspension could redirect
+// future payouts after reinstatement to a different account.
 export const updateVendorProfile = createServerFn({ method: "POST" })
   .validator(
     (d: {
@@ -323,7 +327,7 @@ export const updateVendorProfile = createServerFn({ method: "POST" })
     }) => d
   )
   .handler(async ({ data }) => {
-    const userId = await requireUser();
+    const userId = await requireVendorAuth();
     const db = getServerSupabase();
 
     const { error } = await db

@@ -830,6 +830,22 @@ export const adminSetRole = createServerFn({ method: "POST" })
 
     if (error) throw error;
 
+    // Sync app_metadata.role so the requireAdmin/requireSuperAdmin fallback
+    // stays consistent.  Critical for demotions: without this, a demoted admin
+    // keeps elevated access via the JWT-cached app_metadata until their token
+    // expires (up to 1 hour).  With this, the next API call from any in-flight
+    // session will hit requireAdmin → profiles check (fails) → app_metadata
+    // check (now also fails) → ForbiddenError.
+    const { error: authSyncErr } = await db.auth.admin.updateUserById(
+      data.targetUserId,
+      { app_metadata: { role: data.newRole } }
+    );
+    if (authSyncErr) {
+      // Non-fatal: profiles.role is already correct.  The desync will be
+      // resolved at the user's next sign-in which regenerates the JWT.
+      console.warn("[adminSetRole] app_metadata sync failed (non-fatal):", authSyncErr.message);
+    }
+
     await logAdminAction(adminId, "set_role", data.targetUserId, {
       prev_role: existing.role,
       new_role:  data.newRole,

@@ -699,11 +699,10 @@ export const processPayout = createServerFn({ method: "POST" })
       });
 
       if (result.success) {
-        await db.rpc("increment_wallet_balance", {
-          p_user_id: userId,
-          p_currency: "NGN",
-          p_amount: amountNgn,
-        });
+        // NOTE: Do NOT call increment_wallet_balance here.
+        // The bank transfer via Squad IS the payout — crediting the in-app wallet
+        // would be a double-payment.  Wallet credits only happen in the explicit
+        // wallet path above (payoutMethod === "wallet") which returns early.
 
         const xp = 50 + (amountNgn > 100_000 ? 25 : 0);
         await db.rpc("award_trade_xp", { p_user_id: userId, p_xp: xp });
