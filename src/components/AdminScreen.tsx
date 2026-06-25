@@ -68,6 +68,8 @@ import { AuditLogViewer } from "./AuditLogViewer";
 import { VendorRatePanel } from "./VendorRatePanel";
 import { MissionControlTab } from "./MissionControlTab";
 import { TrustTab, TreasuryTab, ApiKeysTab, ProviderHealthTab, PremiumAdminTab } from "./AdminTabsExtra";
+import { KillSwitchPanel } from "./KillSwitchPanel";
+import { FounderDashboard } from "./FounderDashboard";
 import {
   adminGetVendors,
   adminUpdateVendorStatus,
@@ -81,7 +83,7 @@ import {
   adminRegisterVendor,
 } from "../server-functions/vendors";
 
-type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors" | "audit" | "system" | "roles" | "mission" | "trust" | "treasury" | "keys" | "health" | "premium";
+type AdminTab = "stats" | "kyc" | "escrow" | "review" | "trades" | "rates" | "credit" | "vendors" | "audit" | "system" | "roles" | "mission" | "trust" | "treasury" | "keys" | "health" | "premium" | "safety" | "founder";
 
 type Props = {
   adminId: string;
@@ -2573,6 +2575,8 @@ export function AdminScreen({ adminId, onBack }: Props) {
     { key: "keys",     label: "API Keys", icon: Zap },
     { key: "health",   label: "Health",  icon: Activity },
     { key: "premium",  label: "Premium", icon: Crown },
+    { key: "safety",   label: "Safety",  icon: Shield },
+    { key: "founder",  label: "Founder", icon: Zap },
   ];
 
   return (
@@ -2632,6 +2636,8 @@ export function AdminScreen({ adminId, onBack }: Props) {
         {tab === "keys"     && <ApiKeysTab />}
         {tab === "health"   && <ProviderHealthTab />}
         {tab === "premium"  && <PremiumAdminTab />}
+        {tab === "safety"   && <KillSwitchPanel />}
+        {tab === "founder"  && <FounderDashboard />}
       </div>
     </div>
   );

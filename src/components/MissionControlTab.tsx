@@ -19,6 +19,8 @@ import {
   ShieldAlert, Wallet, Map, Download,
 } from "lucide-react";
 import { getMissionControlData, triggerWeeklyAnalyticsReport } from "../server-functions/mission-control";
+import { getKillSwitchStatus } from "../server-functions/kill-switch";
+import { getKillSwitchStatus } from "../server-functions/kill-switch";
 
 type MCData = Awaited<ReturnType<typeof getMissionControlData>>;
 
@@ -134,6 +136,7 @@ function ProgressBar({ value, max, color = "bg-cyan" }: { value: number; max: nu
 // ── Main component ────────────────────────────────────────────────────────────
 export function MissionControlTab() {
   const [data, setData]             = useState<MCData | null>(null);
+  const [ksAlert, setKsAlert]       = useState<string[]>([]);
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -146,6 +149,7 @@ export function MissionControlTab() {
     try {
       const d = await getMissionControlData({ data: {} });
       setData(d);
+      getKillSwitchStatus({ data: {} }).then(s => setKsAlert(s.filter(x => x.frozen).map(x => x.label))).catch(() => {});
       setLastRefresh(new Date());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load mission control data");

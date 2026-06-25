@@ -40,6 +40,13 @@ export const submitCardBatch = createServerFn({ method: "POST" })
     region?:       string;
   }) => d)
   .handler(async ({ data }) => {
+    // ── Kill switch: new trades frozen? ──────────────────────────────────
+    {
+      const { assertNotKilled: aks, KILL_SWITCHES: KS } = await import("../lib/kill-switch");
+      const dbLocal = await import("../lib/supabase.server").then(m => m.getServerSupabase());
+      await aks(KS.NEW_TRADES, dbLocal, "New card submissions are temporarily paused.");
+    }
+
     if (!data.cards.length || data.cards.length > 10) {
       throw new Error("Batch must have 1–10 cards");
     }
@@ -573,6 +580,14 @@ export const processPayout = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const userId = await requireUser();
     const db = getServerSupabase();
+
+    // ── Kill switch: withdrawals frozen? ────────────────────────────────
+    const { assertNotKilled, KILL_SWITCHES } = await import("../lib/kill-switch");
+    await assertNotKilled(
+      KILL_SWITCHES.WITHDRAWALS,
+      db,
+      "Withdrawals are temporarily paused for maintenance. Please try again shortly."
+    );
 
     // Fetch trade from DB — verify ownership and status
     const { data: trade, error: tradeErr } = await db
