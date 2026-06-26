@@ -12,6 +12,9 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as JoinRouteImport } from './routes/join'
 import { Route as VendorRouteImport } from './routes/vendor'
+import { Route as AdminRouteImport } from './routes/admin'
+import { Route as StatusRouteImport } from './routes/status'
+import { Route as FounderRouteImport } from './routes/founder'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -31,34 +34,64 @@ const VendorRoute = VendorRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+
+const StatusRoute = StatusRouteImport.update({
+  id: '/status',
+  path: '/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+
+const FounderRoute = FounderRouteImport.update({
+  id: '/founder',
+  path: '/founder',
+  getParentRoute: () => rootRouteImport,
+} as any)
+
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/join': typeof JoinRoute
   '/vendor': typeof VendorRoute
+  '/admin': typeof AdminRoute
+  '/status': typeof StatusRoute
+  '/founder': typeof FounderRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/join': typeof JoinRoute
   '/vendor': typeof VendorRoute
+  '/admin': typeof AdminRoute
+  '/status': typeof StatusRoute
+  '/founder': typeof FounderRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/join': typeof JoinRoute
   '/vendor': typeof VendorRoute
+  '/admin': typeof AdminRoute
+  '/status': typeof StatusRoute
+  '/founder': typeof FounderRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/join' | '/vendor'
+  fullPaths: '/' | '/join' | '/vendor' | '/admin' | '/status' | '/founder'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/join' | '/vendor'
-  id: '__root__' | '/' | '/join' | '/vendor'
+  to: '/' | '/join' | '/vendor' | '/admin' | '/status' | '/founder'
+  id: '__root__' | '/' | '/join' | '/vendor' | '/admin' | '/status' | '/founder'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   JoinRoute: typeof JoinRoute
   VendorRoute: typeof VendorRoute
+  AdminRoute: typeof AdminRoute
+  StatusRoute: typeof StatusRoute
+  FounderRoute: typeof FounderRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -84,6 +117,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof VendorRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/status': {
+      id: '/status'
+      path: '/status'
+      fullPath: '/status'
+      preLoaderRoute: typeof StatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/founder': {
+      id: '/founder'
+      path: '/founder'
+      fullPath: '/founder'
+      preLoaderRoute: typeof FounderRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -91,6 +145,9 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   JoinRoute: JoinRoute,
   VendorRoute: VendorRoute,
+  AdminRoute: AdminRoute,
+  StatusRoute: StatusRoute,
+  FounderRoute: FounderRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
