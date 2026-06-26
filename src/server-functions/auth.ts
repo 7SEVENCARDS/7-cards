@@ -98,6 +98,6 @@ export const updateProfile = createServerFn({ method: "POST" })
       })
       .eq("id", userId);
 
-    if (error) throw error;
+    if (error) { console.error("[Auth] updateProfile:", error.message); return { success: false, error: error.message }; }
     return { success: true };
   });

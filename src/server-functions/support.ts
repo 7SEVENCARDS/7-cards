@@ -289,7 +289,7 @@ export const adminGetSupportTickets = createServerFn({ method: "GET" })
       .order("created_at", { ascending: true })
       .limit(data.limit ?? 50);
 
-    if (error) throw error;
+    if (error) { console.error("[Support] getSupportTickets:", error.message); return []; }
     return tickets ?? [];
   });
 

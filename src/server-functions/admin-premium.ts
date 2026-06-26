@@ -75,7 +75,7 @@ export const listPremiumUsers = createServerFn({ method: "GET" })
       .range(from, to)
       .catch(() => ({ data: null, error: null, count: 0 }));
 
-    if (error) throw new Error((error as { message: string }).message);
+    if (error) { console.error("[admin-premium]", error.message); throw new Error(error.message); }
 
     return { users: users ?? [], total: count ?? 0, page, pageSize: size };
   });

@@ -47,7 +47,7 @@ export const getTreasuryDecisions = createServerFn({ method: "GET" })
     if (data.userId)   q = (q as ReturnType<typeof q.eq>).eq("user_id", data.userId);
 
     const { data: rows, error, count } = await q;
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin-treasury]", error.message); throw new Error(error.message); }
 
     return { rows: rows ?? [], total: count ?? 0, page, pageSize: size };
   });
@@ -74,7 +74,7 @@ export const getTreasuryDecisionDetail = createServerFn({ method: "GET" })
       .eq("id", data.decisionId)
       .single();
 
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin-treasury]", error.message); throw new Error(error.message); }
 
     // Also fetch related ledger events
     const { data: events } = await db
@@ -100,6 +100,6 @@ export const getTreasuryDecisionForTrade = createServerFn({ method: "GET" })
       .eq("trade_id", data.tradeId)
       .order("decided_at", { ascending: false });
 
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin-treasury]", error.message); throw new Error(error.message); }
     return decisions ?? [];
   });

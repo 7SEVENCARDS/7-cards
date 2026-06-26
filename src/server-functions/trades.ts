@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
+import { WalletService } from "../lib/wallet-service";
 import { getEnv } from "../lib/worker-env";
 import { assertNotRateLimited, clientIp, rlKey } from "../lib/rate-limiter";
 
@@ -639,7 +640,7 @@ export const processPayout = createServerFn({ method: "POST" })
     // ── wallet credit path (no Squad payout) ──────────────────────────────
     if (payoutMethod === "wallet") {
       const xp = 50 + (amountNgn > 100_000 ? 25 : 0);
-      await db.rpc("increment_wallet_balance", { p_user_id: userId, p_currency: "NGN", p_amount: amountNgn });
+      await WalletService.credit(db, { userId, currency: "NGN", amountNgn, refType: "trade_payout", refId: data.tradeId, description: `Wallet payout for trade ${data.tradeId}`, idempotencyKey: `trade_payout:${data.tradeId}` });
       await db.rpc("award_trade_xp", { p_user_id: userId, p_xp: xp });
       await db.from("trades").update({
         status: "paid", xp_earned: xp,
@@ -772,11 +773,7 @@ export const processPayout = createServerFn({ method: "POST" })
 
         const xp = 50;
         await db.rpc("award_trade_xp", { p_user_id: userId, p_xp: xp });
-        await db.rpc("increment_wallet_balance", {
-          p_user_id: userId,
-          p_currency: "NGN",
-          p_amount: amountNgn,
-        });
+        await WalletService.credit(db, { userId, currency: "NGN", amountNgn, refType: "trade_payout", refId: data.tradeId, description: `Demo wallet payout for trade ${data.tradeId}`, idempotencyKey: `trade_payout:demo:${data.tradeId}` });
 
         await db.from("trades").update({
           status: "paid",

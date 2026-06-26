@@ -217,6 +217,6 @@ export const getProviderErrors = createServerFn({ method: "GET" })
       .order("created_at", { ascending: false })
       .limit(Math.min(data.limit ?? 50, 100));
 
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin-provider-health]", error.message); throw new Error(error.message); }
     return errors ?? [];
   });

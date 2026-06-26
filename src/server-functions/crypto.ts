@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { requireUser } from "../lib/auth-server";
+import { WalletService } from "../lib/wallet-service";
 import { assertAmount } from "../lib/validate";
 import { DEMO_DEPOSIT_ADDRESSES, COMPANY_SPREAD } from "../lib/busha";
 import { getEnv } from "../lib/worker-env";
@@ -78,11 +79,7 @@ export const initiateCryptoSwap = createServerFn({ method: "POST" })
       const companyFee  = +(grossToAmount * COMPANY_SPREAD).toFixed(10);
       const netToAmount = +(grossToAmount * (1 - COMPANY_SPREAD)).toFixed(10);
 
-      await db.rpc("increment_wallet_balance", {
-        p_user_id: userId,
-        p_currency: data.toCurrency,
-        p_amount: netToAmount,
-      });
+      await WalletService.credit(db, { userId, currency: data.toCurrency, amountNgn: netToAmount, refType: "crypto_swap", description: `Swap ${data.fromCurrency} → ${data.toCurrency}` });
 
       await db.from("crypto_transactions").insert({
         user_id: userId,
@@ -118,11 +115,7 @@ export const initiateCryptoSwap = createServerFn({ method: "POST" })
         demo: false,
       };
     } catch (e: unknown) {
-      await db.rpc("increment_wallet_balance", {
-        p_user_id: userId,
-        p_currency: data.fromCurrency,
-        p_amount: data.amount,
-      });
+      await WalletService.credit(db, { userId, currency: data.fromCurrency, amountNgn: data.amount, refType: "crypto_swap_reversal", description: `Swap reversal: failed ${data.fromCurrency} → ${data.toCurrency}` });
 
       const msg = e instanceof Error ? e.message : String(e);
       const isDemo = msg.includes("not configured");
@@ -149,11 +142,7 @@ export const initiateCryptoSwap = createServerFn({ method: "POST" })
           p_currency: data.fromCurrency,
           p_amount: data.amount,
         });
-        await db.rpc("increment_wallet_balance", {
-          p_user_id: userId,
-          p_currency: data.toCurrency,
-          p_amount: netToAmount,
-        });
+        await WalletService.credit(db, { userId, currency: data.toCurrency, amountNgn: netToAmount, refType: "crypto_swap", description: `Demo swap ${data.fromCurrency} → ${data.toCurrency}` });
 
         const txRef = "DEMO-SWAP-" + Date.now();
         await db.from("crypto_transactions").insert({
@@ -263,11 +252,7 @@ export const initiateCryptoSend = createServerFn({ method: "POST" })
 
       return { success: true as const, txRef: result.id, status: result.status, demo: false };
     } catch (e: unknown) {
-      await db.rpc("increment_wallet_balance", {
-        p_user_id: userId,
-        p_currency: data.currency,
-        p_amount: data.amount,
-      });
+      await WalletService.credit(db, { userId, currency: data.currency, amountNgn: data.amount, refType: "crypto_send_reversal", description: `Send reversal: failed ${data.currency} send` });
 
       const msg = e instanceof Error ? e.message : String(e);
       const isDemo = msg.includes("not configured");

@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
 import { getCryptoRates } from "../lib/busha";
 import { requireUser } from "../lib/auth-server";
+import { WalletService } from "../lib/wallet-service";
 import { initiatePayout } from "../lib/squadco";
 
 // ─── Get own wallets ──────────────────────────────────────────────────────────
@@ -229,18 +230,20 @@ export const requestUserWithdrawal = createServerFn({ method: "POST" })
       throw new Error(`Insufficient balance. Available: ₦${balance.toLocaleString()}`);
     }
 
-    // 2. Deduct balance (optimistic lock — only updates if balance is unchanged)
-    const newBalance = balance - data.amountNgn;
-    const { error: deductErr } = await db
-      .from("wallets")
-      .update({ balance: newBalance })
-      .eq("id", wallet.id)
-      .gte("balance", data.amountNgn);
-
-    if (deductErr) throw new Error("Failed to lock balance — please retry");
+    // 2. Debit balance via WalletService (validates, records ledger, idempotent)
+    const withdrawalRef = `WD-${userId.slice(0, 8)}-${Date.now()}`;
+    const debitResult = await WalletService.debit(db, {
+      userId,
+      currency: "NGN",
+      amountNgn: data.amountNgn,
+      refType: "withdrawal",
+      description: `Withdrawal to ${data.accountName} · ${data.bankName}`,
+      idempotencyKey: withdrawalRef,
+    });
+    if (!debitResult.ok) throw new Error(debitResult.error ?? "Failed to debit balance");
+    const newBalance = debitResult.newBalance ?? (balance - data.amountNgn);
 
     // 3. Initiate Squadco payout
-    const withdrawalRef = `WD-${userId.slice(0, 8)}-${Date.now()}`;
     let payoutRef = "";
     try {
       const result = await initiatePayout({
@@ -253,16 +256,15 @@ export const requestUserWithdrawal = createServerFn({ method: "POST" })
       });
 
       if (!result.success) {
-        // Restore balance on payout failure
-        await db.from("wallets").update({ balance }).eq("id", wallet.id);
+        // Restore balance on payout failure via WalletService credit
+        await WalletService.credit(db, { userId, currency: "NGN", amountNgn: data.amountNgn, refType: "withdrawal_reversal", description: "Payout failed — balance restored", idempotencyKey: `${withdrawalRef}_reversal` });
         throw new Error(result.message ?? "Payout failed — balance restored. Try again.");
       }
       payoutRef = result.transactionRef;
     } catch (e: unknown) {
       // Restore balance if Squadco is unreachable or not configured
-      await db.from("wallets").update({ balance }).eq("id", wallet.id);
+      await WalletService.credit(db, { userId, currency: "NGN", amountNgn: data.amountNgn, refType: "withdrawal_reversal", description: "Payout service error — balance restored", idempotencyKey: `${withdrawalRef}_reversal` });
       const msg = e instanceof Error ? e.message : "Unknown payout error";
-      // Pass through our own descriptive errors; wrap Squadco-internal ones
       if (msg.includes("balance restored") || msg.includes("Insufficient") || msg.includes("Minimum")) {
         throw e;
       }

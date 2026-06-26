@@ -47,7 +47,7 @@ export const getAdminTrustScores = createServerFn({ method: "GET" })
     if (data.maxScore) q = (q as ReturnType<typeof q.lte>).lte("trust_score", data.maxScore);
 
     const { data: rows, error, count } = await q;
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin-trust]", error.message); throw new Error(error.message); }
 
     return { rows: rows ?? [], total: count ?? 0, page, pageSize: size };
   });
@@ -133,6 +133,6 @@ export const getTrustScoreHistory = createServerFn({ method: "GET" })
       .limit(Math.min(data.limit ?? 30, 100))
       .catch(() => ({ data: null, error: null }));
 
-    if (error) throw new Error((error as { message: string }).message);
+    if (error) { console.error("[admin-trust]", error.message); throw new Error(error.message); }
     return history ?? [];
   });

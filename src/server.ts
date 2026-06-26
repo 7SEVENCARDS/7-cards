@@ -2,7 +2,7 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
-import { initWorkerEnv, getEnv } from "./lib/worker-env";
+import { initWorkerEnv, getEnv, getRateLimiter } from "./lib/worker-env";
 import { initSentryServer, captureServerException, startServerSpan } from "./lib/sentry.server";
 import {
   handleSquadPayoutWebhook,
@@ -221,7 +221,7 @@ export default {
     // vendor.7evencards.xyz → rewrite pathname to /vendor/*
     if (url.hostname === "vendor.7evencards.xyz") {
       if (!allow(rlKey("global", ip), 300, 60_000)) {
-        return addSecurityHeaders(tooManyRequests(60), requestId, cspNonce);
+        return addSecurityHeaders(tooManyRequests(60), requestId);
       }
       if (
         request.method === "POST" ||
@@ -230,7 +230,7 @@ export default {
       ) {
         const contentLength = request.headers.get("content-length");
         if (contentLength && Number(contentLength) > MAX_BODY_BYTES) {
-          return addSecurityHeaders(bodyTooLarge(), requestId, cspNonce);
+          return addSecurityHeaders(bodyTooLarge(), requestId);
         }
       }
       const rewritten = new URL(request.url);
@@ -269,7 +269,7 @@ export default {
     // admin.7evencards.xyz → admin portal (dedicated admin experience)
     if (url.hostname === "admin.7evencards.xyz") {
       if (!allow(rlKey("global", ip), 200, 60_000)) {
-        return addSecurityHeaders(tooManyRequests(60), requestId, cspNonce);
+        return addSecurityHeaders(tooManyRequests(60), requestId);
       }
       if (
         request.method === "POST" ||
@@ -278,7 +278,7 @@ export default {
       ) {
         const contentLength = request.headers.get("content-length");
         if (contentLength && Number(contentLength) > MAX_BODY_BYTES) {
-          return addSecurityHeaders(bodyTooLarge(), requestId, cspNonce);
+          return addSecurityHeaders(bodyTooLarge(), requestId);
         }
       }
       const rewritten = new URL(request.url);
@@ -315,7 +315,7 @@ export default {
     }
 
     if (!allow(rlKey("global", ip), 300, 60_000)) {
-      return addSecurityHeaders(tooManyRequests(60), requestId, cspNonce);
+      return addSecurityHeaders(tooManyRequests(60), requestId);
     }
 
     if (
@@ -325,7 +325,7 @@ export default {
     ) {
       const contentLength = request.headers.get("content-length");
       if (contentLength && Number(contentLength) > MAX_BODY_BYTES) {
-        return addSecurityHeaders(bodyTooLarge(), requestId, cspNonce);
+        return addSecurityHeaders(bodyTooLarge(), requestId);
       }
     }
 
@@ -341,9 +341,9 @@ export default {
         const webhookRl = getRateLimiter("RATE_LIMITER_WEBHOOK");
         if (webhookRl) {
           const rlResult = await webhookRl.limit({ key: ip });
-          if (!rlResult.success) return addSecurityHeaders(tooManyRequests(60), requestId, cspNonce);
+          if (!rlResult.success) return addSecurityHeaders(tooManyRequests(60), requestId);
         } else if (!allow(rlKey("webhook", ip), 120, 60_000)) {
-          return addSecurityHeaders(tooManyRequests(60), requestId, cspNonce);
+          return addSecurityHeaders(tooManyRequests(60), requestId);
         }
         const handler =
           url.pathname === "/api/webhooks/squadco/payout"
@@ -355,7 +355,7 @@ export default {
       // Vendor Telegram webhook — must return 200 fast; processing is async inside handler
       if (url.pathname === "/api/webhooks/telegram") {
         if (!allow(rlKey("telegram_webhook", ip), 200, 60_000)) {
-          return addSecurityHeaders(tooManyRequests(30), requestId, cspNonce);
+          return addSecurityHeaders(tooManyRequests(30), requestId);
         }
         return addSecurityHeaders(await handleTelegramWebhook(request), requestId);
       }
@@ -363,7 +363,7 @@ export default {
       // Admin Telegram bot webhook — inline buttons, link codes, support replies
       if (url.pathname === "/api/webhooks/telegram-admin") {
         if (!allow(rlKey("telegram_admin_webhook", ip), 200, 60_000)) {
-          return addSecurityHeaders(tooManyRequests(30), requestId, cspNonce);
+          return addSecurityHeaders(tooManyRequests(30), requestId);
         }
         return addSecurityHeaders(await handleAdminTelegramWebhook(request), requestId);
       }
@@ -584,11 +584,45 @@ export default {
       );
     }
 
+
+    // ── Liveness probe — is the Worker process alive? ────────────────────────
+    // Returns 200 immediately. Cloudflare health-check route or external monitors
+    // use this to confirm the Worker isolate is responding.
+    if (url.pathname === "/api/live") {
+      return addSecurityHeaders(
+        new Response(JSON.stringify({ alive: true, ts: Date.now() }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+        requestId,
+      );
+    }
+
+    // ── Readiness probe — is the app ready to serve traffic? ─────────────────
+    // Checks critical env vars without a live DB probe (faster than /api/health).
+    // Returns 200 when all critical secrets are present, 503 otherwise.
+    if (url.pathname === "/api/ready") {
+      const criticalOk = !!(
+        getEnv("VITE_SUPABASE_URL") &&
+        getEnv("VITE_SUPABASE_ANON_KEY") &&
+        getEnv("SUPABASE_SERVICE_ROLE_KEY") &&
+        getEnv("SQUADCO_SECRET_KEY") &&
+        getEnv("APP_SECRET")
+      );
+      return addSecurityHeaders(
+        new Response(JSON.stringify({ ready: criticalOk, ts: Date.now() }), {
+          status: criticalOk ? 200 : 503,
+          headers: { "Content-Type": "application/json" },
+        }),
+        requestId,
+      );
+    }
+
     // ── Mobile API v1 — REST API for iOS/Android apps (Phase 13) ────────────
     // Handles /api/v1/* with Bearer token auth (no cookies needed for mobile).
     if (url.pathname.startsWith("/api/v1/")) {
       if (!allow(rlKey("mobile_api", ip), 300, 60_000)) {
-        return addSecurityHeaders(tooManyRequests(60), requestId, cspNonce);
+        return addSecurityHeaders(tooManyRequests(60), requestId);
       }
       try {
         const mobileResponse = await handleMobileApiV1(request);

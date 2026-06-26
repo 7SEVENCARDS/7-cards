@@ -348,7 +348,7 @@ export const updateVendorProfile = createServerFn({ method: "POST" })
       })
       .eq("user_id", userId);
 
-    if (error) throw error;
+    if (error) { console.error("[Vendors] updateVendorProfile:", error.message); return { success: false, error: error.message }; }
     return { success: true };
   });
 
@@ -777,7 +777,7 @@ export const provisionVirtualAccount = createServerFn({ method: "POST" })
       .select()
       .single();
 
-    if (error) throw new Error((error as {message?:string}).message ?? "Failed to create virtual account");
+    if (error) { console.error("[Vendors] createVirtualAccount:", error.message); return { error: (error as {message?:string}).message ?? "Failed to create virtual account" }; }
     return van;
   });
 
@@ -796,7 +796,7 @@ export const adminGetVendors = createServerFn({ method: "GET" })
     if (data.status) query = query.eq("status", data.status);
 
     const { data: vendors, error } = await query.limit(100);
-    if (error) throw error;
+    if (error) { console.error("[Vendors] adminGetVendors:", error.message); return []; }
     return vendors ?? [];
   });
 
@@ -991,7 +991,7 @@ export const requestWithdrawal = createServerFn({ method: "POST" })
       })
       .select()
       .single();
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[Vendors] createWithdrawalRequest:", error.message); return { ok: false, error: error.message }; }
 
     // Atomically deduct — prevents race between concurrent withdrawal requests
     await db.rpc("deduct_vendor_wallet_balance", {

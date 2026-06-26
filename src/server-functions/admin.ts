@@ -10,6 +10,7 @@
 
 import { createServerFn } from "@tanstack/react-start";
 import { getServerSupabase } from "../lib/supabase.server";
+import { WalletService } from "../lib/wallet-service";
 import { requireAdmin, logAdminAction } from "../lib/auth-server";
 
 // ─── Platform Stats ───────────────────────────────────────────────────────────
@@ -64,7 +65,7 @@ export const getKYCQueue = createServerFn({ method: "GET" })
       .order("created_at", { ascending: true })
       .limit(data.limit ?? 50);
 
-    if (error) throw error;
+    if (error) { console.error("[Admin] getKYCQueue:", error.message); return []; }
     return profiles ?? [];
   });
 
@@ -137,7 +138,7 @@ export const getManualReviewQueue = createServerFn({ method: "GET" })
       .order("created_at", { ascending: true })
       .limit(data.limit ?? 50);
 
-    if (error) throw error;
+    if (error) { console.error("[admin] DB error:", (error as {message?:string}).message ?? String(error)); throw error; }
     return trades ?? [];
   });
 
@@ -266,7 +267,7 @@ export const getAdminTrades = createServerFn({ method: "GET" })
     if (data.status && data.status !== "all") query = query.eq("status", data.status);
 
     const { data: trades, error, count } = await query;
-    if (error) throw error;
+    if (error) { console.error("[Admin] getTradesAdmin:", error.message); return { trades: [], total: 0, page, pageSize: size }; }
     return { trades: trades ?? [], total: count ?? 0, page, pageSize: size };
   });
 
@@ -281,11 +282,8 @@ export const adminCreditWallet = createServerFn({ method: "POST" })
       return { success: false, error: "Amount must be between ₦1 and ₦5,000,000" };
     }
 
-    await db.rpc("increment_wallet_balance", {
-      p_user_id: data.userId,
-      p_currency: "NGN",
-      p_amount: data.amountNgn,
-    });
+    const _cr1 = await WalletService.credit(db, { userId: data.userId, currency: "NGN", amountNgn: data.amountNgn, refType: "admin_credit", description: data.reason, idempotencyKey: `admin_credit:${adminId}:${data.userId}:${Date.now()}` });
+    if (!_cr1.ok) throw new Error(_cr1.error ?? "Failed to credit wallet");
 
     await db.from("notifications").insert({
       user_id: data.userId,
@@ -314,7 +312,7 @@ export const getAdminRates = createServerFn({ method: "GET" })
       .eq("region", "USA")
       .order("brand");
 
-    if (error) throw error;
+    if (error) { console.error("[Admin] getRates:", error.message); return []; }
     return rates ?? [];
   });
 
@@ -352,7 +350,7 @@ export const updateExchangeRate = createServerFn({ method: "POST" })
       { onConflict: "brand,region" }
     );
 
-    if (error) throw error;
+    if (error) { console.error("[Admin] updateExchangeRate:", error.message); return { success: false, error: error.message }; }
 
     await logAdminAction(adminId, "rate_update", null, {
       brand: data.brand,
@@ -428,7 +426,7 @@ export const getEscrowQueue = createServerFn({ method: "GET" })
       .eq("status", "verified")
       .order("created_at", { ascending: true })
       .limit(data.limit ?? 100);
-    if (error) throw error;
+    if (error) { console.error("[Admin] getVerifiedTrades:", error.message); return []; }
     return trades ?? [];
   });
 
@@ -454,11 +452,8 @@ export const processEscrowTrade = createServerFn({ method: "POST" })
       .eq("id", data.tradeId);
 
     // Credit user's NGN wallet
-    await db.rpc("increment_wallet_balance", {
-      p_user_id: trade.user_id,
-      p_currency: "NGN",
-      p_amount: Number(trade.amount_ngn),
-    });
+    const _cr2 = await WalletService.credit(db, { userId: trade.user_id, currency: "NGN", amountNgn: Number(trade.amount_ngn), refType: "trade_payout", refId: data.tradeId, description: `Escrow trade ${data.tradeId} approved`, idempotencyKey: `escrow_payout:${data.tradeId}` });
+    if (!_cr2.ok) throw new Error(_cr2.error ?? "Failed to credit wallet");
 
     // Mark as paid with settlement timestamp
     await db.from("trades")
@@ -518,7 +513,7 @@ export const queryAuditLog = createServerFn({ method: "GET" })
       .range(offset, offset + limit - 1);
 
     const { data: entries, error } = await q;
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin]", error.message); throw new Error(error.message); }
     return { entries: entries ?? [] };
   });
 
@@ -550,7 +545,7 @@ export const queryDisputes = createServerFn({ method: "GET" })
       .limit(Math.min(data.limit ?? 50, 100));
 
     const { data: disputes, error } = await q;
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin]", error.message); throw new Error(error.message); }
     return { disputes: disputes ?? [] };
   });
 
@@ -590,7 +585,7 @@ export const adminGetVendorRates = createServerFn({ method: "GET" })
         error: unknown;
       };
 
-    if (error) throw new Error((error as Error).message);
+    if (error) { console.error("[admin]", error.message); throw new Error(error.message); }
     if (!vendors?.length) return { vendors: [] };
 
     // Fetch last 10 history entries for each vendor in one query
@@ -641,7 +636,7 @@ export const adminApproveVendorRate = createServerFn({ method: "POST" })
       p_admin_id:  adminId,
       p_notes:     data.notes ?? null,
     });
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin]", error.message); throw new Error(error.message); }
     return { success: true };
   });
 
@@ -658,7 +653,7 @@ export const adminRejectVendorRate = createServerFn({ method: "POST" })
       p_admin_id:  adminId,
       p_notes:     data.notes ?? null,
     });
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin]", error.message); throw new Error(error.message); }
     return { success: true };
   });
 
@@ -737,7 +732,7 @@ export const getSpreadRevenue = createServerFn({ method: "GET" })
       .gte("created_at", since)
       .order("created_at", { ascending: false });
 
-    if (error) throw error;
+    if (error) { console.error("[Admin] getSwapFees:", error.message); return { totalFee: 0, daily: [] }; }
 
     let totalFee = 0;
     const dailyMap: Record<string, number> = {};
@@ -794,7 +789,7 @@ export const adminListUsers = createServerFn({ method: "GET" })
     }
 
     const { data: rows, error, count } = await q;
-    if (error) throw error;
+    if (error) { console.error("[Admin] adminListUsers:", error.message); return { users: [], total: 0, page, limit }; }
 
     return { users: rows ?? [], total: count ?? 0, page, limit };
   });
@@ -828,7 +823,7 @@ export const adminSetRole = createServerFn({ method: "POST" })
       .update({ role: data.newRole })
       .eq("id", data.targetUserId);
 
-    if (error) throw error;
+    if (error) { console.error("[Admin] adminSetRole:", error.message); return { success: false, error: error.message }; }
 
     // Sync app_metadata.role so the requireAdmin/requireSuperAdmin fallback
     // stays consistent.  Critical for demotions: without this, a demoted admin
@@ -956,6 +951,6 @@ export const queryAdminAuditLog = createServerFn({ method: "GET" })
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[Admin] getAuditLog:", error.message); return { entries: [], total: 0 }; }
     return { entries: rows ?? [], total: count ?? 0 };
   });

@@ -35,7 +35,7 @@ export async function getReconciliationRuns(limit = 20) {
     .order("started_at", { ascending: false })
     .limit(limit);
 
-  if (error) throw new Error(error.message);
+  if (error) { console.error("[reconciliation]", error.message); throw new Error(error.message); }
   return data ?? [];
 }
 

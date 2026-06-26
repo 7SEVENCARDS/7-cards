@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { WalletService } from "./wallet-service";
 import { DEFAULT_NGN_RATE } from "./constants";
 
 // ─── ISO Week Key ─────────────────────────────────────────────────────────────
@@ -117,11 +118,7 @@ export async function creditReferrerCommissionFn(
   const commissionNgn = Math.round(tradeAmountNgn * COMMISSION_RATE);
   if (commissionNgn <= 0) return { success: false, reason: "amount_too_small" };
 
-  await db.rpc("increment_wallet_balance", {
-    p_user_id:  trader.referred_by,
-    p_currency: "NGN",
-    p_amount:   commissionNgn,
-  });
+  await WalletService.credit(db, { userId: trader.referred_by, currency: "NGN", amountNgn: commissionNgn, refType: "referral_commission", refId: tradeId, description: `5% referral commission from trade ${tradeId}`, idempotencyKey: `referral_commission:${tradeId}` });
 
   await db.from("referral_commissions").insert({
     referrer_id:     trader.referred_by,
@@ -229,12 +226,8 @@ export async function payWeeklyTradeCommissions(
 
   for (const userId of toPay) {
     try {
-      // Credit wallet
-      await db.rpc("increment_wallet_balance", {
-        p_user_id:  userId,
-        p_currency: "NGN",
-        p_amount:   COMMISSION_NGN,
-      });
+      // Credit wallet via WalletService (centralised, idempotent)
+      await WalletService.credit(db, { userId, currency: "NGN", amountNgn: COMMISSION_NGN, refType: "weekly_commission", description: `Weekly trade commission — ${weekKey}`, idempotencyKey: `weekly_commission:${weekKey}:${userId}` });
 
       // Record payment (UNIQUE constraint prevents double-pay)
       await db.from("weekly_trade_commissions").insert({

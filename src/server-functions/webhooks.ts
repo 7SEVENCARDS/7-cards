@@ -17,6 +17,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { pushNotify } from "../lib/onesignal";
 import { getEnv } from "../lib/worker-env";
+import { WalletService } from "../lib/wallet-service";
 
 // ─── Admin Supabase (bypasses RLS — webhook has no user session) ──────────────
 function getAdminDb() {
@@ -146,7 +147,50 @@ export async function handleSquadPayoutWebhook(request: Request): Promise<Respon
     .maybeSingle();
 
   if (!trade) {
-    console.warn(`[Webhook/Payout] No trade found for ref: ${transactionRef}`);
+    // ── Wallet 2.0: check if this is a user withdrawal payout ──────────────
+    const { data: uwr } = await db
+      .from("user_withdrawal_requests")
+      .select("id, user_id, amount_ngn, net_amount_ngn, status")
+      .eq("provider_ref", transactionRef)
+      .maybeSingle();
+
+    if (uwr) {
+      try {
+        const success = Event === "transfer.success";
+        await WalletService.unlockWithdrawal(db, {
+          userId: uwr.user_id,
+          amountNgn: Number(uwr.amount_ngn),
+          commit: success,
+          refId: uwr.id,
+        });
+
+        await db.from("user_withdrawal_requests").update({
+          status:       success ? "completed" : "failed",
+          completed_at: success ? new Date().toISOString() : null,
+          failed_at:    success ? null : new Date().toISOString(),
+          failure_reason: success ? null : (Data.narration ?? "Transfer declined by bank"),
+        }).eq("id", uwr.id);
+
+        await db.from("notifications").insert({
+          user_id: uwr.user_id,
+          title:   success ? "Withdrawal Successful! 💸" : "Withdrawal Failed",
+          message: success
+            ? `₦${Number(uwr.net_amount_ngn).toLocaleString()} has been sent to your bank account.`
+            : `Your withdrawal of ₦${Number(uwr.amount_ngn).toLocaleString()} could not be completed. Your balance has been restored.`,
+          type: success ? "success" : "error",
+        });
+
+        await markWebhookDone(db, eventKey, "done");
+        console.info(`[Webhook/Payout] User withdrawal ${uwr.id} ${success ? "completed" : "failed"}`);
+        return new Response(JSON.stringify({ received: true, source: "user_withdrawal" }), { status: 200 });
+      } catch (uwrErr) {
+        console.error("[Webhook/Payout] User withdrawal settlement error:", uwrErr instanceof Error ? uwrErr.message : uwrErr);
+        await markWebhookDone(db, eventKey, "failed", String(uwrErr));
+        return new Response(JSON.stringify({ received: true, error: "settlement_error" }), { status: 200 });
+      }
+    }
+
+    console.warn(`[Webhook/Payout] No trade or withdrawal found for ref: ${transactionRef}`);
     await markWebhookDone(db, eventKey, "done");
     return new Response(JSON.stringify({ received: true }), { status: 200 });
   }
@@ -166,11 +210,7 @@ export async function handleSquadPayoutWebhook(request: Request): Promise<Respon
         settled_at: new Date().toISOString(),
       }).eq("id", trade.id);
 
-      await db.rpc("increment_wallet_balance", {
-        p_user_id: trade.user_id,
-        p_currency: "NGN",
-        p_amount: trade.amount_ngn,
-      });
+      await WalletService.credit(db, { userId: trade.user_id, currency: "NGN", amountNgn: Number(trade.amount_ngn), refType: "trade_payout", refId: trade.id, description: `Squad bank transfer confirmed for trade ${trade.id}`, idempotencyKey: `squad_payout:${transactionRef}` });
 
       const xp = 50 + (Number(trade.amount_ngn) > 100_000 ? 25 : 0);
       await db.rpc("award_trade_xp", { p_user_id: trade.user_id, p_xp: xp });
@@ -471,12 +511,8 @@ async function handleVendorAssignmentPayment(
     }).catch(() => null); // RPC may not exist yet — non-fatal
   }
 
-  // Credit user's NGN wallet
-  await db.rpc("increment_wallet_balance", {
-    p_user_id: trade.user_id,
-    p_currency: "NGN",
-    p_amount: amountNgn,
-  });
+  // Credit user's NGN wallet via WalletService (centralised, idempotent)
+  await WalletService.credit(db, { userId: trade.user_id, currency: "NGN", amountNgn, refType: "trade_payout", refId: trade.id, description: `Squad payment confirmed for trade ${trade.id}`, idempotencyKey: `squad_payment:${transactionRef}` });
 
   // Mark trade as paid
   const xp = 50 + (amountNgn > 100_000 ? 25 : 0);

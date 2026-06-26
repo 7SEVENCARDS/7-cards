@@ -80,7 +80,7 @@ export const listProviderKeys = createServerFn({ method: "GET" })
     if (data.provider) q = (q as ReturnType<typeof q.eq>).eq("provider", data.provider);
 
     const { data: keys, error } = await q;
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin-api-keys]", error.message); throw new Error(error.message); }
 
     return (keys ?? []).map(k => ({
       id:              k.id,
@@ -148,7 +148,7 @@ export const createProviderKey = createServerFn({ method: "POST" })
       .select("id, masked_value, version")
       .single();
 
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin-api-keys]", error.message); throw new Error(error.message); }
 
     await logAdminAction(adminId, "api_key_created", null, {
       provider: data.provider,
@@ -189,7 +189,7 @@ export const activateProviderKey = createServerFn({ method: "POST" })
       .update({ status: "active", updated_at: new Date().toISOString() })
       .eq("id", data.keyId);
 
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin-api-keys]", error.message); throw new Error(error.message); }
 
     await logAdminAction(adminId, "api_key_activated", null, {
       key_id:   data.keyId,
@@ -279,7 +279,7 @@ export const rotateProviderKey = createServerFn({ method: "POST" })
       .select("id, masked_value, version")
       .single();
 
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin-api-keys]", error.message); throw new Error(error.message); }
 
     await logAdminAction(adminId, "api_key_rotated", null, {
       old_key_id: data.keyId,
@@ -313,7 +313,7 @@ export const getKeyHistory = createServerFn({ method: "GET" })
       .order("version", { ascending: false })
       .limit(20);
 
-    if (error) throw new Error(error.message);
+    if (error) { console.error("[admin-api-keys]", error.message); throw new Error(error.message); }
     return history ?? [];
   });
 
