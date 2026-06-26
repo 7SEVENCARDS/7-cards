@@ -74,7 +74,7 @@ async function loadCache(db: SupabaseClient): Promise<Map<string, boolean>> {
   return map;
 }
 
-function invalidateCache() {
+export function invalidateCache() {
   cache   = null;
   cacheTs = 0;
 }

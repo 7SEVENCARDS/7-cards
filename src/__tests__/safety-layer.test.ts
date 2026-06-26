@@ -15,6 +15,7 @@ import {
   assertNotKilled,
   getAllKillSwitches,
   setKillSwitch,
+  invalidateCache,
   KILL_SWITCHES,
 } from "../lib/kill-switch";
 import {
@@ -37,9 +38,8 @@ function mockDb(overrides?: {
   const balance  = overrides?.reserveBalance ?? 0;
   const losses   = overrides?.reserveLosses ?? [];
 
-  const likeFn = () => ({
-    select: () => Promise.resolve({ data: flags }),
-  });
+  // like() is awaited directly by loadCache — must return a Promise, not an object
+  const likeFn = () => Promise.resolve({ data: flags });
 
   const insertFn = () => ({
     select: () => ({
@@ -56,7 +56,11 @@ function mockDb(overrides?: {
     from: (table: string) => ({
       select: (cols?: string, opts?: unknown) => ({
         like:  likeFn,
-        eq:    () => ({ single: () => Promise.resolve({ data: { balance_ngn: balance } }) }),
+        // eq().single() for balance; eq().gte() for loss-row queries
+        eq:    () => ({
+          single: () => Promise.resolve({ data: { balance_ngn: balance } }),
+          gte:    () => Promise.resolve({ data: losses }),
+        }),
         gte:   () => Promise.resolve({ data: losses }),
         order: () => ({ limit: () => ({ single: () => Promise.resolve({ data: null }) }) }),
       }),
@@ -65,8 +69,14 @@ function mockDb(overrides?: {
         eq: () => ({ single: () => Promise.resolve({ data: null, error: null }) }),
         catch: () => Promise.resolve(),
       }),
+      // delete().eq() must support:
+      //   .lt()  — cleanup in acquireFinancialLock
+      //   .eq()  — second filter in releaseFinancialLock (locked_by)
       delete: () => ({
-        eq: () => ({ lt: () => Promise.resolve(), catch: () => Promise.resolve() }),
+        eq: () => ({
+          lt:  () => Promise.resolve(),
+          eq:  () => Promise.resolve(),
+        }),
         catch: () => Promise.resolve(),
       }),
       upsert: () => Promise.resolve({ error: null }),
@@ -77,6 +87,12 @@ function mockDb(overrides?: {
 
 // ── 1. Kill Switch Tests ──────────────────────────────────────────────────────
 describe("Kill Switches", () => {
+  // Reset the module-level 30-second cache before every test so each test
+  // performs a fresh DB query rather than returning the previous test's result.
+  beforeEach(() => {
+    invalidateCache();
+  });
+
   it("returns false when flag does not exist", async () => {
     const db = mockDb({ flags: [] });
     const result = await isKillSwitchActive(KILL_SWITCHES.WITHDRAWALS, db as never);
@@ -102,8 +118,6 @@ describe("Kill Switches", () => {
   });
 
   it("getAllKillSwitches returns all 6 switches", async () => {
-    const db = mockDb({ flags: [] });
-    // getAllKillSwitches uses a different query path; stub db.from to return the flags array
     const mockResult = [
       { key: KILL_SWITCHES.TREASURY,          enabled: false },
       { key: KILL_SWITCHES.WITHDRAWALS,       enabled: true  },
@@ -115,11 +129,10 @@ describe("Kill Switches", () => {
     const mockDb2 = {
       from: () => ({
         select: () => ({
-          like: () => ({ select: () => Promise.resolve({ data: mockResult }) }),
+          like: () => Promise.resolve({ data: mockResult }),
         }),
-        select: () => Promise.resolve({ data: mockResult }),
         update: () => ({ eq: () => Promise.resolve({ error: null }) }),
-        upsert: () => Promise.resolve({ error: null }),
+        upsert:  () => Promise.resolve({ error: null }),
       }),
     };
     // Test count of KILL_SWITCHES object
@@ -138,7 +151,10 @@ describe("Financial Locks", () => {
   it("acquireFinancialLock throws LockConflictError on 23505", async () => {
     const db = {
       from: () => ({
-        delete: () => ({ eq: () => ({ lt: () => Promise.resolve(), catch: () => Promise.resolve() }) }),
+        delete: () => ({
+          eq: () => ({ lt: () => Promise.resolve(), eq: () => Promise.resolve() }),
+          catch: () => Promise.resolve(),
+        }),
         insert: () => ({
           select: () => ({
             single: () => Promise.resolve({ data: null, error: { code: "23505", message: "unique violation" } }),
@@ -159,11 +175,13 @@ describe("Financial Locks", () => {
     const db = {
       from: () => ({
         delete: () => ({
+          // First .eq("lock_key") must chain to: .lt() (cleanup) and .eq() (release)
           eq: () => ({
-            lt: () => Promise.resolve(),
-            catch: () => Promise.resolve(),
+            lt:  () => Promise.resolve(),
+            // Second .eq("locked_by") is called in releaseFinancialLock
+            eq:  () => { released.push("deleted"); return Promise.resolve(); },
           }),
-          catch: () => { released.push("deleted"); return Promise.resolve(); },
+          catch: () => Promise.resolve(),
         }),
         insert: () => ({
           select: () => ({
@@ -190,15 +208,36 @@ describe("Financial Locks", () => {
 
 // ── 3. Fraud Reserve Health ───────────────────────────────────────────────────
 describe("Fraud Reserve Health", () => {
+  // Correctly mirror the actual call chains in checkFraudReserveHealth:
+  //   getCurrentBalance: from("fraud_reserve_balance").select().eq("id",1).single()
+  //   loss rows:         from("fraud_reserve_events").select().eq("type","debit").gte(...)
+  //   last event:        from("fraud_reserve_events").select().order().limit().single().catch()
   function makeReserveDb(balanceNgn: number, lossesNgn: number[]) {
     return {
-      from: (table: string) => ({
-        select: () => ({
-          eq:    () => ({ single: () => Promise.resolve({ data: { balance_ngn: balanceNgn }, error: null }) }),
-          gte:   () => Promise.resolve({ data: lossesNgn.map(n => ({ amount_ngn: n })) }),
-          order: () => ({ limit: () => ({ single: () => Promise.resolve({ data: null }) }) }),
-        }),
-      }),
+      from: (table: string) => {
+        if (table === "fraud_reserve_balance") {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: () => Promise.resolve({ data: { balance_ngn: balanceNgn }, error: null }),
+              }),
+            }),
+          };
+        }
+        // fraud_reserve_events
+        return {
+          select: () => ({
+            eq: () => ({
+              gte: () => Promise.resolve({ data: lossesNgn.map(n => ({ amount_ngn: n })) }),
+            }),
+            order: () => ({
+              limit: () => ({
+                single: () => Promise.resolve({ data: null }),
+              }),
+            }),
+          }),
+        };
+      },
     };
   }
 
